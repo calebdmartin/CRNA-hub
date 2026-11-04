@@ -1,0 +1,369 @@
+// CRNA Hub — shared helpers for the calendar-sync Edge Functions.
+//
+// Security model (read this before changing anything here):
+// - Provider OAuth tokens, refresh tokens, and Apple app-specific passwords
+//   are NEVER sent to the browser, NEVER stored in localStorage, and NEVER
+//   committed to this repo. They live only in the `calendar_connections`
+//   table, encrypted with AES-GCM under CALENDAR_ENCRYPTION_KEY, and are
+//   decrypted only inside these Edge Functions (service-role key, server
+//   side only).
+// - The browser holds only its own Supabase Auth JWT. Every request here
+//   validates that JWT against Supabase Auth and scopes all database rows
+//   to that user_id. Row Level Security on the tables is a second layer;
+//   these functions use the service-role key, so the user scoping in code
+//   below is what actually enforces per-user isolation — do not remove it.
+// - No secret, client ID, or token value is ever logged. Errors returned to
+//   the browser carry a short code, never a provider response body.
+
+export const CORS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
+export function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
+  });
+}
+
+export function err(code: string, status = 400): Response {
+  return json({ ok: false, error: code }, status);
+}
+
+function env(name: string): string {
+  return Deno.env.get(name) ?? "";
+}
+
+export function supabaseUrl(): string {
+  return env("SUPABASE_URL");
+}
+
+function serviceKey(): string {
+  return env("SUPABASE_SERVICE_ROLE_KEY");
+}
+
+function anonKey(): string {
+  return env("SUPABASE_ANON_KEY");
+}
+
+function appUrl(): string {
+  return env("APP_URL");
+}
+
+// Validate a Supabase Auth JWT and return its user id, or null.
+export async function authUserId(req: Request): Promise<string | null> {
+  const auth = req.headers.get("Authorization") ?? "";
+  const token = auth.replace(/^Bearer\s+/i, "").trim();
+  if (!token) return null;
+  try {
+    const r = await fetch(`${supabaseUrl()}/auth/v1/user`, {
+      headers: {
+        apikey: anonKey(),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    return typeof data?.id === "string" ? data.id : null;
+  } catch {
+    return null;
+  }
+}
+
+// --- Minimal PostgREST client (service role, server side only) ---
+
+function sbHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    apikey: serviceKey(),
+    Authorization: `Bearer ${serviceKey()}`,
+    "Content-Type": "application/json",
+    ...extra,
+  };
+}
+
+export async function sbGet(
+  table: string,
+  query: string,
+): Promise<Record<string, unknown>[]> {
+  const r = await fetch(
+    `${supabaseUrl()}/rest/v1/${table}?${query}`,
+    { headers: sbHeaders() },
+  );
+  if (!r.ok) throw new Error(`db_read_failed:${table}`);
+  return (await r.json()) as Record<string, unknown>[];
+}
+
+export async function sbUpsert(
+  table: string,
+  row: Record<string, unknown>,
+  _onConflict: string,
+): Promise<void> {
+  const r = await fetch(`${supabaseUrl()}/rest/v1/${table}`, {
+    method: "POST",
+    headers: sbHeaders({
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    }),
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) throw new Error(`db_write_failed:${table}`);
+}
+
+export async function sbInsert(
+  table: string,
+  row: Record<string, unknown>,
+): Promise<void> {
+  const r = await fetch(`${supabaseUrl()}/rest/v1/${table}`, {
+    method: "POST",
+    headers: sbHeaders({ Prefer: "return=minimal" }),
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) throw new Error(`db_write_failed:${table}`);
+}
+
+export async function sbDelete(
+  table: string,
+  query: string,
+): Promise<void> {
+  const r = await fetch(
+    `${supabaseUrl()}/rest/v1/${table}?${query}`,
+    { method: "DELETE", headers: sbHeaders() },
+  );
+  if (!r.ok) throw new Error(`db_delete_failed:${table}`);
+}
+
+export async function sbPatch(
+  table: string,
+  query: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const r = await fetch(
+    `${supabaseUrl()}/rest/v1/${table}?${query}`,
+    {
+      method: "PATCH",
+      headers: sbHeaders({ Prefer: "return=minimal" }),
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!r.ok) throw new Error(`db_write_failed:${table}`);
+}
+
+// --- AES-GCM encryption for stored provider credentials ---
+
+function encryptionKeyBytes(): Uint8Array {
+  const hex = env("CALENDAR_ENCRYPTION_KEY").trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error("encryption_not_configured");
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+async function aesKey(): Promise<CryptoKey> {
+  return await crypto.subtle.importKey(
+    "raw",
+    encryptionKeyBytes() as unknown as BufferSource,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+export async function encryptSecret(plain: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await aesKey(),
+    new TextEncoder().encode(plain),
+  );
+  const combined = new Uint8Array(iv.length + ct.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ct), iv.length);
+  let bin = "";
+  combined.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+}
+
+export async function decryptSecret(stored: string): Promise<string> {
+  const bin = atob(stored);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const iv = bytes.slice(0, 12);
+  const ct = bytes.slice(12);
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    await aesKey(),
+    ct,
+  );
+  return new TextDecoder().decode(plain);
+}
+
+export function encryptionConfigured(): boolean {
+  return /^[0-9a-fA-F]{64}$/.test(env("CALENDAR_ENCRYPTION_KEY").trim());
+}
+
+// --- Shift <-> calendar-event mapping ---
+//
+// A CRNA Hub shift is an all-day event. Title: "Facility — Shift type".
+// Description lines (kept identical across providers so any provider's
+// event can be parsed back into a shift):
+//   Type: <shift type>
+//   Expected gross: $<pay>        (omitted when the shift is unpriced)
+//   Note: <free-text note>        (omitted when empty)
+//   CRNA Hub shift: <shift id>    (fallback marker; the sync map table is
+//                                   the authoritative pairing)
+
+export interface LocalShift {
+  id: string;
+  date: string;
+  facility: string;
+  type: string;
+  pay?: string | number | null;
+  note?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ProviderEvent {
+  providerEventId: string;
+  date: string;
+  facility: string;
+  type: string;
+  pay: string;
+  note: string;
+  shiftId: string | null;
+  updatedAt: string | null;
+  cancelled: boolean;
+  rawUpdatedAt: string | null;
+}
+
+export function shiftTitle(s: LocalShift): string {
+  return `${s.facility || ""} — ${s.type || "Shift"}`;
+}
+
+export function shiftDescription(s: LocalShift): string {
+  const lines = [`Type: ${s.type || "Shift"}`];
+  if (s.pay !== "" && s.pay !== null && s.pay !== undefined) {
+    lines.push(`Expected gross: $${String(s.pay).replace(/[^0-9.]/g, "")}`);
+  }
+  if (s.note) lines.push(`Note: ${s.note}`);
+  lines.push(`CRNA Hub shift: ${s.id}`);
+  return lines.join("\n");
+}
+
+export function parseTitle(title: string): { facility: string; type: string } {
+  const t = String(title || "").trim();
+  for (const sep of [" — ", " - ", ": "]) {
+    const i = t.indexOf(sep);
+    if (i > 0) {
+      return { facility: t.slice(0, i).trim(), type: t.slice(i + sep.length).trim() };
+    }
+  }
+  return { facility: t, type: "Shift" };
+}
+
+export function parseDescription(desc: string): {
+  type: string;
+  pay: string;
+  note: string;
+  shiftId: string | null;
+} {
+  const text = String(desc || "");
+  const type = /^\s*Type:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+  const pay = /Expected gross:\s*\$?([\d,]+(?:\.\d+)?)/i.exec(text)?.[1]
+    ?.replace(/,/g, "") ?? "";
+  const note = /^\s*Note:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+  const shiftId = /CRNA Hub shift:\s*([A-Za-z0-9-]+)/.exec(text)?.[1] ?? null;
+  return { type, pay, note, shiftId };
+}
+
+export function nextDay(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export function randomHex(bytes = 32): string {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(verifier),
+  );
+  const bytes = new Uint8Array(digest);
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Connection row helpers. `calendar_connections` has one row per user per
+// provider. Token columns hold AES-GCM ciphertext (see above), never plain
+// text; access tokens are also encrypted, not just refresh tokens.
+export type ConnectionRow = Record<string, unknown> & {
+  user_id: string;
+  provider: string;
+};
+
+export async function getConnection(
+  user_id: string,
+  provider: string,
+): Promise<ConnectionRow | null> {
+  const rows = await sbGet(
+    "calendar_connections",
+    `select=*&user_id=eq.${encodeURIComponent(user_id)}&provider=eq.${encodeURIComponent(provider)}`,
+  );
+  return (rows[0] as ConnectionRow) ?? null;
+}
+
+export async function getMapRows(
+  userId: string,
+  provider: string,
+): Promise<Record<string, unknown>[]> {
+  return await sbGet(
+    "calendar_sync_map",
+    `select=*&user_id=eq.${encodeURIComponent(userId)}&provider=eq.${encodeURIComponent(provider)}`,
+  );
+}
+
+export async function writeSyncLog(
+  userId: string,
+  provider: string,
+  direction: string,
+  counts: Record<string, number>,
+  error: string | null,
+): Promise<void> {
+  try {
+    await sbInsert("sync_log", {
+      user_id: userId,
+      provider,
+      direction,
+      shifts_created: counts.created ?? 0,
+      shifts_updated: counts.updated ?? 0,
+      shifts_flagged: counts.flagged ?? 0,
+      shifts_deleted: counts.deleted ?? 0,
+      error: error ?? null,
+    });
+  } catch {
+    // A logging failure must never fail the sync itself.
+  }
+}
+
+// Where the browser returns after a provider consent screen. The owner sets
+// APP_URL once (see supabase/functions/README.md) to the URL users actually
+// open. If it is unset, the callback renders a plain success page instead of
+// guessing a URL — it never redirects to an owner-unapproved origin.
+export function callbackReturnUrl(fallbackQuery: string): string | null {
+  const base = appUrl().replace(/\/$/, "");
+  if (!base) return null;
+  return `${base}${fallbackQuery}`;
+}
+
+export function fnUrl(name: string): string {
+  return `${supabaseUrl()}/functions/v1/${name}`;
+}
