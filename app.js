@@ -510,7 +510,75 @@ function cloudHeaderLabel() { const m = cloudMode(); if (m === 'not-configured')
 function cloudModeHint() { const m = cloudMode(); if (m === 'not-configured') return 'Supabase is not configured yet, so everything here is saved on this device only.'; if (m === 'signed-out') return 'Not signed in, so everything here is saved on this device only.'; if (m === 'pending') return 'Signed in, but you have not chosen upload or load yet, so edits here are still on-device only — choose on the Account tab.'; if (m === 'cloud-offline') return 'Cloud account is unreachable right now, so this is the on-device copy. Credential edits will retry on the next sync.'; return 'Signed in — credential records sync to your Supabase account. Shifts, facilities, mileage, and PTO stay on this device.'; }
 function cloudAssistantAnswer() { if (!SUPABASE_CONFIGURED) return 'Cloud accounts and sync are not in this release on this device yet: Supabase is not configured (paste the publishable key into supabase-config.js — see the README), so data lives in this browser only (localStorage). Use Import & Backup to download a JSON backup before changing phones or clearing browser data.'; if (!cloudSession) return 'You are not signed in, so data lives in this browser only (localStorage). Sign in on the Account tab to sync NBCRNA, AANA, license, and CE records to your Supabase account. Use Import & Backup to download a JSON backup before changing phones or clearing browser data.'; if (cloudPending) return 'You are signed in, but you have not chosen how to merge yet, so records are still on-device only. Open the Account tab and choose "Upload my on-device records" or "Load cloud records".'; return 'You are signed in and credential records (NBCRNA, AANA, licenses, CE records) sync to your Supabase account; shifts, facilities, mileage, and PTO stay on this device. Live portal pulls are not built yet, so synced records are still user-entered, not verified.'; }
 function cloudFmtWhen(iso) { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
-async function sbAuthReq(path, body) { const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null; const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null; let r; try { const sep = path.indexOf('?') === -1 ? '?' : '&'; const url = SUPABASE_CFG.url + path + sep + 'apikey=' + encodeURIComponent(SUPABASE_CFG.anonKey); r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(body), signal: ctrl ? ctrl.signal : undefined }); } catch (e) { if (timer) clearTimeout(timer); if (e && e.name === 'AbortError') throw new Error('Request timed out after 30 seconds — check your connection and try again.'); throw new Error('Could not reach the sign-in service from this browser (network error: ' + (e && e.message ? e.message : 'request failed') + '). Check your connection, turn off any content blocker or VPN for this site, and try again.'); } finally { if (timer) clearTimeout(timer); } const text = await r.text(); let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {} if (!r.ok) throw new Error((data && (data.error_description || data.msg || data.message || data.error)) || ('Sign-in failed (' + r.status + ')')); return data; }
+async function sbAuthPost(url, body, signal) {
+  // One POST attempt (no fallback here — the caller decides).
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(body), signal: signal || undefined });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  return { r, data };
+}
+async function sbAuthReq(path, body, opts) {
+  // Same-origin proxy first: the browser only talks to its own origin,
+  // and the Vercel function forwards to Supabase server-side. This is
+  // the path that works when a direct browser-to-Supabase POST fails
+  // at the network layer ("Load failed") on the user's device.
+  // Fallback to direct Supabase happens ONLY on a network failure or
+  // when the proxy is absent (404/501, e.g. an older preview or a
+  // local file copy) — never on an upstream error status, so a
+  // sign-up is never submitted twice.
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+  const signal = ctrl ? ctrl.signal : undefined;
+  const parsePath = (p) => {
+    const q = p.indexOf('?');
+    if (q === -1) return { base: p, query: {} };
+    const query = {};
+    p.slice(q + 1).split('&').forEach((kv) => { const e = kv.indexOf('='); if (e !== -1) query[decodeURIComponent(kv.slice(0, e))] = decodeURIComponent(kv.slice(e + 1)); });
+    return { base: p.slice(0, q), query };
+  };
+  const fail = (e) => {
+    if (timer) clearTimeout(timer);
+    if (e && e.name === 'AbortError') throw new Error('Request timed out after 30 seconds — check your connection and try again.');
+    throw new Error('Could not reach the sign-in service from this browser (network error: ' + (e && e.message ? e.message : 'request failed') + '). Check your connection, turn off any content blocker or VPN for this site, and try again.');
+  };
+  try {
+    const part = parsePath(path);
+    const endpoint = part.base === '/auth/v1/signup' ? 'signup' : part.base === '/auth/v1/token' ? 'token' : part.base === '/auth/v1/logout' ? 'logout' : null;
+    if (endpoint) {
+      const proxyBody = { endpoint, query: part.query, body };
+      if (opts && opts.token) proxyBody.token = opts.token;
+      let pr;
+      try {
+        pr = await sbAuthPost('/api/auth', proxyBody, signal);
+      } catch (e) {
+        // Proxy unreachable at the network layer — fall through to direct.
+        pr = null;
+      }
+      if (pr && pr.r.status !== 404 && pr.r.status !== 501) {
+        // Any non-404/501 proxy answer is final (the X-Auth-Proxy
+        // header marks it when present) — never fall through to
+        // direct after the proxy has answered, or a sign-up could
+        // be submitted twice.
+        if (timer) clearTimeout(timer);
+        if (!pr.r.ok) throw new Error((pr.data && (pr.data.error_description || pr.data.msg || pr.data.message || pr.data.error)) || ('Sign-in failed (' + pr.r.status + ')'));
+        return pr.data;
+      }
+      // pr null (network failure) or 404/501 (no proxy deployed): direct.
+    }
+    const sep = path.indexOf('?') === -1 ? '?' : '&';
+    const url = SUPABASE_CFG.url + path + sep + 'apikey=' + encodeURIComponent(SUPABASE_CFG.anonKey);
+    const direct = await sbAuthPost(url, body, signal);
+    if (timer) clearTimeout(timer);
+    if (!direct.r.ok) throw new Error((direct.data && (direct.data.error_description || direct.data.msg || direct.data.message || direct.data.error)) || ('Sign-in failed (' + direct.r.status + ')'));
+    return direct.data;
+  } catch (e) {
+    if (e && e.name === 'AbortError') { if (timer) clearTimeout(timer); throw new Error('Request timed out after 30 seconds — check your connection and try again.'); }
+    if (e && /Sign-in failed \(/.test(e.message || '')) { if (timer) clearTimeout(timer); throw e; }
+    fail(e);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
 function cloudStoreSession(data) { if (!data || !data.access_token) return false; cloudSession = { access_token: data.access_token, refresh_token: data.refresh_token || (cloudSession && cloudSession.refresh_token), expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600), email: (data.user && data.user.email) || (cloudSession && cloudSession.email) || '', user_id: (data.user && data.user.id) || (cloudSession && cloudSession.user_id) || '' }; cloudPersistSession(); return true; }
 async function cloudEnsureToken() { if (!cloudSession) throw new Error('Not signed in'); if (cloudSession.expires_at && Date.now() / 1000 < cloudSession.expires_at - 60) return; if (!cloudSession.refresh_token) throw new Error('Session expired — sign in again'); const data = await sbAuthReq('/auth/v1/token?grant_type=refresh_token', { refresh_token: cloudSession.refresh_token }); if (!cloudStoreSession(data)) throw new Error('Session expired — sign in again'); }
 async function sbReq(path, method, body) { await cloudEnsureToken(); const headers = { apikey: SUPABASE_CFG.anonKey, 'Content-Type': 'application/json', Authorization: 'Bearer ' + cloudSession.access_token }; if (method === 'POST' && body) headers.Prefer = 'resolution=merge-duplicates,return=minimal'; const r = await fetch(SUPABASE_CFG.url + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); const text = await r.text(); let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {} if (!r.ok) throw new Error((data && (data.message || data.msg || data.error_description)) || ('Sync failed (' + r.status + ')')); return data; }
@@ -535,7 +603,7 @@ async function cloudLoadIntoLocal() { if (!cloudSession) return; try { const dat
 async function cloudAfterSignIn() { try { const data = await cloudFetchAll(); const counts = cloudCountsOf(data); if (cloudActive) { cloudApplyData(data); } else { cloudPending = { counts: counts, hasLocal: cloudLocalHasRecords() }; } render(); setTab('Account'); } catch (e) { cloudOffline = true; cloudError = e.message; cloudPending = { counts: null, hasLocal: cloudLocalHasRecords() }; render(); setTab('Account'); } }
 async function submitCloudAuth(e) { e.preventDefault(); const fd = new FormData(e.currentTarget); const email = String(fd.get('email') || '').trim(), password = String(fd.get('password') || ''); if (!email || !password) { cloudAuthStatus = 'Enter an email and password.'; render(); return alert('Enter an email and password.'); } cloudAuthStatus = 'Signing in\u2026'; render(); try { const data = await sbAuthReq('/auth/v1/token?grant_type=password', { email: email, password: password }); if (!cloudStoreSession(data)) throw new Error('Sign-in succeeded but no session was returned. If email confirmation is required, confirm from your inbox, then sign in again.'); cloudAuthStatus = ''; await cloudAfterSignIn(); } catch (err) { let msg = err.message || ''; if (/email not confirmed/i.test(msg)) msg = 'Email not confirmed yet \u2014 check your inbox for the confirmation email, open its link, then sign in again.'; cloudAuthStatus = 'Sign-in failed: ' + msg; render(); alert('Sign-in failed: ' + msg); } }
 async function cloudSignUp(email, password) { cloudAuthStatus = 'Creating account\u2026'; render(); try { const data = await sbAuthReq('/auth/v1/signup', { email: email, password: password }); if (!cloudStoreSession(data)) { cloudAuthStatus = 'Account created. If Supabase requires email confirmation, confirm from your inbox, then sign in with the form above.'; render(); alert('Account created. If Supabase requires email confirmation, confirm from your inbox, then sign in with the form above.'); return; } cloudAuthStatus = ''; await cloudAfterSignIn(); } catch (err) { let msg = err.message || ''; if (/email rate limit/i.test(msg)) msg = 'Too many confirmation emails were sent recently \u2014 wait a little while and try again, or sign in if the account was already created.'; cloudAuthStatus = 'Sign-up failed: ' + msg; render(); alert('Sign-up failed: ' + msg); } }
-async function cloudSignOut() { try { if (cloudSession) await fetch(SUPABASE_CFG.url + '/auth/v1/logout', { method: 'POST', headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token } }); } catch (e) {} cloudSession = null; cloudActive = false; cloudPending = null; cloudOffline = false; cloudError = ''; cloudPersistSession(); render(); }
+async function cloudSignOut() { try { if (cloudSession) await sbAuthReq('/auth/v1/logout', {}, { token: cloudSession.access_token }); } catch (e) {} cloudSession = null; cloudActive = false; cloudPending = null; cloudOffline = false; cloudError = ''; cloudPersistSession(); render(); }
 function cloudDocumentRow(x) { return { id: x.id, user_id: cloudUid(), cert_type: x.certType || null, file_name: x.fileName || null, storage_path: x.storagePath || null, issue_date: x.issue || null, expiration_date: x.expiry || null, expiry_source: x.expirySource || 'user_entered', storage_status: x.storageStatus || 'local_details_only', uploaded_at: x.uploadedAt || cloudNow() }; }
 async function cloudSaveDocument(rec) { if (!cloudSyncEnabled()) return; try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } }
 function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const rec = (db.documents || []).find(x => x.id === entryId); (async () => { try { if (rec && rec.storagePath) { await cloudEnsureToken(); await fetch(SUPABASE_CFG.url + '/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), { method: 'DELETE', headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token } }); } await sbReq('/rest/v1/documents?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
