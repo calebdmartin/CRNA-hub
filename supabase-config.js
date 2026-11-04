@@ -10,5 +10,5 @@
 // and keeps working exactly as before, on-device only.
 window.CRNHUB_SUPABASE = {
   url: 'https://xgoghgihfhtnyevgapyp.supabase.com',
-  anonKey: sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX
+  anonKey: 'sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX'
 };
