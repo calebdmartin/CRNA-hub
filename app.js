@@ -158,8 +158,8 @@ async function submitDocument(e) {
       try {
         await cloudEnsureToken();
         const path = cloudUid() + '/' + recId + '-' + file.name.replace(/[^A-Za-z0-9._-]+/g, '_');
-        if (oldRec && oldRec.storagePath && oldRec.storagePath !== path) { await fetch(SUPABASE_CFG.url + '/storage/v1/object/certification-documents/' + oldRec.storagePath.split('/').map(encodeURIComponent).join('/'), { method: 'DELETE', headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token } }); }
-        const up = await fetch(SUPABASE_CFG.url + '/storage/v1/object/certification-documents/' + path.split('/').map(encodeURIComponent).join('/'), { method: 'POST', headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token, 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+        if (oldRec && oldRec.storagePath && oldRec.storagePath !== path) { await sbStorageReq('/storage/v1/object/certification-documents/' + oldRec.storagePath.split('/').map(encodeURIComponent).join('/'), 'DELETE'); }
+        const up = await sbStorageReq('/storage/v1/object/certification-documents/' + path.split('/').map(encodeURIComponent).join('/'), 'POST', file, file.type || 'application/octet-stream');
         if (!up.ok) throw new Error('Storage upload failed (' + up.status + '): ' + (await up.text()).slice(0, 200));
         storagePath = path; storageStatus = 'cloud';
       } catch (err) { docStorageError = err.message; storageStatus = 'local_details_only'; }
@@ -181,7 +181,7 @@ async function downloadDocument(entryId) {
   if (!rec || !rec.storagePath) return alert('This file is not stored in the cloud — only its details are saved here. Sign in, enable document storage, and re-upload the file to download it.');
   try {
     await cloudEnsureToken();
-    const r = await fetch(SUPABASE_CFG.url + '/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), { headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token } });
+    const r = await sbStorageReq('/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), 'GET');
     if (!r.ok) throw new Error('Download failed (' + r.status + ')');
     const blob = await r.blob(), a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = rec.fileName || 'document'; document.body.appendChild(a); a.click(); a.remove();
@@ -581,7 +581,56 @@ async function sbAuthReq(path, body, opts) {
 
 function cloudStoreSession(data) { if (!data || !data.access_token) return false; cloudSession = { access_token: data.access_token, refresh_token: data.refresh_token || (cloudSession && cloudSession.refresh_token), expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600), email: (data.user && data.user.email) || (cloudSession && cloudSession.email) || '', user_id: (data.user && data.user.id) || (cloudSession && cloudSession.user_id) || '' }; cloudPersistSession(); return true; }
 async function cloudEnsureToken() { if (!cloudSession) throw new Error('Not signed in'); if (cloudSession.expires_at && Date.now() / 1000 < cloudSession.expires_at - 60) return; if (!cloudSession.refresh_token) throw new Error('Session expired — sign in again'); const data = await sbAuthReq('/auth/v1/token?grant_type=refresh_token', { refresh_token: cloudSession.refresh_token }); if (!cloudStoreSession(data)) throw new Error('Session expired — sign in again'); }
-async function sbReq(path, method, body) { await cloudEnsureToken(); const headers = { apikey: SUPABASE_CFG.anonKey, 'Content-Type': 'application/json', Authorization: 'Bearer ' + cloudSession.access_token }; if (method === 'POST' && body) headers.Prefer = 'resolution=merge-duplicates,return=minimal'; const r = await fetch(SUPABASE_CFG.url + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); const text = await r.text(); let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {} if (!r.ok) throw new Error((data && (data.message || data.msg || data.error_description)) || ('Sync failed (' + r.status + ')')); return data; }
+async function sbStorageReq(path, method, file, contentType) {
+  // Same-origin proxy first for Storage objects (same reason as sbReq):
+  // the browser only talks to its own origin, and /api/rest forwards to
+  // Supabase server-side. Falls back to direct only on a network failure
+  // or 404/501 (proxy absent) — never on an upstream error status, so a
+  // file is never uploaded or deleted twice.
+  await cloudEnsureToken();
+  const token = cloudSession.access_token;
+  const direct = () => fetch(SUPABASE_CFG.url + path, { method, headers: Object.assign({ apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + token }, contentType ? { 'Content-Type': contentType } : {}), body: file || undefined });
+  let proxyBody = { path, method, token };
+  if (file) {
+    const b64 = await new Promise((res, rej) => { const rd = new FileReader(); rd.onload = () => res(String(rd.result).split(',')[1] || ''); rd.onerror = () => rej(new Error('Could not read file')); rd.readAsDataURL(file); });
+    proxyBody.bodyBase64 = b64;
+    proxyBody.contentType = contentType || 'application/octet-stream';
+  }
+  try {
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+    let pr;
+    try { pr = await fetch('/api/rest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proxyBody), signal: ctrl ? ctrl.signal : undefined }); } catch (e) { pr = null; }
+    if (timer) clearTimeout(timer);
+    if (pr && pr.status !== 404 && pr.status !== 501) return pr;
+  } catch (e) {}
+  return direct();
+}
+async function sbReq(path, method, body) {
+  // Same-origin proxy first (see sbStorageReq): the browser only talks to
+  // its own origin, and /api/rest forwards PostgREST requests to Supabase
+  // server-side with the user's token, so RLS still applies. Fallback to
+  // direct Supabase happens ONLY on a network failure or when the proxy
+  // is absent (404/501, e.g. an older preview) — never on an upstream
+  // error status, so a record is never written twice.
+  await cloudEnsureToken();
+  const token = cloudSession.access_token;
+  const prefer = (method === 'POST' && body) ? 'resolution=merge-duplicates,return=minimal' : null;
+  const direct = () => fetch(SUPABASE_CFG.url + path, { method, headers: Object.assign({ apikey: SUPABASE_CFG.anonKey, 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, prefer ? { Prefer: prefer } : {}), body: body ? JSON.stringify(body) : undefined });
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 30000) : null;
+  let r;
+  try {
+    let pr = null;
+    try { pr = await fetch('/api/rest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, method, body: body === undefined ? null : body, token, prefer }), signal: ctrl ? ctrl.signal : undefined }); } catch (e) { pr = null; }
+    if (pr && pr.status !== 404 && pr.status !== 501) { r = pr; } else { r = await direct(); }
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    if (e && e.name === 'AbortError') throw new Error('Sync timed out after 30 seconds — check your connection and try again.');
+    throw new Error('Could not reach the sync service from this browser (network error: ' + (e && e.message ? e.message : 'request failed') + '). Check your connection and try again.');
+  } finally { if (timer) clearTimeout(timer); }
+  const text = await r.text(); let data = null; try { data = text ? JSON.parse(text) : null; } catch (e) {} if (!r.ok) throw new Error((data && (data.message || data.msg || data.error_description)) || ('Sync failed (' + r.status + ')')); return data;
+}
 function cloudUid() { return cloudSession ? cloudSession.user_id : ''; }
 async function cloudFetchAll() { const uid = cloudUid(), q = '?select=*&user_id=eq.' + encodeURIComponent(uid); const nb = await sbReq('/rest/v1/nbcrna_profiles' + q, 'GET'); const aa = await sbReq('/rest/v1/aana_memberships' + q, 'GET'); const lic = await sbReq('/rest/v1/licenses' + q, 'GET'); const ce = await sbReq('/rest/v1/ce_records' + q, 'GET'); const portals = await sbReq('/rest/v1/portal_connections' + q, 'GET'); let docs=[]; try { docs = await sbReq('/rest/v1/documents' + q, 'GET'); } catch (e) { docs = []; } return { nbcrna: (nb && nb[0]) || null, aana: (aa && aa[0]) || null, licenses: lic || [], ce: ce || [], portals: portals || [], documents: docs || [] }; }
 function cloudCountsOf(data) { return { nbcrna: data.nbcrna ? 1 : 0, aana: data.aana ? 1 : 0, licenses: (data.licenses || []).length, ce: (data.ce || []).length }; }
@@ -606,7 +655,7 @@ async function cloudSignUp(email, password) { cloudAuthStatus = 'Creating accoun
 async function cloudSignOut() { try { if (cloudSession) await sbAuthReq('/auth/v1/logout', {}, { token: cloudSession.access_token }); } catch (e) {} cloudSession = null; cloudActive = false; cloudPending = null; cloudOffline = false; cloudError = ''; cloudPersistSession(); render(); }
 function cloudDocumentRow(x) { return { id: x.id, user_id: cloudUid(), cert_type: x.certType || null, file_name: x.fileName || null, storage_path: x.storagePath || null, issue_date: x.issue || null, expiration_date: x.expiry || null, expiry_source: x.expirySource || 'user_entered', storage_status: x.storageStatus || 'local_details_only', uploaded_at: x.uploadedAt || cloudNow() }; }
 async function cloudSaveDocument(rec) { if (!cloudSyncEnabled()) return; try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } }
-function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const rec = (db.documents || []).find(x => x.id === entryId); (async () => { try { if (rec && rec.storagePath) { await cloudEnsureToken(); await fetch(SUPABASE_CFG.url + '/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), { method: 'DELETE', headers: { apikey: SUPABASE_CFG.anonKey, Authorization: 'Bearer ' + cloudSession.access_token } }); } await sbReq('/rest/v1/documents?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
+function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const rec = (db.documents || []).find(x => x.id === entryId); (async () => { try { if (rec && rec.storagePath) { await cloudEnsureToken(); await sbStorageReq('/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), 'DELETE'); } await sbReq('/rest/v1/documents?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
 
 function cloudSaveKind(kind, savedId) { if (!cloudSyncEnabled()) return; (async () => { try { if (kind === 'nbcrna') { if (cloudLocalHasNbcrna()) { await sbReq('/rest/v1/nbcrna_profiles', 'POST', cloudNbcrnaRow()); await cloudUpsertPortals(); } } else if (kind === 'aana') { if (cloudLocalHasAana()) { await sbReq('/rest/v1/aana_memberships', 'POST', cloudAanaRow()); await cloudUpsertPortals(); } } else if (kind === 'licenses') { const rec = (db.licenses || []).find(x => x.id === savedId); if (rec) { await sbReq('/rest/v1/licenses', 'POST', cloudLicenseRow(rec)); await cloudUpsertPortals(); } } else if (kind === 'nbcrnaCE') { const rec = (db.nbcrnaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'nbcrna')); } else if (kind === 'aanaCE') { const rec = (db.aanaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'aana')); } else if (kind === 'documents') { const rec = (db.documents || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); } cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
 function cloudDeleteKind(kind, entryId) { if (!cloudSyncEnabled()) return; (async () => { try { const table = kind === 'licenses' ? 'licenses' : 'ce_records'; await sbReq('/rest/v1/' + table + '?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
