@@ -7,7 +7,7 @@ This is a static, mobile-friendly application. Deploy it on Vercel using **Frame
 - Shift management, facility-specific default rates, monthly income totals, shift CSV export
 - Hospital profiles with rates, one-way distance, and offline notes
 - W-2 PTO hours ledger with balance and accrual rules (manual accrual posting)
-- Credentials, connect-first: the Credentials tab now opens with three connection cards — NBCRNA, AANA, and State Licenses — each showing "Not connected", what it would pull automatically when connected, and a Connect button. Manual entry lives below, under a clear "Manual entry (fallback only)" heading, and is not the lead.
+- Credentials, connect-first: the Credentials tab now opens with three connection cards — NBCRNA, AANA, and State Licenses — each showing "Not connected", what it would pull automatically when connected, and a Connect button. Certification documents sit directly under the State Licenses connection card. Manual entry lives below that, as a single form under a clear "Manual entry (fallback only)" heading with a type dropdown (NBCRNA, AANA, State license, NBCRNA/AANA CE record, Other credential), and is not the lead.
 - NBCRNA certification, AANA membership, and state license tracking (separate sections, user-entered records only — no automatic verification, no API sync; NBCRNA/AANA document fields hold a filename or note only, while real file uploads live in the Certification documents section — see below)
 - Credential deadlines on the dashboard, with per-license reminder windows (default 90/60/30/7 days)
 - Mileage log, export, and schedule-based trip **drafts** requiring verification
@@ -16,7 +16,7 @@ This is a static, mobile-friendly application. Deploy it on Vercel using **Frame
 - Ask Assistant (local-first, Assistant tab): answers questions about CRNA Hub and about the user's own records stored on this device (upcoming shifts, monthly income from recorded shifts, credential deadlines, facilities, mileage, PTO, CE totals). It is NOT a live AI model — no network calls, no API key, and nothing is sent to any outside service. It never answers clinical questions and never quotes facility notes, passwords, or patient information.
 
 ## Credentials — connect-first design (manual entry is fallback only)
-The intended product is fully integrated credentialing: when the user connects NBCRNA, AANA, and state nursing portals, the app pulls their information automatically, with minimal to no manual entry. The Credentials tab is built that way now — connection cards first, manual forms second, clearly labeled.
+The intended product is fully integrated credentialing: when the user connects NBCRNA, AANA, and state nursing portals, the app pulls their information automatically, with minimal to no manual entry. The Credentials tab is built that way now — connection cards first, Certification documents directly under the State Licenses card, then a single manual-entry form (type dropdown) below, clearly labeled.
 - **NBCRNA card** would pull: certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status.
 - **AANA card** would pull: membership status, membership expiration, and CE transcript totals (Class A / Class B).
 - **State Licenses card** would pull, per state: license status, license type (RN / APRN), license number, issue date, and expiration date.
@@ -61,7 +61,7 @@ Pictures of contracts (.png, .jpg, .jpeg, .webp; .heic only where the browser ca
 
 ## Certification documents (ACLS / BLS / PALS / NRP) — migration 002
 
-On the Credentials tab, directly under State Licenses, the "Certification documents" section accepts ACLS, BLS, PALS, NRP, and Other certifications, each with a file upload, issue date, and expiration date, plus Download / Replace / Delete controls.
+On the Credentials tab, directly under the State Licenses connection card, the "Certification documents" section accepts ACLS, BLS, PALS, NRP, and Other certifications, each with a file upload, issue date, and expiration date, plus Download / Replace / Delete controls.
 
 How expiration dates work: when a text file or text-layer PDF states an expiration / valid-through date, the app reads that date from the document and stores it with source "extracted" — the user can correct it in the form at any time. Images cannot be read for a date, and a document stating no expiration is marked "no expiration found": in both cases the user enters the date manually. Dates are never invented. Expiring certifications surface on the Dashboard under Credential deadlines on the same 90/60/30/7-day windows as licenses, labeled by source (extracted vs manually entered).
 
