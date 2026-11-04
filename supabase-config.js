@@ -10,5 +10,5 @@
 // and keeps working exactly as before, on-device only.
 window.CRNHUB_SUPABASE = {
   url: 'https://xgoghgihfhtnyevgapyp.supabase.com',
-  anonKey: 'PASTE_PUBLISHABLE_KEY_HERE'
+  anonKey: https://github.com/calebdmartin/CRNA-hub/blob/muse/credentialing/supabase-config.js
 };
