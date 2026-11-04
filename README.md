@@ -8,7 +8,7 @@ This is a static, mobile-friendly application. Deploy it on Vercel using **Frame
 - Hospital profiles with rates, one-way distance, and offline notes
 - W-2 PTO hours ledger with balance and accrual rules (manual accrual posting)
 - Credentials, connect-first: the Credentials tab now opens with three connection cards — NBCRNA, AANA, and State Licenses — each showing "Not connected", what it would pull automatically when connected, and a Connect button. Manual entry lives below, under a clear "Manual entry (fallback only)" heading, and is not the lead.
-- NBCRNA certification, AANA membership, and state license tracking (separate sections, user-entered records only — no automatic verification, no API sync, no document uploads; document fields hold a filename or note only)
+- NBCRNA certification, AANA membership, and state license tracking (separate sections, user-entered records only — no automatic verification, no API sync; NBCRNA/AANA document fields hold a filename or note only, while real file uploads live in the Certification documents section — see below)
 - Credential deadlines on the dashboard, with per-license reminder windows (default 90/60/30/7 days)
 - Mileage log, export, and schedule-based trip **drafts** requiring verification
 - CSV schedule import, JSON backup/restore
@@ -58,3 +58,15 @@ Reads and migrates records from `crna-hub-starter-v1` without deleting the origi
 
 ## Contract pictures (OCR)
 Pictures of contracts (.png, .jpg, .jpeg, .webp; .heic only where the browser can decode it) are read entirely on the device with Tesseract.js, loaded from a CDN only when a picture is chosen — no picture is sent to a server for OCR, and no AI model reads it. OCR text goes through the same deterministic parser and the same preview/approval flow as text contracts, with every row flagged "from photo — check carefully" because OCR can misread digits and dates. Approved pictures are stored in IndexedDB on that device (not localStorage) and viewable from the Saved contracts list; cloud document storage is not enabled yet, so pictures do not sync to Supabase in this release.
+
+## Certification documents (ACLS / BLS / PALS / NRP) — migration 002
+
+On the Credentials tab, directly under State Licenses, the "Certification documents" section accepts ACLS, BLS, PALS, NRP, and Other certifications, each with a file upload, issue date, and expiration date, plus Download / Replace / Delete controls.
+
+How expiration dates work: when a text file or text-layer PDF states an expiration / valid-through date, the app reads that date from the document and stores it with source "extracted" — the user can correct it in the form at any time. Images cannot be read for a date, and a document stating no expiration is marked "no expiration found": in both cases the user enters the date manually. Dates are never invented. Expiring certifications surface on the Dashboard under Credential deadlines on the same 90/60/30/7-day windows as licenses, labeled by source (extracted vs manually entered).
+
+Cloud storage setup (owner step, dashboard/SQL only — no secret key anywhere):
+1. Run `supabase-schema-002.sql` (in the project files, alongside migration 001) in Supabase SQL Editor. It creates the `public.documents` metadata table with Row Level Security (own-rows only) AND creates the private `certification-documents` Storage bucket with per-user policies: each user can only upload, download, update, or delete objects whose first path segment is their own user id.
+2. Until that SQL has run, the app says so plainly: signed-out users see "Sign in and enable document storage to upload files", and signed-in users whose upload fails see the storage error — in both cases file details are saved on this device only and the file itself is not stored. Files are never served from a public URL; downloads come from the user's own storage path with their auth token.
+
+What still does not work: live NBCRNA / AANA / state portal pulls (server-side Edge Function, next phase), and live AI extraction. Document records are user-entered / document-extracted, not verified by any board. Contract-picture OCR exists (see Contract pictures above); it does not read certification-document expiration dates from images.
