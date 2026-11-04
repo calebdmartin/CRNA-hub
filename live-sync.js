@@ -401,5 +401,7 @@ async function liveSyncInit() {
 // Expose the one entry point app.js hooks call after shift changes.
 if (typeof window !== 'undefined') {
   window.liveSyncInit = liveSyncInit;
+  window.liveSyncSchedulePush = liveSyncSchedulePush;
+  window.liveSyncRecordTombstone = liveSyncRecordTombstone;
 }
 liveSyncInit();
