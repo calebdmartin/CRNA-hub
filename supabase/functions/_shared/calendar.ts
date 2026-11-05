@@ -111,6 +111,37 @@ export async function sbUpsert(
   if (!r.ok) throw new Error(`db_write_failed:${table}`);
 }
 
+// Bulk upsert: one PostgREST round-trip for many rows instead of one
+// per row. The Apple import writes one import-map row per source event
+// (231 on Caleb's work calendar); doing that sequentially took ~36s
+// server-side on Nov 5, 2026, past the Vercel proxy's 25s limit, so
+// the browser never received the 231 created shifts even though the
+// server had paired them. Conflict target is the table's primary key,
+// exactly as the single-row upsert above. An empty list is a no-op.
+export async function sbUpsertMany(
+  table: string,
+  rows: Record<string, unknown>[],
+): Promise<void> {
+  if (!rows.length) return;
+  const r = await fetch(`${supabaseUrl()}/rest/v1/${table}`, {
+    method: "POST",
+    headers: sbHeaders({
+      Prefer: "resolution=merge-duplicates,return=minimal",
+    }),
+    body: JSON.stringify(rows),
+  });
+  if (!r.ok) throw new Error(`db_write_failed:${table}`);
+}
+
+// Split an array into chunks of at most `size` (for batched deletes,
+// where a PostgREST `in.(...)` list must stay short enough for a URL).
+export function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  const n = Math.max(1, Math.floor(size) || 1);
+  for (let i = 0; i < items.length; i += n) out.push(items.slice(i, i + n));
+  return out;
+}
+
 export async function sbInsert(
   table: string,
   row: Record<string, unknown>,
@@ -365,6 +396,46 @@ export function decideStaleImportRow(opts: {
   if (!opts.flagsSupported) return "skip-legacy";
   if (opts.keyExistsLocally) return "repair-pair";
   return "repair-create";
+}
+
+// Pure per-event classification for the Apple import loop: what one
+// parsed source event becomes, before any side effect. Branch order
+// mirrors the loop — a shift already on the device is never re-created
+// (second sync: no duplicate), a stale pairing is decided by
+// decideStaleImportRow, and only an event with no pairing and no local
+// match is a fresh create. `importRow` is null when the event was
+// never paired before. The cancelled / undated / unparsed cases are
+// decided by the caller first (they are "skip-not-shift" there).
+export type ImportEventDecision =
+  | "skip-not-shift"
+  | "already-here"
+  | "skip-deleted"
+  | "skip-legacy"
+  | "repair-create"
+  | "repair-pair"
+  | "duplicate"
+  | "create";
+
+export function decideImportEvent(opts: {
+  parsed: boolean;
+  localExists: boolean;
+  importRow?: { deleted_locally?: unknown } | null;
+  tombstoned: boolean;
+  keyExistsLocally: boolean;
+  flagsSupported: boolean;
+}): ImportEventDecision {
+  if (!opts.parsed) return "skip-not-shift";
+  if (opts.localExists) return "already-here";
+  if (opts.importRow) {
+    return decideStaleImportRow({
+      deletedLocally: opts.importRow.deleted_locally,
+      tombstoned: opts.tombstoned,
+      keyExistsLocally: opts.keyExistsLocally,
+      flagsSupported: opts.flagsSupported,
+    });
+  }
+  if (opts.keyExistsLocally) return "duplicate";
+  return "create";
 }
 
 export function nextDay(iso: string): string {

@@ -88,7 +88,16 @@
 //   "Re-import missing shifts" button, which clears stale rows (rows
 //   whose shift is not on the device and not flagged deleted) so the
 //   next pass imports them fresh. Skips are counted by reason
-//   (skippedNotShift / skippedDeleted) instead of one opaque total.
+//   (skippedNotShift / skippedDeleted / skippedLegacy) instead of one
+//   opaque total — "you deleted" now means a genuinely deleted shift
+//   (explicit tombstone or deleted_locally flag), never a shift that
+//   simply never reached the device.
+//   Import-map writes are batched (one bulk upsert + chunked deletes
+//   after the event loop, never one awaited write per event): 231
+//   sequential writes took ~36s on Nov 5, 2026, past the Vercel
+//   proxy's 25s limit, so the browser never received the 231 created
+//   shifts even though the server had paired them — and the next sync
+//   repeated the same slow import. See flushImportMapWrites.
 //
 // Sync algorithm — newest edit wins, deletions never silent:
 //   * One dedicated provider calendar named "CRNA Hub" per provider.
@@ -137,7 +146,8 @@ import {
   LocalShift,
   ProviderEvent,
   authUserId,
-  decideStaleImportRow,
+  chunkArray,
+  decideImportEvent,
   decryptSecret,
   encryptSecret,
   encryptionConfigured,
@@ -154,6 +164,7 @@ import {
   sbInsert,
   sbPatch,
   sbUpsert,
+  sbUpsertMany,
   shiftDescription,
   shiftTitle,
   writeSyncLog,
@@ -469,6 +480,48 @@ async function saveImportMapRow(row: Record<string, unknown>): Promise<void> {
   }
 }
 
+// Batched write for the import loop: one PostgREST round-trip for all
+// collected rows, falling back to one row at a time if the bulk call
+// fails (same swallow semantics as saveImportMapRow). The loop must
+// NOT await a DB write per event: 231 sequential upserts took ~36s on
+// Nov 5, 2026, past the proxy's 25s limit, so the browser never
+// received the 231 created shifts even though the server had paired
+// them. Deletes run before upserts: a repaired event re-pairs the same
+// source_event_id under a new shift id, and the table's unique
+// (user_id, provider, source_event_id) would reject the upsert while
+// the stale row still stands. Rows listed for deletion are never
+// upserted in the same flush.
+async function flushImportMapWrites(
+  rows: Record<string, unknown>[],
+  deleteShiftIds: string[],
+  userId: string,
+  provider: string,
+): Promise<void> {
+  const doomed = new Set(deleteShiftIds);
+  if (deleteShiftIds.length) {
+    // Chunked `in.(...)` deletes: one request per 50 ids instead of
+    // one per row (same 25s timeout as above).
+    for (const chunk of chunkArray(deleteShiftIds, 50)) {
+      const list = chunk.map((id) => encodeURIComponent(id)).join(",");
+      try {
+        await sbDelete(
+          "calendar_import_map",
+          `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${encodeURIComponent(provider)}&shift_id=in.(${list})`,
+        );
+      } catch {
+        for (const id of chunk) await deleteImportMapRow(userId, provider, id);
+      }
+    }
+  }
+  const saves = rows.filter((r) => !doomed.has(String(r.shift_id ?? "")));
+  if (!saves.length) return;
+  try {
+    await sbUpsertMany("calendar_import_map", saves);
+  } catch {
+    for (const row of saves) await saveImportMapRow(row);
+  }
+}
+
 async function deleteImportMapRow(userId: string, provider: string, shiftId: string): Promise<void> {
   try {
     await sbDelete(
@@ -480,9 +533,10 @@ async function deleteImportMapRow(userId: string, provider: string, shiftId: str
   }
 }
 
-// decideStaleImportRow lives in ../_shared/calendar.ts (pure, exported
-// for unit tests) — it decides what happens to an import-map row whose
-// paired shift is not on the device.
+// decideStaleImportRow / decideImportEvent live in
+// ../_shared/calendar.ts (pure, exported for unit tests) — they decide
+// what happens to an import-map row whose paired shift is not on the
+// device, and what one parsed source event becomes.
 
 // Full scan of the user's chosen Apple import-source calendar. The source
 // has no sync token of its own (conn.sync_token belongs to the dedicated
@@ -632,11 +686,15 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     parsed: number;
     fetchMethod: string | null;
     error: string | null;
-    // Skip reasons (skipped is the total): not-shift events vs shifts
-    // the user deleted. repaired counts stale rows re-created because
+    // Skip reasons (skipped is the total): not-shift events, shifts
+    // the user genuinely deleted (explicit tombstone or
+    // deleted_locally flag — never mere absence), and legacy skips
+    // (migration 005 not run yet, so "never delivered" cannot be told
+    // from "deleted"). repaired counts stale rows re-created because
     // their shift never reached the device.
     skippedNotShift: number;
     skippedDeleted: number;
+    skippedLegacy: number;
     repaired: number;
   } | null = null;
 
@@ -867,6 +925,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       error: null,
       skippedNotShift: 0,
       skippedDeleted: 0,
+      skippedLegacy: 0,
       repaired: 0,
     };
     let sourceEvents: ProviderEvent[] = [];
@@ -890,14 +949,25 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       let importByEvent = new Map(
         importRows.map((r) => [String(r.source_event_id), r as Conn]),
       );
+      // Batched import-map writes for this sync: the event loop below
+      // only COLLECTS rows to save / shift ids to delete, and one
+      // flush after the loop writes them (deletes first, then a single
+      // bulk upsert). Awaiting one write per event took ~36s for 231
+      // shifts on Nov 5, 2026 — past the proxy's 25s limit — so the
+      // browser never received the created shifts even though the
+      // server had paired them. Nothing in the loop re-reads the DB,
+      // so deferring the writes changes no decision.
+      const importSaves: Record<string, unknown>[] = [];
+      const importDeletes: string[] = [];
       // A paired shift that IS on the device was delivered: mark it
       // seen so a later deletion is recognised as a deletion, not as
-      // "never delivered". Best effort — if migration 005 has not run,
-      // the upsert fails on the unknown column and is swallowed.
+      // "never delivered". Collected, not awaited per row (see above);
+      // if migration 005 has not run, the upsert fails on the unknown
+      // column and is swallowed at flush time.
       for (const r of importRows) {
         const sid = String(r.shift_id ?? "");
         if (sid && localById.has(sid) && r.seen_locally !== true) {
-          await saveImportMapRow({ ...r, seen_locally: true });
+          importSaves.push({ ...r, seen_locally: true });
         }
       }
       // A tombstone for an imported shift is proof the user deleted it
@@ -907,7 +977,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       for (const r of importRows) {
         const sid = String(r.shift_id ?? "");
         if (sid && tombstonedIds.has(sid) && r.deleted_locally !== true) {
-          await saveImportMapRow({ ...r, deleted_locally: true });
+          importSaves.push({ ...r, deleted_locally: true });
         }
       }
       // Explicit client repair ("Re-import missing shifts"): clear
@@ -915,7 +985,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       // flagged deleted, and not tombstoned with this sync — so the
       // events below import fresh. This is the recovery path until
       // migration 005 runs (after 005, stale rows repair themselves
-      // in the loop below and this button is rarely needed).
+      // in the loop below and this button is rarely needed). The
+      // in-memory map is cleared at once so the loop sees the events
+      // as unpaired; the DB delete is part of the batch flush below.
       if (body.repairStaleImport === true) {
         for (const r of importRows) {
           const sid = String(r.shift_id ?? "");
@@ -923,7 +995,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             sid && !localById.has(sid) && r.deleted_locally !== true &&
             !tombstonedIds.has(sid)
           ) {
-            await deleteImportMapRow(userId, provider, sid);
+            importDeletes.push(sid);
             importByEvent.delete(String(r.source_event_id));
           }
         }
@@ -939,6 +1011,11 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           seenKeys.add(`${sh.date}|${sh.facility}|${sh.type}`);
         }
       }
+      const findDupe = (key: string): LocalShift | undefined =>
+        localShifts.find((s) => `${s.date}|${s.facility}|${s.type}` === key) ??
+        providerChanges
+          .map((c) => (c as { shift?: LocalShift }).shift)
+          .find((s) => s && `${s.date}|${s.facility}|${s.type}` === key);
       for (const ev of sourceEvents) {
         if (!ev.date || ev.cancelled) {
           imported.skipped++;
@@ -947,19 +1024,36 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         }
         const parsed = parseWorkShiftTitle(ev.summary ?? "", ev.date);
         if (parsed) imported.parsed++;
-        if (!parsed) {
+        const pay = parsed ? (parsed.pay || ev.pay || "") : "";
+        const importRow = parsed ? importByEvent.get(ev.providerEventId) : undefined;
+        const local = importRow
+          ? localById.get(String(importRow.shift_id))
+          : undefined;
+        // One pure decision per event (see decideImportEvent): a shift
+        // already on the device is never re-created, a stale pairing
+        // is repaired unless it is genuinely deleted, and only an
+        // unpaired event with no local match is a fresh create. Mere
+        // absence from the device is never, by itself, a deletion.
+        const decision = decideImportEvent({
+          parsed: !!parsed,
+          localExists: !!local,
+          importRow: importRow ?? null,
+          tombstoned: importRow ? tombstonedIds.has(String(importRow.shift_id)) : false,
+          keyExistsLocally: parsed
+            ? seenKeys.has(`${ev.date}|${parsed.facility}|${parsed.type}`)
+            : false,
+          flagsSupported: hasImportFlags,
+        });
+        if (decision === "skip-not-shift") {
           // Not a Holzer shift (personal event, holiday, reminder…):
           // skipped and counted, never imported as a junk shift.
           imported.skipped++;
           imported.skippedNotShift++;
           continue;
         }
-        const pay = parsed.pay || ev.pay || "";
-        const importRow = importByEvent.get(ev.providerEventId);
-        const local = importRow
-          ? localById.get(String(importRow.shift_id))
-          : undefined;
-        if (local) {
+        if (!parsed) continue; // Unreachable: decideImportEvent
+        // returns skip-not-shift for every unparsed event, above.
+        if (decision === "already-here" && local) {
           // Already imported: only a genuinely newer source edit flows
           // back (newest edit wins, same rule as the dedicated sync).
           const sourceUpdated = String(ev.updatedAt ?? "");
@@ -984,57 +1078,49 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             });
             counts.updated++;
             imported.updated++;
-            await saveImportMapRow({
+            importSaves.push({
               ...importRow,
               source_updated_at: sourceUpdated,
             });
           }
           continue;
         }
-        if (importRow) {
-          // Paired before, shift not on this device. Three states,
-          // decided by decideStaleImportRow (see its comment — this
-          // used to be one blanket skip, which is how 231 delivered-
-          // never shifts were lost on Nov 5, 2026).
+        if (decision === "skip-deleted" || decision === "skip-legacy") {
+          // Genuinely deleted (explicit tombstone / deleted_locally)
+          // vs legacy (migration 005 not run, so "never delivered"
+          // cannot be told from "deleted"): counted apart, so "you
+          // deleted" never again covers shifts that were only never
+          // delivered.
+          imported.skipped++;
+          if (decision === "skip-deleted") imported.skippedDeleted++;
+          else imported.skippedLegacy++;
+          continue;
+        }
+        if (decision === "repair-pair") {
+          // The shift is already here under another id: drop the
+          // phantom row and pair the shift that is actually here, so
+          // future source edits update it instead of re-creating it.
           const staleKey = `${ev.date}|${parsed.facility}|${parsed.type}`;
-          const decision = decideStaleImportRow({
-            deletedLocally: importRow.deleted_locally,
-            tombstoned: tombstonedIds.has(String(importRow.shift_id)),
-            keyExistsLocally: seenKeys.has(staleKey),
-            flagsSupported: hasImportFlags,
-          });
-          if (decision === "skip-deleted" || decision === "skip-legacy") {
-            imported.skipped++;
-            imported.skippedDeleted++;
-            continue;
+          const dupe = findDupe(staleKey);
+          if (dupe && importRow) {
+            importDeletes.push(String(importRow.shift_id));
+            importSaves.push({
+              user_id: userId,
+              provider,
+              shift_id: dupe.id,
+              source_calendar_url: sourceCalendarUrl,
+              source_event_id: ev.providerEventId,
+              source_updated_at: ev.updatedAt,
+            });
           }
-          if (decision === "repair-pair") {
-            // The shift is already here under another id: drop the
-            // phantom row and pair the shift that is actually here, so
-            // future source edits update it instead of re-creating it.
-            const dupe = localShifts.find(
-              (s) => `${s.date}|${s.facility}|${s.type}` === staleKey,
-            ) ?? providerChanges
-              .map((c) => (c as { shift?: LocalShift }).shift)
-              .find((s) => s && `${s.date}|${s.facility}|${s.type}` === staleKey);
-            if (dupe) {
-              await deleteImportMapRow(userId, provider, String(importRow.shift_id));
-              await saveImportMapRow({
-                user_id: userId,
-                provider,
-                shift_id: dupe.id,
-                source_calendar_url: sourceCalendarUrl,
-                source_event_id: ev.providerEventId,
-                source_updated_at: ev.updatedAt,
-              });
-            }
-            imported.duplicates++;
-            continue;
-          }
-          // repair-create: the shift was paired but never reached the
-          // device (an earlier sync's response was lost). Re-create it
-          // with the SAME id so the pairing stays valid; the next sync
-          // will see it in localShifts and mark it seen.
+          imported.duplicates++;
+          continue;
+        }
+        if (decision === "repair-create" && importRow) {
+          // The shift was paired but never reached the device (an
+          // earlier sync's response was lost). Re-create it with the
+          // SAME id so the pairing stays valid; the next sync will
+          // see it in localShifts and mark it seen.
           providerChanges.push({
             action: "create",
             shift: {
@@ -1051,25 +1137,21 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           counts.created++;
           imported.created++;
           imported.repaired++;
-          await saveImportMapRow({
+          importSaves.push({
             ...importRow,
             source_updated_at: ev.updatedAt,
           });
-          seenKeys.add(staleKey);
+          seenKeys.add(`${ev.date}|${parsed.facility}|${parsed.type}`);
           continue;
         }
         const key = `${ev.date}|${parsed.facility}|${parsed.type}`;
-        if (seenKeys.has(key)) {
+        if (decision === "duplicate") {
           // Same shift already on this device (user-entered, or created
           // from the dedicated calendar this sync): pair it so future
           // source edits can update it, but never create a second copy.
-          const dupe = localShifts.find(
-            (s) => `${s.date}|${s.facility}|${s.type}` === key,
-          ) ?? providerChanges
-            .map((c) => (c as { shift?: LocalShift }).shift)
-            .find((s) => s && `${s.date}|${s.facility}|${s.type}` === key);
+          const dupe = findDupe(key);
           if (dupe) {
-            await saveImportMapRow({
+            importSaves.push({
               user_id: userId,
               provider,
               shift_id: dupe.id,
@@ -1082,7 +1164,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           continue;
         }
         const newId = crypto.randomUUID();
-        await saveImportMapRow({
+        importSaves.push({
           user_id: userId,
           provider,
           shift_id: newId,
@@ -1107,6 +1189,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         imported.created++;
         seenKeys.add(key);
       }
+      // One flush for every import-map write this sync (see the note
+      // above importSaves): deletes first, then the bulk upsert.
+      await flushImportMapWrites(importSaves, importDeletes, userId, provider);
     }
   }
 

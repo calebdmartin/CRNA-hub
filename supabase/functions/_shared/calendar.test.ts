@@ -1,0 +1,252 @@
+// CRNA Hub — unit tests for the Apple import decisions
+// (_shared/calendar.ts). Run: deno test _shared/calendar.test.ts
+//
+// These cover the Nov 5, 2026 failure directly:
+//   * a shift that was paired but never reached the device is REPAIRED,
+//     never counted as deleted (absence is not a deletion);
+//   * a shift the user genuinely deleted (explicit tombstone or
+//     deleted_locally flag) is NEVER re-imported;
+//   * a second sync never duplicates a shift that is already here.
+// decideImportEvent is the same pure decision the sync-calendar import
+// loop runs per source event, so these tests pin the loop's behaviour
+// without a database or a live calendar.
+//
+// Local asserts (no remote deps): this file ships in the functions
+// folder, so it must not pull in a remote stdlib at deploy time.
+function assertEquals<T>(actual: T, expected: T, msg = ""): void {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) {
+    throw new Error(`assertEquals failed${msg ? ": " + msg : ""}\n  actual: ${a}\n  expected: ${e}`);
+  }
+}
+function assert(cond: unknown, msg = "assert failed"): void {
+  if (!cond) throw new Error(msg);
+}
+
+import {
+  chunkArray,
+  decideImportEvent,
+  decideStaleImportRow,
+  parseWorkShiftTitle,
+  sbUpsertMany,
+} from "./calendar.ts";
+
+const FLAGS_ON = true; // migration 005 has run
+const FLAGS_OFF = false; // migration 005 has not run yet
+
+Deno.test("never-delivered shift is repaired, not counted deleted", () => {
+  // Row created by a sync whose response never arrived: never seen on
+  // the device, not flagged deleted, no tombstone.
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: false,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "repair-create",
+  );
+  // Same, for a row whose flags were never set at all (defaults).
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: undefined,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "repair-create",
+  );
+  // End to end through the per-event classifier: the event becomes a
+  // repair-create, never a skip.
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: false,
+      importRow: { deleted_locally: false },
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "repair-create",
+  );
+});
+
+Deno.test("genuinely deleted shift (explicit tombstone) is never re-imported", () => {
+  // Tombstone sent with this sync: the user deleted the shift here.
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: false,
+      tombstoned: true,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "skip-deleted",
+  );
+  // Durable flag from an earlier tombstoned sync: still never
+  // re-imported, even with no tombstone in this sync.
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: true,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "skip-deleted",
+  );
+  // A deleted shift that happens to share its date/type with a shift
+  // still on the device is still skipped, not re-paired: deletion wins
+  // over the local key.
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: false,
+      importRow: { deleted_locally: true },
+      tombstoned: true,
+      keyExistsLocally: true,
+      flagsSupported: FLAGS_ON,
+    }),
+    "skip-deleted",
+  );
+});
+
+Deno.test("pre-005 rows keep the old safe skip, counted apart from deleted", () => {
+  // Without the 005 flags, "never delivered" cannot be told from
+  // "deleted": keep skipping (never resurrect), but as skip-legacy —
+  // the client must not report these as "you deleted".
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: undefined,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_OFF,
+    }),
+    "skip-legacy",
+  );
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: false,
+      importRow: {},
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_OFF,
+    }),
+    "skip-legacy",
+  );
+});
+
+Deno.test("second sync does not duplicate a shift that is already here", () => {
+  // The paired shift arrived: the event is already-here, never a
+  // create — even if the source looks newer is handled by the loop's
+  // update check, not by creating a second shift.
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: true,
+      importRow: { deleted_locally: false },
+      tombstoned: false,
+      keyExistsLocally: true,
+      flagsSupported: FLAGS_ON,
+    }),
+    "already-here",
+  );
+  // Never-paired event whose shift is already on the device (entered
+  // by hand, or created from the dedicated calendar): pair it, never
+  // create a second copy.
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: false,
+      importRow: null,
+      tombstoned: false,
+      keyExistsLocally: true,
+      flagsSupported: FLAGS_ON,
+    }),
+    "duplicate",
+  );
+  // Stale row whose shift is here under a different id: re-pair the
+  // shift that is here, never create another one.
+  assertEquals(
+    decideStaleImportRow({
+      deletedLocally: false,
+      tombstoned: false,
+      keyExistsLocally: true,
+      flagsSupported: FLAGS_ON,
+    }),
+    "repair-pair",
+  );
+  // Fresh event, nothing on the device: the only path that creates.
+  assertEquals(
+    decideImportEvent({
+      parsed: true,
+      localExists: false,
+      importRow: null,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "create",
+  );
+});
+
+Deno.test("non-shift events are skipped, never imported", () => {
+  assertEquals(
+    decideImportEvent({
+      parsed: false,
+      localExists: false,
+      importRow: null,
+      tombstoned: false,
+      keyExistsLocally: false,
+      flagsSupported: FLAGS_ON,
+    }),
+    "skip-not-shift",
+  );
+  assertEquals(parseWorkShiftTitle("Team lunch", "2026-11-06"), null);
+  assertEquals(parseWorkShiftTitle("Holzer 8", "2026-11-06"), {
+    facility: "Holzer",
+    type: "8-hour day",
+    pay: "2125",
+  });
+});
+
+Deno.test("Holzer pay rules in the title parser", () => {
+  // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
+  assertEquals(parseWorkShiftTitle("Holzer 8/2nd call", "2026-11-06")?.pay, "3000");
+  assertEquals(parseWorkShiftTitle("Holzer 8/2nd call", "2026-11-07")?.pay, "2000");
+  assertEquals(parseWorkShiftTitle("Holzer 24/1st call", "2026-11-06")?.pay, "4800");
+  assertEquals(parseWorkShiftTitle("Holzer 24/1st call", "2026-11-07")?.pay, "4200");
+  assertEquals(parseWorkShiftTitle("Holzer 10", "2026-11-06")?.pay, "2625");
+});
+
+Deno.test("chunkArray splits batched deletes", () => {
+  assertEquals(chunkArray([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+  assertEquals(chunkArray([], 50), []);
+  assertEquals(chunkArray([1, 2, 3], 50), [[1, 2, 3]]);
+});
+
+Deno.test("sbUpsertMany sends one bulk request, not one per row", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((url: string, init?: RequestInit) => {
+    calls.push({ url, init: init ?? {} });
+    return Promise.resolve(new Response(null, { status: 200 }));
+  }) as typeof fetch;
+  try {
+    await sbUpsertMany("calendar_import_map", [
+      { user_id: "u", provider: "apple", shift_id: "a" },
+      { user_id: "u", provider: "apple", shift_id: "b" },
+      { user_id: "u", provider: "apple", shift_id: "c" },
+    ]);
+    assertEquals(calls.length, 1);
+    const body = JSON.parse(String(calls[0].init.body));
+    assert(Array.isArray(body) && body.length === 3);
+    const prefer = (calls[0].init.headers as Record<string, string>)["Prefer"];
+    assert(prefer.includes("resolution=merge-duplicates"));
+    // Empty input sends nothing.
+    await sbUpsertMany("calendar_import_map", []);
+    assertEquals(calls.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
