@@ -60,7 +60,13 @@
 //   location — even a bare facility name), then a generic facility-like
 //   title plus a shift pattern. Holzer keeps its exact confirmed rates.
 //   Anything else is skipped and counted, never imported as junk, and
-//   no other calendar is ever read.
+//   no other calendar is ever read. Ask-first (Nov 5, 2026): events at
+//   a facility with no saved rule are NOT imported — they are held and
+//   reported as a suggestion ("We noticed shifts at <Hospital> — add
+//   it as a facility?"), with the three paths: sync your calendar,
+//   upload a contract, or manually enter the facility's hourly rate.
+//   Once the user adds the facility, the next sync re-scans the held
+//   events (they leave no import-map row) and imports them, priced.
 //   Imported shifts are returned as providerChange creates/updates with
 //   source "apple-import" and note "Imported from <calendar name>", and
 //   the sync response carries an `imported` summary
@@ -92,10 +98,11 @@
 //   "Re-import missing shifts" button, which clears stale rows (rows
 //   whose shift is not on the device and not flagged deleted) so the
 //   next pass imports them fresh. Skips are counted by reason
-//   (skippedNotShift / skippedDeleted / skippedLegacy) instead of one
-//   opaque total — "you deleted" now means a genuinely deleted shift
-//   (explicit tombstone or deleted_locally flag), never a shift that
-//   simply never reached the device.
+//   (skippedNotShift / skippedDeleted / skippedLegacy / skippedSuggested)
+//   instead of one opaque total — "you deleted" now means a genuinely
+//   deleted shift (explicit tombstone or deleted_locally flag), never a
+//   shift that simply never reached the device, and skippedSuggested
+//   counts shifts held for a new-hospital suggestion.
 //   Import-map writes are batched (one bulk upsert + chunked deletes
 //   after the event loop, never one awaited write per event): 231
 //   sequential writes took ~36s on Nov 5, 2026, past the Vercel
@@ -152,6 +159,8 @@ import {
   authUserId,
   chunkArray,
   decideImportEvent,
+  FacilitySuggestion,
+  groupFacilitySuggestions,
   decryptSecret,
   encryptSecret,
   encryptionConfigured,
@@ -723,11 +732,19 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     repaired: number;
     // Unpriced imports: shifts created/repaired in this import whose
     // facility has no pay rule yet (never $0 — the client counts them
-    // in the totals as unpriced). newFacilities: facility names first
-    // seen in this import that no saved facility rule covers — the
-    // client offers them on the Facilities tab so the user can set
-    // their pay rule; the next sync then re-prices their shifts.
+    // in the totals as unpriced). suggestions: hospitals seen in this
+    // import that no saved facility rule covers — ask-first, Nov 5,
+    // 2026: their shifts are HELD, not imported, and the client asks
+    // "We noticed shifts at <Hospital> in your calendar. Add it as a
+    // facility?" with the three paths (sync your calendar, upload a
+    // contract, or manually enter the facility's hourly rate). Once
+    // the user adds the facility, the next sync re-scans the held
+    // events and imports them, priced. skippedSuggested counts the
+    // held shifts. newFacilities keeps the suggestion names for
+    // older clients.
     unpriced: number;
+    suggestions: FacilitySuggestion[];
+    skippedSuggested: number;
     newFacilities: string[];
   } | null = null;
 
@@ -961,6 +978,8 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       skippedLegacy: 0,
       repaired: 0,
       unpriced: 0,
+      suggestions: [],
+      skippedSuggested: 0,
       newFacilities: [],
     };
     let sourceEvents: ProviderEvent[] = [];
@@ -1058,9 +1077,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             sameFacility(s.facility, facility, facilityRules),
         );
       };
-      // Facility names first seen in this import that no saved facility
-      // rule covers — the client offers them on the Facilities tab.
-      const newFacilityNames = new Set<string>();
+      // Shifts at a facility no saved rule covers are HELD for a
+      // suggestion, not imported (see the per-event collection below):
+      // their events are grouped after the loop into `suggestions`.
+      // Held events leave no import-map row, so adding the facility
+      // later re-scans them on the next sync instead of excluding
+      // them forever.
+      const suggestedEvents: { facility: string; date: string; title: string; location: string }[] = [];
       for (const ev of sourceEvents) {
         if (!ev.date || ev.cancelled) {
           imported.skipped++;
@@ -1078,12 +1101,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           ev.date,
           facilityRules,
         );
-        if (parsed) {
-          imported.parsed++;
-          if (!parsed.facilityKnown && parsed.facility !== "Holzer") {
-            newFacilityNames.add(parsed.facility);
-          }
-        }
+        if (parsed) imported.parsed++;
         const pay = parsed ? (parsed.pay || ev.pay || "") : "";
         const importRow = parsed ? importByEvent.get(ev.providerEventId) : undefined;
         const local = importRow
@@ -1106,10 +1124,29 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         });
         if (decision === "skip-not-shift") {
           // Not a work shift (personal event, holiday, reminder…):
-          // skipped and counted, never imported as a junk shift.
+          // skipped and counted, never imported as a junk shift — and
+          // never suggested as a facility, either.
           imported.skipped++;
           imported.skippedNotShift++;
           continue;
+        }
+        // Unknown facility, not a deleted shift: remember the event for
+        // the suggestion (name, count, date range, address). This runs
+        // for every live decision — create, duplicate, already-here,
+        // repair — so a hospital is suggested once however its shifts
+        // arrived; skip-deleted / skip-legacy shifts are genuinely
+        // deleted, so suggesting them would nag the user to re-add
+        // shifts they removed on purpose.
+        if (
+          parsed && !parsed.facilityKnown &&
+          decision !== "skip-deleted" && decision !== "skip-legacy"
+        ) {
+          suggestedEvents.push({
+            facility: parsed.facility,
+            date: ev.date,
+            title: ev.summary ?? "",
+            location: ev.location ?? "",
+          });
         }
         if (!parsed) continue; // Unreachable: decideImportEvent
         // returns skip-not-shift for every unparsed event, above.
@@ -1264,6 +1301,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           imported.duplicates++;
           continue;
         }
+        // Ask-first (Nov 5, 2026): a shift at a facility with no saved
+        // rule is HELD, not imported — the client suggests the hospital
+        // ("We noticed shifts at <Hospital> — add it as a facility?")
+        // and the next sync re-scans this event. No import-map row is
+        // written for it, so nothing is permanently excluded; once the
+        // user adds the facility, the next sync imports it, priced.
+        if (!parsed.facilityKnown) {
+          imported.skipped++;
+          imported.skippedSuggested++;
+          continue;
+        }
         const newId = crypto.randomUUID();
         importSaves.push({
           user_id: userId,
@@ -1290,7 +1338,8 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         imported.created++;
         if (!pay) imported.unpriced++;
       }
-      imported.newFacilities = [...newFacilityNames];
+      imported.suggestions = groupFacilitySuggestions(suggestedEvents);
+      imported.newFacilities = imported.suggestions.map((x) => x.name);
       // One flush for every import-map write this sync (see the note
       // above importSaves): deletes first, then the bulk upsert.
       await flushImportMapWrites(importSaves, importDeletes, userId, provider);

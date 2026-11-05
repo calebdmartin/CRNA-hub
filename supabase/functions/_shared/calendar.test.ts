@@ -28,12 +28,14 @@ import {
   chunkArray,
   decideImportEvent,
   decideStaleImportRow,
+  groupFacilitySuggestions,
   normalizeFacilityRules,
   parseWorkShiftEvent,
   parseWorkShiftTitle,
   priceShiftWithFacility,
   sameFacility,
   sbUpsertMany,
+  suggestionAddressForLocation,
 } from "./calendar.ts";
 
 const FLAGS_ON = true; // migration 005 has run
@@ -400,4 +402,53 @@ Deno.test("sbUpsertMany sends one bulk request, not one per row", async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+Deno.test("unknown-facility shifts group into one suggestion per hospital (count + date range)", () => {
+  // CAMC 8 / CAMC 2nd call parse as shifts with facilityKnown false;
+  // personal events never parse, so they can never become suggestions.
+  const camc8 = parseWorkShiftEvent("CAMC 8", "", "2026-11-06", []);
+  const camc2nd = parseWorkShiftEvent("CAMC 2nd call", "", "2026-11-09", []);
+  assert(camc8 && !camc8.facilityKnown && camc8.facility === "CAMC");
+  assert(camc2nd && !camc2nd.facilityKnown);
+  assertEquals(parseWorkShiftEvent("Dentist appointment", "", "2026-11-06", []), null);
+  assertEquals(parseWorkShiftEvent("Lunch at CAMC", "", "2026-11-06", []), null);
+  assertEquals(parseWorkShiftEvent("St. Mary's 1st call", "", "2026-11-07", [])?.facilityKnown, false);
+  // Holzer is known by its confirmed rules, so it is never suggested.
+  assertEquals(parseWorkShiftEvent("Holzer 8", "", "2026-11-06", [])?.facilityKnown, true);
+  // A listed facility is known, so it is never suggested either.
+  const rules = normalizeFacilityRules([{ name: "Charleston Area Medical Center", aliases: "CAMC", rate8: 2000 }]);
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-06", rules)?.facilityKnown, true);
+  // Grouping: case-insensitive, one suggestion per hospital, with
+  // count, first/last date, and sample titles.
+  const grouped = groupFacilitySuggestions([
+    { facility: "CAMC", date: "2026-11-09", title: "CAMC 2nd call", location: "" },
+    { facility: "CAMC", date: "2026-11-06", title: "CAMC 8", location: "3200 MacCorkle Ave, Charleston, WV 25304" },
+    { facility: "Camc", date: "2026-11-07", title: "CAMC 10", location: "" },
+    { facility: "St. Mary's", date: "2026-11-08", title: "St. Mary's 1st call", location: "" },
+  ]);
+  assertEquals(grouped.length, 2);
+  assertEquals(grouped[0].name, "CAMC");
+  assertEquals(grouped[0].count, 3);
+  assertEquals(grouped[0].firstDate, "2026-11-06");
+  assertEquals(grouped[0].lastDate, "2026-11-09");
+  assertEquals(grouped[0].address, "3200 MacCorkle Ave, Charleston, WV 25304");
+  assertEquals(grouped[0].sampleTitles.length, 3);
+  assertEquals(grouped[1].name, "St. Mary's");
+  assertEquals(grouped[1].count, 1);
+  // Undated / unnamed rows are dropped, never suggested.
+  assertEquals(groupFacilitySuggestions([
+    { facility: "", date: "2026-11-06", title: "CAMC 8" },
+    { facility: "CAMC", date: "", title: "CAMC 8" },
+    { facility: "CAMC", date: "not-a-date", title: "CAMC 8" },
+  ]), []);
+});
+
+Deno.test("suggestion address comes only from an address-like location", () => {
+  assertEquals(suggestionAddressForLocation("3200 MacCorkle Ave, Charleston, WV 25304", "CAMC"), "3200 MacCorkle Ave, Charleston, WV 25304");
+  assertEquals(suggestionAddressForLocation("123 Main St", "St. Mary's"), "123 Main St");
+  // A place name as the location is not an address.
+  assertEquals(suggestionAddressForLocation("Charleston Area Medical Center", "CAMC"), "");
+  assertEquals(suggestionAddressForLocation("CAMC", "CAMC"), "");
+  assertEquals(suggestionAddressForLocation("", "CAMC"), "");
 });

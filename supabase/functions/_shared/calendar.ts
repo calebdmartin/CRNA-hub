@@ -387,11 +387,14 @@ export function parseWorkShiftTitle(
 //      comes only from that facility's own pay rule, never guessed.
 //   3. Generic fallback for facilities not yet listed: a facility-like
 //      title plus a shift pattern ("CAMC 8", "St. Mary's 24"). Pay is
-//      always blank — the shift imports as unpriced/incomplete and the
-//      client offers the facility on the Facilities tab so the user can
-//      set its pay rule. A title with no shift pattern and no listed
-//      facility ("Team lunch", "Lunch at CAMC", "Dentist appointment")
-//      is not a shift, however facility-like it looks.
+//      always blank — and the shift is NOT imported yet: the sync loop
+//      holds it and reports the facility as a suggestion ("We noticed
+//      shifts at <Hospital> — add it as a facility?"). Only after the
+//      user adds the facility (with its pay rule, from a contract or by
+//      hand) does the next sync import those shifts, priced. A title
+//      with no shift pattern and no listed facility ("Team lunch",
+//      "Lunch at CAMC", "Dentist appointment") is not a shift, however
+//      facility-like it looks.
 // A facility added after an import re-scans cleanly: skipped events
 // leave no import-map row, so the next sync re-evaluates them, and a
 // shift already imported unpriced is re-priced by the import loop when
@@ -644,8 +647,16 @@ export function parseWorkShiftEvent(
 
   // 3. Generic fallback — a facility-like title plus a shift pattern.
   // Pay is always blank: the facility is not listed yet, so no rate
-  // exists to apply. The client learns the facility name from the
-  // import and offers it on the Facilities tab.
+  // exists to apply. These events are NOT imported: the sync loop
+  // holds them and reports them as facility suggestions instead (see
+  // groupFacilitySuggestions below and the import loop in
+  // sync-calendar/index.ts). Nothing is added without the user's tap —
+  // they answer "Add it as a facility?" on the Facilities tab, add the
+  // pay rule (from a contract or by hand), and the next sync re-scans
+  // the held events and imports them, priced. A title with no shift
+  // pattern and no listed facility ("Team lunch", "Lunch at CAMC",
+  // "Dentist appointment") is not a shift, however facility-like it
+  // looks.
   const type = shiftTypeFromPattern(t) ?? bareNumberShiftType(t);
   if (!type) return null;
   let facilityRaw = "";
@@ -685,6 +696,93 @@ export function sameFacility(a: string, b: string, rules: FacilityPayRule[]): bo
     const names = [r.name, ...(r.aliases ?? [])].map(norm);
     return names.includes(norm(a)) && names.includes(norm(b));
   });
+}
+
+// --- Facility suggestions (ask-first, Nov 5, 2026) ---
+//
+// When the import sees shift-pattern events at a facility that is NOT
+// in the user's Facilities list, it does NOT import those shifts and
+// does NOT create the facility. It reports the facility as a
+// suggestion instead, and the client asks the user first ("We noticed
+// shifts at <Hospital> in your calendar. Add it as a facility?").
+// The user then picks one of three paths, in this order — Caleb's
+// wording, Nov 5, 2026: "Sync your calendar, upload a contract, or
+// manually enter a facility's hourly rate." The manual fields are the
+// fallback for rates the other two paths did not provide. Once the
+// facility is added, the next sync re-scans the held events (they
+// leave no import-map row) and imports them, priced.
+//
+// Recognition is the deterministic parser above (facilities list
+// first, then the facility-like-title-plus-shift-pattern fallback).
+// No AI model is called during sync: the sync already has event
+// titles and locations as text, so there is nothing for a vision
+// model to read, and calling the extract-contract function (built for
+// contract documents, not calendar titles) per event would add
+// latency and cost with no gain. The feature works on deterministic
+// matching alone. Personal events can never become a suggestion:
+// parseWorkShiftEvent returns null for them, so they never reach
+// this grouping at all.
+
+export interface FacilitySuggestion {
+  name: string;
+  // Street address when the calendar location carried one (a house
+  // number or ZIP); "" otherwise — a place name is not an address and
+  // is never passed off as one.
+  address: string;
+  count: number;
+  firstDate: string;
+  lastDate: string;
+  sampleTitles: string[];
+}
+
+export interface SuggestedEvent {
+  facility: string;
+  date: string;
+  title?: string;
+  location?: string;
+}
+
+// An event location is an address only when it carries a house number
+// ("123 Main St") or a ZIP code — "Charleston Area Medical Center"
+// as a location is a place name, not an address, and prefilling the
+// address field with it would be wrong.
+export function suggestionAddressForLocation(location: string, facility: string): string {
+  const loc = String(location || "").trim();
+  if (!loc) return "";
+  if (loc.trim().toLowerCase() === String(facility || "").trim().toLowerCase()) return "";
+  if (/^\d+\s+\S/.test(loc) || /\b\d{5}(?:-\d{4})?\b/.test(loc)) return loc;
+  return "";
+}
+
+// Group held (unknown-facility) shift events into one suggestion per
+// facility: how many shifts were seen, and the date range. Grouping is
+// case-insensitive, so "CAMC 8" and "Camc 2nd call" are one hospital,
+// never two suggestions. Pure — no I/O, no AI call.
+export function groupFacilitySuggestions(events: SuggestedEvent[]): FacilitySuggestion[] {
+  const byKey = new Map<string, FacilitySuggestion & { _titles: Set<string> }>();
+  for (const ev of events || []) {
+    const name = String(ev?.facility || "").trim();
+    const date = String(ev?.date || "").trim();
+    if (!name || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const key = name.toLowerCase();
+    let g = byKey.get(key);
+    if (!g) {
+      g = { name, address: "", count: 0, firstDate: date, lastDate: date, sampleTitles: [], _titles: new Set<string>() };
+      byKey.set(key, g);
+    }
+    g.count++;
+    if (date < g.firstDate) g.firstDate = date;
+    if (date > g.lastDate) g.lastDate = date;
+    if (!g.address) g.address = suggestionAddressForLocation(ev?.location ?? "", name);
+    const title = String(ev?.title || "").trim();
+    if (title && !g._titles.has(title) && g.sampleTitles.length < 3) {
+      g._titles.add(title);
+      g.sampleTitles.push(title);
+    }
+  }
+  return [...byKey.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(({ _titles, ...rest }) => rest);
 }
 
 // Pure decision for an import-map row whose paired shift is NOT on the

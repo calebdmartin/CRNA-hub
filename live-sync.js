@@ -204,7 +204,7 @@ function liveSyncFacilityKnown(name) {
 function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
   let created = 0, updated = 0, deleted = 0;
-  const newFacilities = [];
+  const suggestions = [];
   changes.forEach((ch) => {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
@@ -214,15 +214,12 @@ function liveSyncApplyChanges(provider, data) {
       // carry no source and default to 'calendar-<provider>'.
       db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
       created++;
-      // Learn the facility: a shift imported for a facility with no
-      // saved record creates the record (name only, no pay rule — the
-      // user sets the rule on the Facilities tab, and the next sync
-      // then prices its shifts). Never invent a rate.
-      if (s.facility && !liveSyncFacilityKnown(s.facility)) {
-        db.facilities = db.facilities || [];
-        db.facilities.push({ id: id(), name: s.facility, aliases: '', address: '', rate8: '', rate10: '', rate12: '', rate24: '', rateSecond: '', hourlyRate: '', paidHours8: '', callBonus: '', distance: '', notes: '' });
-        newFacilities.push(s.facility);
-      }
+      // No auto-created facility here (ask-first, Nov 5, 2026): a shift
+      // for a hospital with no saved record cannot arrive — the server
+      // holds it and reports the hospital as a suggestion instead, and
+      // the suggestion flow below is the only way the facility appears.
+      // If an older server still sends such a shift, its facility is
+      // NOT created silently; the user adds it from the Facilities tab.
     } else if (ch.action === 'update' && ch.shift) {
       const s = ch.shift, x = db.shifts.find((y) => y.id === s.id);
       if (!x) return;
@@ -239,7 +236,23 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, skippedSuggested: data.imported.skippedSuggested || 0, suggestions: Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [], newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
+    // Facility suggestions (ask-first): merge the server's held
+    // hospitals into db.facilitySuggestions — counted, dated, and
+    // dismissable — without creating any facility. A dismissal survives
+    // the merge (the next sync only refreshes its counts). Older
+    // servers send only newFacilities names; those become minimal
+    // suggestions (count unknown) rather than silent facilities.
+    if (typeof mergeFacilitySuggestions === 'function') {
+      const sug = Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [];
+      if (sug.length) {
+        mergeFacilitySuggestions(provider, sug, data.imported.sourceCalendarName || '');
+        sug.forEach((x) => { if (x && x.name) suggestions.push(x.name); });
+      } else if (Array.isArray(data.imported.newFacilities) && data.imported.newFacilities.length) {
+        mergeFacilitySuggestions(provider, data.imported.newFacilities.map((n) => ({ name: n })), data.imported.sourceCalendarName || '');
+        data.imported.newFacilities.forEach((n) => { if (n) suggestions.push(n); });
+      }
+    }
   }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
@@ -252,7 +265,7 @@ function liveSyncApplyChanges(provider, data) {
   liveSyncState.tombstones = liveSyncState.tombstones.filter((t) => t.provider !== provider);
   liveSyncStateSave();
   persist();
-  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities };
+  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities: suggestions, suggestions };
 }
 
 async function liveSyncNow(provider, silent) {
@@ -298,9 +311,10 @@ async function liveSyncNow(provider, silent) {
           if (imp.skippedDeleted) skipBits.push(imp.skippedDeleted + ' you deleted');
           if (imp.skippedLegacy) skipBits.push(imp.skippedLegacy + ' skipped until migration 005 runs');
           if (imp.repaired) skipBits.push(imp.repaired + ' re-imported after a missed sync');
+          if (imp.skippedSuggested) skipBits.push(imp.skippedSuggested + ' held for a new-hospital suggestion');
           msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
           if (imp.unpriced) msg += ' ' + imp.unpriced + ' imported shift(s) have no pay rule yet — set the rate on the Facilities tab and the next sync prices them.';
-          if (applied.newFacilities && applied.newFacilities.length) msg += ' New facilit(ies) learned from your calendar: ' + applied.newFacilities.join(', ') + ' — set their pay rules on the Facilities tab.';
+          if (applied.suggestions && applied.suggestions.length) msg += ' We noticed shifts at ' + applied.suggestions.join(', ') + ' in your calendar. Add it as a facility? Sync your calendar, upload a contract, or manually enter the facility\'s hourly rate — see the Facilities tab.';
         }
       }
       alert(msg);
@@ -577,7 +591,7 @@ function liveSyncProviderCard(provider) {
         const opts = '<option value="">No import — “CRNA Hub” calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
         picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Import shifts from</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save import source &amp; sync now</button></div>';
       }
-      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls them in. Recognition comes from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other facility-like shift titles (e.g. “CAMC 8”, “CAMC 1st call”) import too. Shifts from a facility with no pay rule yet come in unpriced — set the rate on the Facilities tab and the next sync prices them. Events that are not work shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
+      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls them in. Recognition comes from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other facility-like shift titles (e.g. “CAMC 8”, “CAMC 1st call”) import too — but only for hospitals already on your Facilities tab. Shifts at a hospital that is not listed yet are held, not imported: the sync suggests the hospital (“We noticed shifts at … — add it as a facility?”) and, once you add it with its pay rule, the next sync pulls those shifts in and prices them. Events that are not work shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
         const skipBits = [];
@@ -586,7 +600,8 @@ function liveSyncProviderCard(provider) {
         if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' skipped until migration 005 runs');
         if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
         if (li.unpriced) skipBits.push(li.unpriced + ' unpriced — set the pay rule on the Facilities tab');
-        if (li.newFacilities && li.newFacilities.length) skipBits.push('new facilit(ies): ' + li.newFacilities.join(', '));
+        if (li.skippedSuggested) skipBits.push(li.skippedSuggested + ' held — new hospital suggestion, see Facilities tab');
+        if (li.suggestions && li.suggestions.length) skipBits.push('suggested: ' + li.suggestions.map((x) => x.name || x).join(', '));
         card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
         // An import that skipped shifts usually means an earlier sync
         // paired them without ever delivering them. Offer the explicit
@@ -645,6 +660,7 @@ function liveSyncPanelHTML() {
   } else {
     html += '<p class="muted">Connect once per provider — then sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. Syncs write to a dedicated “CRNA Hub” calendar in each provider; your other calendars are never written to. Apple can also <strong>read</strong> one calendar you pick (see the Apple card) to pull your existing shifts in.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
+    if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
     html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button>' + (liveSyncConfig.state === 'ready' ? '' : '<button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button>') + '</div>';
     if (liveSyncWizard && liveSyncConfig.state !== 'ready') html += liveSyncWizardHTML();

@@ -24,18 +24,6 @@ function secrets (server side) and in the provider consoles below.
   record is labelled with its source and retrieval date in
   `portal_connections` / `nbcrna_profiles` / `aana_memberships` /
   `licenses` (migration 001 tables).
-- `extract-contract/` — AI contract reading for the "Read with AI"
-  button (Facilities tab + Import & Backup tab): sends the photos the
-  user selected (max 4, resized client-side to <=1024px) to OpenAI
-  gpt-4o-mini with the same structured-rates prompt as the vision
-  helper, and returns `{ ok, rates, raw_text, model }` (null where the
-  document does not state a value — never invented, never 0). Runs
-  ONLY on the user's explicit tap; on-device OCR stays the default.
-  The OpenAI key comes from the `OPENAI_API_KEY` function secret only
-  (see Owner step 3b below) — until it is set, the function answers
-  `openai_key_missing` (503) and the app shows the setup message.
-  `normalize.ts` next to it is the pure parsing/normalisation, unit-
-  tested under Node as well as run under Deno.
 - `_shared/` — auth validation, AES-GCM token encryption, PostgREST
   helpers, shift/event mapping, and one provider module each
   (`google.ts`, `outlook.ts`, `caldav.ts`).
@@ -92,17 +80,6 @@ supabase secrets set \
   cannot be decrypted with a new key.
 - Never put any of these values in this repo, in client code, in
   `supabase-config.js`, or in a Vercel client environment variable.
-
-## Owner step 3b — OpenAI key for AI contract reading (once)
-
-In the Supabase dashboard for project `xgoghgihfhtnyevgapyp`, go to
-Edge Functions → Manage secrets and add `OPENAI_API_KEY` with the value
-of the OpenAI API key (paste it there — never in chat, never in this
-repo). Until it is set, `extract-contract` answers `openai_key_missing`
-and the app's "Read with AI" button shows the setup message instead of
-reading anything; on-device OCR keeps working. Billing is attached to
-the OpenAI key. The key value is never readable from the dashboard
-after it is saved, and the function never logs or returns it.
 
 ## Owner step 4 — Google Cloud OAuth app (once)
 
@@ -187,15 +164,20 @@ The flow is deliberately narrow:
   shift already imported unpriced is re-priced when its facility gains
   a pay rule. Facilities themselves live on-device, like shifts — the
   server stores none of them and no new migration is needed; the
-  browser sends the list with every sync. The client also learns
-  facility names from imported shifts (a record with no pay rule yet)
-  so the user can price them on the Facilities tab.
+  browser sends the list with every sync. Ask-first (Nov 5, 2026):
+  shifts at a facility with no saved rule are NOT imported and no
+  facility is created for them — the sync reports the hospital as a
+  suggestion instead ("We noticed shifts at <Hospital> — add it as a
+  facility?"), and the user picks one of three paths: sync your
+  calendar, upload a contract, or manually enter the facility's
+  hourly rate. Once the facility is added, the next sync re-scans the
+  held events and imports them, priced.
 - Imported shifts arrive as provider changes with source
   `apple-import` and note `Imported from <calendar name>`, and the sync
   response carries an `imported` summary (`sourceCalendarName`,
-  `created`, `updated`, `skipped`, `duplicates`, plus `unpriced` and
-  `newFacilities`) that the panel renders as "imported N shifts from
-  Caleb Work Schedule".
+  `created`, `updated`, `skipped`, `duplicates`, plus `unpriced`,
+  `skippedSuggested`, `suggestions`, and `newFacilities`) that the
+  panel renders as "imported N shifts from Caleb Work Schedule".
 - Dedupe is date + facility + shift type (never a second copy), and
   pairing lives in `calendar_import_map` (migration 004) — separate
   from `calendar_sync_map`, so a shift can be paired with the dedicated
