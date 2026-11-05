@@ -19,11 +19,19 @@ function secrets (server side) and in the provider consoles below.
 - `../supabase-schema-003.sql` — tables `calendar_connections`,
   `calendar_sync_map`, `calendar_oauth_states`,
   `calendar_pending_deletions`, `sync_log` (all RLS, own-rows only).
+- `../supabase-schema-004.sql` — Apple import source: `source_calendar_url`
+  / `source_calendar_name` on `calendar_connections` plus the
+  `calendar_import_map` pairing table (RLS, own-rows only).
 
-## Owner step 1 — run the migration (once)
+## Owner step 1 — run the migrations (once)
 
 In the Supabase dashboard for project `xgoghgihfhtnyevgapyp`, open the
-SQL Editor and run `supabase/supabase-schema-003.sql` (after 001/002).
+SQL Editor and run `supabase/supabase-schema-003.sql`, then
+`supabase/supabase-schema-004.sql` (after 001/002). Migration 004 is
+what lets a user pick an Apple calendar to import shifts from; without
+it, sync still works against the dedicated "CRNA Hub" calendar, but the
+import-source picker reports `migration_004_required` instead of
+saving a source.
 
 ## Owner step 2 — deploy the functions (once)
 
@@ -106,6 +114,47 @@ AES-GCM ciphertext is stored server-side. It is never stored in the
 browser, never shown again, and revoking it in Apple account settings
 disconnects sync immediately. The app UI states this plainly instead of
 pretending Apple is OAuth.
+
+## Apple import source — pulling shifts from "Caleb Work Schedule"
+
+The dedicated "CRNA Hub" calendar starts empty, so a user whose shifts
+live in another iCloud calendar syncs nothing until they pick that
+calendar as an import source (Apple card → "Import shifts from").
+The flow is deliberately narrow:
+
+- The app lists the user's iCloud calendars server-side
+  (`GET sync-calendar?action=apple-calendars`, stored CalDAV
+  credentials, password never returned) and the user picks one.
+- The choice is saved with `POST { action: "set-apple-source-calendar",
+  calendarUrl, calendarName }`. The URL is verified against the
+  account's calendar home-set before anything is stored, and the
+  dedicated calendar cannot be picked as its own source. Clearing the
+  choice is the same call with an empty `calendarUrl`.
+- On every Apple sync, after the dedicated-calendar two-way sync, the
+  function full-scans the source calendar (it has no sync token of its
+  own) and imports only events whose titles parse as Holzer shifts
+  (`parseWorkShiftTitle` in `_shared/calendar.ts`: Holzer 8 → 8-hour
+  day $2,125; Holzer 10 → 10-hour shift $2,625; Holzer 8/2nd call →
+  Second call, $3,000 weekday / $2,000 weekend; Holzer 24/1st call →
+  24-hour call, $4,800 weekday / $4,200 weekend; Holzer 12 has no
+  confirmed rate, so its pay stays blank). Anything else is skipped
+  and counted, never imported as junk, and no other calendar is read.
+- Imported shifts arrive as provider changes with source
+  `apple-import` and note `Imported from <calendar name>`, and the sync
+  response carries an `imported` summary (`sourceCalendarName`,
+  `created`, `updated`, `skipped`, `duplicates`) that the panel renders
+  as "imported N shifts from Caleb Work Schedule".
+- Dedupe is date + facility + shift type (never a second copy), and
+  pairing lives in `calendar_import_map` (migration 004) — separate
+  from `calendar_sync_map`, so a shift can be paired with the dedicated
+  calendar AND its source event without either pairing overwriting the
+  other. A source event that disappears is never treated as a deletion,
+  and a locally deleted imported shift is never re-imported.
+- Writes still go to the dedicated "CRNA Hub" calendar only — never
+  into the source calendar. Imported shifts reach the dedicated
+  calendar on the NEXT sync (once the browser sends them back as local
+  shifts), via the normal local → provider step. Deletions still go
+  through Pending deletions (default off).
 
 ## How the app detects "owner setup pending"
 
