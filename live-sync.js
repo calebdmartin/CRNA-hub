@@ -175,9 +175,36 @@ async function liveSyncFetchAppleCalendars() {
   } catch (e) { liveSyncAppleCalendars = []; }
 }
 
+function liveSyncFacilitiesPayload() {
+  // The Facilities list is the source of truth for import recognition:
+  // the server matches event titles/locations against these names and
+  // aliases and prices shifts from these pay rules. Facilities live
+  // on-device, like shifts — the server stores none of this, it only
+  // uses the list for this sync. Sending it every sync is what makes a
+  // facility added after an import re-scan past events on the next sync.
+  return (db.facilities || []).map((f) => ({
+    name: f.name || '',
+    aliases: typeof facilityAliases === 'function' ? facilityAliases(f) : String(f.aliases || '').split(',').map((s) => s.trim()).filter(Boolean),
+    rate8: num(f.rate8) || null,
+    rate10: num(f.rate10) || null,
+    rate12: num(f.rate12) || null,
+    rate24: num(f.rate24) || null,
+    rateSecond: num(f.rateSecond) || null,
+    hourlyRate: num(f.hourlyRate) || null,
+    paidHours8: num(f.paidHours8) || null,
+    callBonus: num(f.callBonus) || null,
+  }));
+}
+
+function liveSyncFacilityKnown(name) {
+  if (typeof facilityByNameOrAlias === 'function') return !!facilityByNameOrAlias(name);
+  return (db.facilities || []).some((g) => String(g.name || '').trim().toLowerCase() === String(name || '').trim().toLowerCase());
+}
+
 function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
   let created = 0, updated = 0, deleted = 0;
+  const newFacilities = [];
   changes.forEach((ch) => {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
@@ -187,11 +214,21 @@ function liveSyncApplyChanges(provider, data) {
       // carry no source and default to 'calendar-<provider>'.
       db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
       created++;
+      // Learn the facility: a shift imported for a facility with no
+      // saved record creates the record (name only, no pay rule — the
+      // user sets the rule on the Facilities tab, and the next sync
+      // then prices its shifts). Never invent a rate.
+      if (s.facility && !liveSyncFacilityKnown(s.facility)) {
+        db.facilities = db.facilities || [];
+        db.facilities.push({ id: id(), name: s.facility, aliases: '', address: '', rate8: '', rate10: '', rate12: '', rate24: '', rateSecond: '', hourlyRate: '', paidHours8: '', callBonus: '', distance: '', notes: '' });
+        newFacilities.push(s.facility);
+      }
     } else if (ch.action === 'update' && ch.shift) {
       const s = ch.shift, x = db.shifts.find((y) => y.id === s.id);
       if (!x) return;
       x.date = s.date; x.facility = s.facility; x.type = s.type;
-      x.pay = s.pay ? String(s.pay) : x.pay; x.note = s.note || '';
+      if (s.pay) { x.pay = String(s.pay); x.incomplete = false; }
+      x.note = s.note || '';
       x.source = s.source || x.source || ('calendar-' + provider); x.updatedAt = s.updatedAt || x.updatedAt;
       updated++;
     } else if (ch.action === 'delete' && ch.shiftId) {
@@ -202,7 +239,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
   }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
@@ -215,7 +252,7 @@ function liveSyncApplyChanges(provider, data) {
   liveSyncState.tombstones = liveSyncState.tombstones.filter((t) => t.provider !== provider);
   liveSyncStateSave();
   persist();
-  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length };
+  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities };
 }
 
 async function liveSyncNow(provider, silent) {
@@ -235,6 +272,7 @@ async function liveSyncNow(provider, silent) {
       localShifts: db.shifts.map((x) => ({ id: x.id, date: x.date, facility: x.facility, type: x.type, pay: x.pay, note: x.note || '', updatedAt: x.updatedAt || null })),
       tombstones: liveSyncState.tombstones.filter((t) => t.provider === provider).map((t) => ({ shiftId: t.shiftId })),
       repairStaleImport,
+      facilities: liveSyncFacilitiesPayload(),
     };
     const data = await liveSyncPost('sync-calendar', payload);
     const applied = liveSyncApplyChanges(provider, data);
@@ -261,6 +299,8 @@ async function liveSyncNow(provider, silent) {
           if (imp.skippedLegacy) skipBits.push(imp.skippedLegacy + ' skipped until migration 005 runs');
           if (imp.repaired) skipBits.push(imp.repaired + ' re-imported after a missed sync');
           msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
+          if (imp.unpriced) msg += ' ' + imp.unpriced + ' imported shift(s) have no pay rule yet — set the rate on the Facilities tab and the next sync prices them.';
+          if (applied.newFacilities && applied.newFacilities.length) msg += ' New facilit(ies) learned from your calendar: ' + applied.newFacilities.join(', ') + ' — set their pay rules on the Facilities tab.';
         }
       }
       alert(msg);
@@ -518,8 +558,14 @@ function liveSyncProviderCard(provider) {
       // Import source: the dedicated calendar starts empty, so shifts
       // that live in another iCloud calendar (e.g. "Caleb Work
       // Schedule") never arrive unless the user picks that calendar
-      // here. Read-only pull: only Holzer-titled events become shifts,
-      // anything else is skipped, and nothing is ever written back.
+      // here. Read-only pull: events are recognised as shifts from the
+      // Facilities list (name or abbreviation, in the title or the
+      // location — even just the facility name) and from other
+      // facility-like shift titles; anything else is skipped, and
+      // nothing is ever written back. A shift whose facility has no pay
+      // rule yet imports unpriced — set the rule on the Facilities tab
+      // and the next sync prices it; adding a facility also re-scans
+      // events that were skipped before it existed.
       const current = conn.sourceCalendarUrl || '';
       const importable = liveSyncAppleCalendars.filter((c) => !c.isDedicated);
       let picker;
@@ -531,7 +577,7 @@ function liveSyncProviderCard(provider) {
         const opts = '<option value="">No import — “CRNA Hub” calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
         picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Import shifts from</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save import source &amp; sync now</button></div>';
       }
-      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls its Holzer shifts in (Holzer 8, Holzer 8/2nd call, Holzer 24/1st call, Holzer 10…). Events that are not Holzer shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
+      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls them in. Recognition comes from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other facility-like shift titles (e.g. “CAMC 8”, “CAMC 1st call”) import too. Shifts from a facility with no pay rule yet come in unpriced — set the rate on the Facilities tab and the next sync prices them. Events that are not work shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
         const skipBits = [];
@@ -539,6 +585,8 @@ function liveSyncProviderCard(provider) {
         if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
         if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' skipped until migration 005 runs');
         if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
+        if (li.unpriced) skipBits.push(li.unpriced + ' unpriced — set the pay rule on the Facilities tab');
+        if (li.newFacilities && li.newFacilities.length) skipBits.push('new facilit(ies): ' + li.newFacilities.join(', '));
         card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
         // An import that skipped shifts usually means an earlier sync
         // paired them without ever delivering them. Offer the explicit

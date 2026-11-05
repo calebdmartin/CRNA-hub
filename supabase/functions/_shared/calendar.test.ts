@@ -28,7 +28,11 @@ import {
   chunkArray,
   decideImportEvent,
   decideStaleImportRow,
+  normalizeFacilityRules,
+  parseWorkShiftEvent,
   parseWorkShiftTitle,
+  priceShiftWithFacility,
+  sameFacility,
   sbUpsertMany,
 } from "./calendar.ts";
 
@@ -217,6 +221,153 @@ Deno.test("Holzer pay rules in the title parser", () => {
   assertEquals(parseWorkShiftTitle("Holzer 24/1st call", "2026-11-06")?.pay, "4800");
   assertEquals(parseWorkShiftTitle("Holzer 24/1st call", "2026-11-07")?.pay, "4200");
   assertEquals(parseWorkShiftTitle("Holzer 10", "2026-11-06")?.pay, "2625");
+});
+
+Deno.test("CAMC titles parse as shifts with facility CAMC, pay blank (unknown facility)", () => {
+  // The Nov 5, 2026 request: past CAMC dates must come over. The parser
+  // is date-window-free — even a 2024 date parses; the import range is
+  // the full source-calendar history, not a window.
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2024-06-03"), {
+    facility: "CAMC",
+    type: "8-hour day",
+    pay: "",
+    facilityKnown: false,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 1st call", "", "2026-03-04"), {
+    facility: "CAMC",
+    type: "24-hour call",
+    pay: "",
+    facilityKnown: false,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 24", "", "2026-03-04"), {
+    facility: "CAMC",
+    type: "24-hour call",
+    pay: "",
+    facilityKnown: false,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-04"), {
+    facility: "CAMC",
+    type: "Second call",
+    pay: "",
+    facilityKnown: false,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 12", "", "2026-03-04"), {
+    facility: "CAMC",
+    type: "12-hour shift",
+    pay: "",
+    facilityKnown: false,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 10", "", "2026-03-04"), {
+    facility: "CAMC",
+    type: "10-hour shift",
+    pay: "",
+    facilityKnown: false,
+  });
+  // A trailing date must never reclassify the shift: "CAMC 8 Nov 24"
+  // is not a 24-hour call, and with a date fragment in the facility
+  // part it is not a shift at all.
+  assertEquals(parseWorkShiftEvent("CAMC 8 Nov 24", "", "2026-03-04"), null);
+});
+
+Deno.test("Facilities list drives recognition and pricing (name + aliases)", () => {
+  const rules = normalizeFacilityRules([
+    { name: "Charleston Area Medical Center", aliases: "CAMC", rate8: 2000, rate24: 4500, rateSecond: 2800, hourlyRate: 250 },
+    { name: "WVU Medicine", aliases: ["WVU"], hourlyRate: 200 },
+    { name: "Thomas Memorial", aliases: "Thomas", rate8: 1800, callBonus: 1000 },
+  ]);
+  // Alias in the title, canonical name on the shift, pay from the rule.
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-06", rules), {
+    facility: "Charleston Area Medical Center",
+    type: "8-hour day",
+    pay: "2000",
+    facilityKnown: true,
+  });
+  assertEquals(parseWorkShiftEvent("CAMC 24", "", "2026-11-06", rules)?.pay, "4500");
+  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-11-06", rules)?.pay, "2800");
+  // Hourly rate prices the hours the rule does not flat-price.
+  assertEquals(parseWorkShiftEvent("WVU 10", "", "2026-11-06", rules)?.pay, "2000");
+  assertEquals(parseWorkShiftEvent("WVU 8", "", "2026-11-06", rules)?.pay, "1600");
+  // Second call without a flat second-call rate: day rate + call bonus.
+  assertEquals(parseWorkShiftEvent("Thomas 2nd call", "", "2026-11-06", rules)?.pay, "2800");
+  // A title that is just the facility name is a shift for that facility
+  // — unclassified and unpriced, for the user to confirm, never skipped.
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", rules), {
+    facility: "Charleston Area Medical Center",
+    type: "Shift",
+    pay: "",
+    facilityKnown: true,
+  });
+  // The same bare name with no facility saved is not a shift: there is
+  // nothing to attribute it to.
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", []), null);
+  // Alias spellings dedupe to the same facility, never a second shift.
+  assert(sameFacility("CAMC", "Charleston Area Medical Center", rules));
+  assert(!sameFacility("CAMC", "Holzer", rules));
+  assert(sameFacility("camc", "CAMC", rules));
+});
+
+Deno.test("location names the facility for a bare shift pattern", () => {
+  assertEquals(parseWorkShiftEvent("8", "CAMC", "2026-11-06"), {
+    facility: "CAMC",
+    type: "8-hour day",
+    pay: "",
+    facilityKnown: false,
+  });
+  // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
+  assertEquals(parseWorkShiftEvent("2nd call", "Holzer Memorial Hospital", "2026-11-06"), {
+    facility: "Holzer",
+    type: "Second call",
+    pay: "3000",
+    facilityKnown: true,
+  });
+  assertEquals(parseWorkShiftEvent("8", "Holzer", "2026-11-07")?.pay, "2125");
+});
+
+Deno.test("non-shift events are still skipped, even when they name a facility", () => {
+  assertEquals(parseWorkShiftEvent("Team lunch", "", "2026-11-06"), null);
+  assertEquals(parseWorkShiftEvent("Dinner with Jordan", "", "2026-11-06"), null);
+  assertEquals(parseWorkShiftEvent("Dentist appointment", "", "2026-11-06"), null);
+  assertEquals(parseWorkShiftEvent("Holiday", "", "2026-11-06"), null);
+  const rules = normalizeFacilityRules([
+    { name: "Charleston Area Medical Center", aliases: "CAMC", rate8: 2000 },
+  ]);
+  // Facility named, but no shift pattern and not the bare name.
+  assertEquals(parseWorkShiftEvent("Lunch at CAMC", "", "2026-11-06", rules), null);
+});
+
+Deno.test("Holzer rules are unchanged through the generic parser", () => {
+  // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
+  assertEquals(parseWorkShiftEvent("Holzer 8", "", "2026-11-06"), {
+    facility: "Holzer",
+    type: "8-hour day",
+    pay: "2125",
+    facilityKnown: true,
+  });
+  assertEquals(parseWorkShiftEvent("Holzer 8/2nd call", "", "2026-11-07")?.pay, "2000");
+  assertEquals(parseWorkShiftEvent("Holzer 24/1st call", "", "2026-11-06")?.pay, "4800");
+  assertEquals(parseWorkShiftEvent("Holzer 10", "", "2026-11-06")?.pay, "2625");
+  // A Facilities-list Holzer entry with different rates must NOT
+  // override the confirmed Holzer rules.
+  const rules = normalizeFacilityRules([{ name: "Holzer", rate8: 9999 }]);
+  assertEquals(parseWorkShiftEvent("Holzer 8", "", "2026-11-06", rules)?.pay, "2125");
+});
+
+Deno.test("facility rules normalise, and unpriced types stay blank, never $0", () => {
+  const rules = normalizeFacilityRules([
+    { name: "  CAMC ", aliases: "CAMC, Charleston", rate8: "2000", rate24: 0, hourlyRate: "250" },
+    { name: "", aliases: "Nope" },
+    "not-an-object",
+    null,
+  ]);
+  assertEquals(rules.length, 1);
+  assertEquals(rules[0].aliases, ["CAMC", "Charleston"]);
+  assertEquals(rules[0].rate8, 2000);
+  assertEquals(rules[0].rate24, null); // a 0 rate is "no rate", not $0 pay
+  assertEquals(priceShiftWithFacility("12-hour shift", rules[0]), "3000"); // hourly fallback
+  assertEquals(priceShiftWithFacility("24-hour call", rules[0]), ""); // no rate24, no hourly path for 24h
+  assertEquals(priceShiftWithFacility("Second call", { name: "X", rate8: 1800, callBonus: 1000 }), "2800");
+  assertEquals(priceShiftWithFacility("Second call", { name: "X", rate8: 1800 }), "");
+  assertEquals(priceShiftWithFacility("Shift", rules[0]), "");
 });
 
 Deno.test("chunkArray splits batched deletes", () => {

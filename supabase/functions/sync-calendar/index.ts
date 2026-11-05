@@ -55,8 +55,12 @@
 //   On every Apple sync, after the dedicated-calendar two-way sync, the
 //   function reads that source calendar (full scan — the source has no
 //   sync token of its own) and imports only events whose titles parse as
-//   Holzer shifts (parseWorkShiftTitle). Anything else is skipped and
-//   counted, never imported as junk, and no other calendar is ever read.
+//   work shifts (parseWorkShiftEvent in ../_shared/calendar.ts): the
+//   user's Facilities list first (name or alias, in the title or the
+//   location — even a bare facility name), then a generic facility-like
+//   title plus a shift pattern. Holzer keeps its exact confirmed rates.
+//   Anything else is skipped and counted, never imported as junk, and
+//   no other calendar is ever read.
 //   Imported shifts are returned as providerChange creates/updates with
 //   source "apple-import" and note "Imported from <calendar name>", and
 //   the sync response carries an `imported` summary
@@ -158,7 +162,9 @@ import {
   nextDay,
   parseDescription,
   parseTitle,
-  parseWorkShiftTitle,
+  parseWorkShiftEvent,
+  normalizeFacilityRules,
+  sameFacility,
   sbDelete,
   sbGet,
   sbInsert,
@@ -278,6 +284,7 @@ async function fetchGoogle(
         cancelled: ev.status === "cancelled",
         rawUpdatedAt: ev.updated ?? null,
         summary: String(ev.summary ?? ""),
+        location: typeof ev.location === "string" ? ev.location : undefined,
       });
     }
     nextSyncToken = data.nextSyncToken ?? nextSyncToken;
@@ -360,6 +367,7 @@ async function fetchOutlook(
         cancelled: removed,
         rawUpdatedAt: ev.lastModifiedDateTime ?? null,
         summary: String(ev.subject ?? ""),
+        location: ev.location?.displayName ? String(ev.location.displayName) : undefined,
       });
     }
     if (data["@odata.deltaLink"]) {
@@ -554,14 +562,18 @@ async function fetchAppleSourceEvents(
   // 100+ event work calendar and tripped the proxy's 25s limit
   // ("upstream_unreachable" on Sync now).
   //
+  // The REPORT is unfiltered on purpose (see fetchAppleCalendarRange):
+  // it returns the FULL history iCloud holds, past dates included, so
+  // shifts from earlier in the year come over — not just a 2025–2028
+  // window. There is no date filter anywhere in the import path, and
+  // the parser is date-window-free.
+  //
   // Fall back to the etag scan (now parallel-batched) not only when the
   // server refuses the REPORT, but ALSO when it succeeds with 0 events:
   // a 0-event reply for a calendar the user just picked as their work
   // calendar is not credible — it is how a time-range/DATE mismatch (or
   // a missing Depth header) used to surface, silently importing nothing.
-  const ranged = await fetchAppleCalendarRange(
-    sourceUrl, appleId, password, "20250101T000000Z", "20280101T000000Z",
-  );
+  const ranged = await fetchAppleCalendarRange(sourceUrl, appleId, password);
   if (ranged && ranged.length > 0) {
     return { events: ranged, fetchMethod: "range" };
   }
@@ -584,6 +596,14 @@ interface SyncBody {
   // are never cleared by this. Until 005 runs this is the only way to
   // recover shifts lost to an earlier undelivered sync response.
   repairStaleImport?: boolean;
+  // The user's Facilities list, sent by the browser with every sync
+  // (name, aliases, pay rule per facility). Facilities live on-device,
+  // like shifts — the server stores none of this; it only uses the
+  // list to recognise and price imported shifts on this sync. When the
+  // user adds a facility, the next sync re-scans the source calendar
+  // with it (skipped events leave no import-map row, so nothing is
+  // permanently excluded) and re-prices shifts imported unpriced.
+  facilities?: unknown;
 }
 
 async function handleSync(userId: string, body: SyncBody): Promise<Response> {
@@ -597,6 +617,11 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   const localShifts: LocalShift[] = Array.isArray(body.localShifts)
     ? body.localShifts.filter((s) => s && typeof s.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.date ?? ""))
     : [];
+  // Facilities the user saved on the Facilities tab (name + aliases +
+  // pay rule), sent with this sync so the Apple import can recognise
+  // and price their shifts. Validated, never trusted blindly — see
+  // normalizeFacilityRules. The server stores nothing from this list.
+  const facilityRules = normalizeFacilityRules(body.facilities);
   const localById = new Map(localShifts.map((s) => [s.id, s]));
   // Shifts the user deleted in the app, sent with this sync. They are
   // applied to the provider in step 1 — and they are also the durable
@@ -696,6 +721,14 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     skippedDeleted: number;
     skippedLegacy: number;
     repaired: number;
+    // Unpriced imports: shifts created/repaired in this import whose
+    // facility has no pay rule yet (never $0 — the client counts them
+    // in the totals as unpriced). newFacilities: facility names first
+    // seen in this import that no saved facility rule covers — the
+    // client offers them on the Facilities tab so the user can set
+    // their pay rule; the next sync then re-prices their shifts.
+    unpriced: number;
+    newFacilities: string[];
   } | null = null;
 
   const dropMap = async (shiftId: string) => {
@@ -906,7 +939,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     counts.created++;
   }
 
-  // 2b. Apple import source: pull Holzer shifts from the calendar the
+  // 2b. Apple import source: pull work shifts from the calendar the
   // user picked (e.g. "Caleb Work Schedule"). Read-only — nothing here
   // ever writes to the source calendar, and a source event that
   // disappears is never treated as a deletion. Runs after the
@@ -927,6 +960,8 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       skippedDeleted: 0,
       skippedLegacy: 0,
       repaired: 0,
+      unpriced: 0,
+      newFacilities: [],
     };
     let sourceEvents: ProviderEvent[] = [];
     try {
@@ -1000,30 +1035,55 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           }
         }
       }
-      // Dedupe keys: local shifts as sent, plus shifts created from the
-      // dedicated calendar earlier in this same sync.
-      const seenKeys = new Set(
-        localShifts.map((s) => `${s.date}|${s.facility}|${s.type}`),
-      );
-      for (const ch of providerChanges) {
-        const sh = (ch as { shift?: LocalShift }).shift;
-        if (ch.action === "create" && sh) {
-          seenKeys.add(`${sh.date}|${sh.facility}|${sh.type}`);
+      // Dedupe: local shifts as sent, plus shifts created from the
+      // dedicated calendar earlier in this same sync. Facility names
+      // match through sameFacility, so a shift first imported under an
+      // alias ("CAMC") is not re-created under the canonical facility
+      // name ("Charleston Area Medical Center") once that facility is
+      // saved. Reads providerChanges live, so shifts this loop creates
+      // also dedupe later events in the same sync.
+      const findImportDupe = (
+        date: string,
+        facility: string,
+        type: string,
+      ): LocalShift | undefined => {
+        const all: LocalShift[] = [...localShifts];
+        for (const ch of providerChanges) {
+          const sh = (ch as { action?: string; shift?: LocalShift }).shift;
+          if ((ch as { action?: string }).action === "create" && sh) all.push(sh);
         }
-      }
-      const findDupe = (key: string): LocalShift | undefined =>
-        localShifts.find((s) => `${s.date}|${s.facility}|${s.type}` === key) ??
-        providerChanges
-          .map((c) => (c as { shift?: LocalShift }).shift)
-          .find((s) => s && `${s.date}|${s.facility}|${s.type}` === key);
+        return all.find(
+          (s) =>
+            s.date === date && s.type === type &&
+            sameFacility(s.facility, facility, facilityRules),
+        );
+      };
+      // Facility names first seen in this import that no saved facility
+      // rule covers — the client offers them on the Facilities tab.
+      const newFacilityNames = new Set<string>();
       for (const ev of sourceEvents) {
         if (!ev.date || ev.cancelled) {
           imported.skipped++;
           imported.skippedNotShift++;
           continue;
         }
-        const parsed = parseWorkShiftTitle(ev.summary ?? "", ev.date);
-        if (parsed) imported.parsed++;
+        // Facilities list first, then the generic fallback — title AND
+        // location are both read, so "CAMC" alone, "CAMC 8", and a bare
+        // "8" with CAMC in the location all parse. Skipped events leave
+        // no import-map row, so adding a facility later re-scans them
+        // on the next sync instead of excluding them forever.
+        const parsed = parseWorkShiftEvent(
+          ev.summary ?? "",
+          ev.location ?? "",
+          ev.date,
+          facilityRules,
+        );
+        if (parsed) {
+          imported.parsed++;
+          if (!parsed.facilityKnown && parsed.facility !== "Holzer") {
+            newFacilityNames.add(parsed.facility);
+          }
+        }
         const pay = parsed ? (parsed.pay || ev.pay || "") : "";
         const importRow = parsed ? importByEvent.get(ev.providerEventId) : undefined;
         const local = importRow
@@ -1040,12 +1100,12 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           importRow: importRow ?? null,
           tombstoned: importRow ? tombstonedIds.has(String(importRow.shift_id)) : false,
           keyExistsLocally: parsed
-            ? seenKeys.has(`${ev.date}|${parsed.facility}|${parsed.type}`)
+            ? !!findImportDupe(ev.date, parsed.facility, parsed.type)
             : false,
           flagsSupported: hasImportFlags,
         });
         if (decision === "skip-not-shift") {
-          // Not a Holzer shift (personal event, holiday, reminder…):
+          // Not a work shift (personal event, holiday, reminder…):
           // skipped and counted, never imported as a junk shift.
           imported.skipped++;
           imported.skippedNotShift++;
@@ -1055,9 +1115,32 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         // returns skip-not-shift for every unparsed event, above.
         if (decision === "already-here" && local) {
           // Already imported: only a genuinely newer source edit flows
-          // back (newest edit wins, same rule as the dedicated sync).
+          // back (newest edit wins, same rule as the dedicated sync) —
+          // plus one more case: the shift came in unpriced, and its
+          // facility has since gained a pay rule (added on the
+          // Facilities tab, or edited). That re-prices it now, without
+          // waiting for a source-side edit that may never come.
           const sourceUpdated = String(ev.updatedAt ?? "");
           const localUpdated = String(local.updatedAt ?? "");
+          if (!String(local.pay || "").trim() && pay) {
+            providerChanges.push({
+              action: "update",
+              shift: {
+                id: local.id,
+                date: ev.date,
+                facility: parsed.facility,
+                type: parsed.type,
+                pay,
+                note: local.note ||
+                  `Imported from ${imported.sourceCalendarName}`,
+                source: "apple-import",
+                updatedAt: sourceUpdated || localUpdated || null,
+              },
+            });
+            counts.updated++;
+            imported.updated++;
+            continue;
+          }
           if (
             sourceUpdated && sourceUpdated > localUpdated &&
             sourceUpdated !== String(importRow?.source_updated_at ?? "")
@@ -1100,8 +1183,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           // The shift is already here under another id: drop the
           // phantom row and pair the shift that is actually here, so
           // future source edits update it instead of re-creating it.
-          const staleKey = `${ev.date}|${parsed.facility}|${parsed.type}`;
-          const dupe = findDupe(staleKey);
+          const dupe = findImportDupe(ev.date, parsed.facility, parsed.type);
           if (dupe && importRow) {
             importDeletes.push(String(importRow.shift_id));
             importSaves.push({
@@ -1137,19 +1219,20 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           counts.created++;
           imported.created++;
           imported.repaired++;
+          if (!pay) imported.unpriced++;
           importSaves.push({
             ...importRow,
             source_updated_at: ev.updatedAt,
           });
-          seenKeys.add(`${ev.date}|${parsed.facility}|${parsed.type}`);
           continue;
         }
-        const key = `${ev.date}|${parsed.facility}|${parsed.type}`;
         if (decision === "duplicate") {
           // Same shift already on this device (user-entered, or created
           // from the dedicated calendar this sync): pair it so future
           // source edits can update it, but never create a second copy.
-          const dupe = findDupe(key);
+          // And as in already-here above: if it is unpriced and its
+          // facility now has a pay rule, price it in the same pass.
+          const dupe = findImportDupe(ev.date, parsed.facility, parsed.type);
           if (dupe) {
             importSaves.push({
               user_id: userId,
@@ -1159,6 +1242,24 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
               source_event_id: ev.providerEventId,
               source_updated_at: ev.updatedAt,
             });
+            if (!String(dupe.pay || "").trim() && pay) {
+              providerChanges.push({
+                action: "update",
+                shift: {
+                  id: dupe.id,
+                  date: ev.date,
+                  facility: parsed.facility,
+                  type: parsed.type,
+                  pay,
+                  note: dupe.note ||
+                    `Imported from ${imported.sourceCalendarName}`,
+                  source: "apple-import",
+                  updatedAt: ev.updatedAt,
+                },
+              });
+              counts.updated++;
+              imported.updated++;
+            }
           }
           imported.duplicates++;
           continue;
@@ -1187,8 +1288,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         });
         counts.created++;
         imported.created++;
-        seenKeys.add(key);
+        if (!pay) imported.unpriced++;
       }
+      imported.newFacilities = [...newFacilityNames];
       // One flush for every import-map write this sync (see the note
       // above importSaves): deletes first, then the bulk upsert.
       await flushImportMapWrites(importSaves, importDeletes, userId, provider);

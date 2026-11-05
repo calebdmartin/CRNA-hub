@@ -305,6 +305,9 @@ export function parseIcsEvent(ics: string, _fallbackHref: string): ProviderEvent
     // splits "Holzer 8" into facility "Holzer 8" / type "Shift", which
     // is wrong for import — parseWorkShiftTitle needs the raw title.
     summary: icsUnescape(props.SUMMARY ?? ""),
+    // Raw location: the import parser also matches facilities here —
+    // an event titled "8" with location "CAMC" is a CAMC shift.
+    location: icsUnescape(props.LOCATION ?? "") || undefined,
   };
 }
 
@@ -376,25 +379,19 @@ export async function fetchAppleEvents(
 // 100+ events, and fetching them one at a time is what pushed a sync past
 // the proxy's 25s limit (the observed "upstream_unreachable").
 //
-// Two details matter and both were wrong before:
-//  - The REPORT must carry Depth: 1 (RFC 4791). Without it iCloud may
-//    answer 207 with an empty multistatus — a "successful" 0-event reply.
-//  - There must be NO <c:time-range> filter. Caleb's shifts are ALL-DAY
-//    events (DTSTART;VALUE=DATE:20261102, i.e. midnight ET / 05:00Z).
-//    A UTC-datetime time-range (20250101T000000Z-20280101T000000Z) does
-//    not reliably match DATE-valued DTSTARTs on iCloud, so the range
-//    query returned 0 events for a calendar holding 25+ shifts in a
-//    single month — and because the REPORT had succeeded, the etag-scan
-//    fallback never ran. An unfiltered query returns every event; the
-//    import caller then filters by title/date itself.
-// Returns null when the server refuses the REPORT, so the caller can fall
-// back to the etag scan above; a 401 still throws apple_auth_failed.
+// The query is deliberately UNFILTERED — no <c:time-range> — so it
+// returns the full history iCloud holds, past dates included (that is
+// how CAMC shifts from earlier in 2026 come over). A UTC-datetime
+// time-range does not reliably match DATE-valued DTSTARTs on iCloud, so
+// a range query returned 0 events for a calendar holding 25+ shifts in
+// a single month. The `_start` / `_end` parameters are kept only so
+// older callers still compile; they are ignored on purpose.
 export async function fetchAppleCalendarRange(
   calendarUrl: string,
   appleId: string,
   password: string,
-  _start: string,
-  _end: string,
+  _start?: string,
+  _end?: string,
 ): Promise<ProviderEvent[] | null> {
   const report = await dav(calendarUrl, appleId, password, "REPORT",
     `<?xml version="1.0"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>`, "1");

@@ -143,18 +143,36 @@ The flow is deliberately narrow:
   choice is the same call with an empty `calendarUrl`.
 - On every Apple sync, after the dedicated-calendar two-way sync, the
   function full-scans the source calendar (it has no sync token of its
-  own) and imports only events whose titles parse as Holzer shifts
-  (`parseWorkShiftTitle` in `_shared/calendar.ts`: Holzer 8 → 8-hour
-  day $2,125; Holzer 10 → 10-hour shift $2,625; Holzer 8/2nd call →
+  own — and the scan is unfiltered, so it returns the FULL history
+  iCloud holds, past dates included, not a 2025–2028 window) and
+  imports every event that parses as a work shift
+  (`parseWorkShiftEvent` in `_shared/calendar.ts`). Recognition order:
+  Holzer first, with its exact confirmed rates (Holzer 8 → 8-hour day
+  $2,125; Holzer 10 → 10-hour shift $2,625; Holzer 8/2nd call →
   Second call, $3,000 weekday / $2,000 weekend; Holzer 24/1st call →
   24-hour call, $4,800 weekday / $4,200 weekend; Holzer 12 has no
-  confirmed rate, so its pay stays blank). Anything else is skipped
-  and counted, never imported as junk, and no other calendar is read.
+  confirmed rate, so its pay stays blank); then the user's Facilities
+  list, sent with each sync by the browser (name or alias, in the event
+  title or the event location — even a bare facility name, or a bare
+  shift pattern with the facility in the location), priced only from
+  that facility's own pay rule; then a generic fallback for facilities
+  not yet listed (facility-like title + shift pattern, e.g. "CAMC 8"),
+  which always imports unpriced. Anything else is skipped and counted,
+  never imported as junk, and no other calendar is read.
+- A facility added after an import re-scans cleanly: skipped events
+  leave no import-map row, so the next sync re-evaluates them, and a
+  shift already imported unpriced is re-priced when its facility gains
+  a pay rule. Facilities themselves live on-device, like shifts — the
+  server stores none of them and no new migration is needed; the
+  browser sends the list with every sync. The client also learns
+  facility names from imported shifts (a record with no pay rule yet)
+  so the user can price them on the Facilities tab.
 - Imported shifts arrive as provider changes with source
   `apple-import` and note `Imported from <calendar name>`, and the sync
   response carries an `imported` summary (`sourceCalendarName`,
-  `created`, `updated`, `skipped`, `duplicates`) that the panel renders
-  as "imported N shifts from Caleb Work Schedule".
+  `created`, `updated`, `skipped`, `duplicates`, plus `unpriced` and
+  `newFacilities`) that the panel renders as "imported N shifts from
+  Caleb Work Schedule".
 - Dedupe is date + facility + shift type (never a second copy), and
   pairing lives in `calendar_import_map` (migration 004) — separate
   from `calendar_sync_map`, so a shift can be paired with the dedicated
