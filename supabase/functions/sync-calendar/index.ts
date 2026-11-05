@@ -12,10 +12,18 @@
 //   GET  ?action=log      (auth) -> recent sync_log rows for this user.
 //   POST { action: "sync", provider, localShifts, tombstones } (auth)
 //        -> two-way sync for one provider (see algorithm below).
-//   POST { action: "connect-apple", appleId, appSpecificPassword } (auth)
+//   POST { action: "connect-apple", appleId, appSpecificPassword, calendarUrl? } (auth)
 //        -> validates the password with CalDAV, then stores ONLY its
 //           AES-GCM ciphertext server-side. The plaintext is never logged,
 //           never returned, and never stored in the browser.
+//           Without calendarUrl it creates a dedicated "CRNA Hub"
+//           calendar (UUID address, the form iCloud accepts). If iCloud
+//           refuses to create one, it returns
+//           { error: "apple_create_forbidden_pick_calendar", calendars }
+//           (502) instead of failing outright; the client then lets the
+//           user pick an existing calendar and re-calls connect-apple
+//           with calendarUrl, which is verified against the account's
+//           calendar home-set before anything is stored.
 //   POST { action: "disconnect", provider } (auth)
 //   POST { action: "set-auto-delete", provider, autoDelete } (auth)
 //        -> autoDelete defaults to false; see the deletion rule below.
@@ -110,6 +118,7 @@ import {
   ensureAppleCalendar,
   fetchAppleEvents,
   putAppleEvent,
+  verifyAppleCalendar,
 } from "../_shared/caldav.ts";
 
 type Conn = Record<string, unknown>;
@@ -737,12 +746,33 @@ async function handleConnectApple(userId: string, body: Record<string, unknown>)
   const password = String(body.appSpecificPassword ?? "");
   if (!appleId || !password) return err("apple_credentials_required", 400);
   if (!encryptionConfigured()) return err("encryption_not_configured", 503);
+  const pickedUrl = String(body.calendarUrl ?? "").trim();
   let calendarUrl: string;
   try {
-    calendarUrl = await ensureAppleCalendar(appleId, password);
+    if (pickedUrl) {
+      // Pick-an-existing-calendar path: the URL must be an iCloud URL
+      // under this account's calendar home-set and actually be a
+      // calendar collection; anything else is rejected before storage.
+      if (!/^https:\/\/[A-Za-z0-9-]+\.icloud\.com\//.test(pickedUrl)) {
+        return err("apple_calendar_not_found", 400);
+      }
+      calendarUrl = await verifyAppleCalendar(appleId, password, pickedUrl);
+    } else {
+      calendarUrl = await ensureAppleCalendar(appleId, password);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "";
     if (msg === "apple_auth_failed") return err("apple_auth_failed", 401);
+    // iCloud refused to create a calendar (observed: 403 for a
+    // non-UUID collection name). Do not fail the whole connect: hand
+    // the discovered calendars back so the user can pick an existing
+    // one instead. The password is never included in any of these codes.
+    if (msg.startsWith("apple_calendar_create_failed")) {
+      const cals = (e as unknown as { calendars?: unknown }).calendars;
+      if (Array.isArray(cals)) {
+        return json({ ok: false, error: "apple_create_forbidden_pick_calendar", calendars: cals }, 502);
+      }
+    }
     // Pass discovery errors through verbatim (apple_principal_failed_<status>,
     // apple_principal_missing, apple_home_failed_<status>, apple_home_missing,
     // apple_list_failed_<status>, apple_calendar_create_failed_<status>) so the

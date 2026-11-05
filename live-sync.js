@@ -30,6 +30,11 @@ let liveSyncLog = [];
 let liveSyncWizard = false;
 let liveSyncError = '';
 let liveSyncBusy = '';
+// Pending Apple pick-an-existing-calendar flow: iCloud refused to create
+// a new calendar, so the user chooses one of their existing calendars.
+// Holds the Apple ID + app-specific password only until the pick is made
+// or cancelled; never persisted, never stored on this device.
+let liveSyncApplePick = null; // { appleId, password, calendars: [{url, name}] }
 let liveSyncPushTimer = null;
 
 function liveSyncStateLoad() {
@@ -107,7 +112,14 @@ async function liveSyncGet(name, action) {
 }
 async function liveSyncPost(name, body) {
   const { r, data } = await liveSyncFnRequest(name, 'POST', body && body.action, body);
-  if (!r.ok) throw new Error((data && data.error) || ('request failed (' + r.status + ')'));
+  if (!r.ok) {
+    // Keep the response body on the error: some failures carry extra
+    // data the caller needs (e.g. connect-apple returning the user's
+    // existing calendars when iCloud refuses to create a new one).
+    const e = new Error((data && data.error) || ('request failed (' + r.status + ')'));
+    e.data = data;
+    throw e;
+  }
   return data;
 }
 function liveSyncConnectedProviders() {
@@ -270,22 +282,58 @@ async function liveSyncAppleConnect() {
   const appleId = idEl ? idEl.value.trim() : '';
   const password = pwEl ? pwEl.value : '';
   if (!appleId || !password) { alert('Enter your Apple ID and the app-specific password.'); return; }
-  // The password is sent once to the server-side function and cleared
-  // from this page immediately; it is never stored on this device.
+  // The password is cleared from the field now but kept in memory only
+  // until this connect attempt resolves (it is needed again if iCloud
+  // refuses to create a calendar and you pick an existing one instead).
+  // It is never stored on this device.
   if (pwEl) pwEl.value = '';
   try {
     await liveSyncPost('sync-calendar', { action: 'connect-apple', appleId, appSpecificPassword: password });
+    liveSyncApplePick = null;
     await liveSyncFetchStatus();
     await liveSyncFetchLog();
     render();
     alert('Apple Calendar connected. Shifts will sync with your dedicated “CRNA Hub” calendar.');
   } catch (e) {
+    // iCloud refused to create a new calendar: offer the user's
+    // existing calendars instead of failing the whole connect.
+    const cals = e.data && Array.isArray(e.data.calendars) ? e.data.calendars : null;
+    if (e.message === 'apple_create_forbidden_pick_calendar' && cals) {
+      liveSyncApplePick = { appleId, password, calendars: cals };
+      render();
+      if (!cals.length) {
+        alert('iCloud would not let CRNA Hub create a new calendar, and no existing calendars were found. Create a calendar in the Apple Calendar app first, then try connecting again. Nothing was stored.');
+      } else {
+        alert('iCloud would not let CRNA Hub create a new calendar — your sign-in is fine. Pick one of your existing calendars below to sync with instead. Nothing was stored yet.');
+      }
+      return;
+    }
+    liveSyncApplePick = null;
     render();
     if (e.message && e.message.startsWith('apple_') && e.message !== 'apple_auth_failed') {
       alert('Apple Calendar connection failed at: ' + e.message + '. That names the failing discovery step and its HTTP status — it is not a password error unless the code says apple_auth_failed. Nothing was stored.');
     } else {
       alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored.');
     }
+  }
+}
+async function liveSyncApplePickUse() {
+  if (!liveSyncApplePick) return;
+  const sel = document.getElementById('f_liveApplePick');
+  const calendarUrl = sel ? sel.value : '';
+  if (!calendarUrl) { alert('Pick a calendar first.'); return; }
+  const picked = liveSyncApplePick.calendars.find((c) => c.url === calendarUrl);
+  const { appleId, password } = liveSyncApplePick;
+  try {
+    await liveSyncPost('sync-calendar', { action: 'connect-apple', appleId, appSpecificPassword: password, calendarUrl });
+    liveSyncApplePick = null;
+    await liveSyncFetchStatus();
+    await liveSyncFetchLog();
+    render();
+    alert('Apple Calendar connected to “' + (picked && picked.name ? picked.name : 'your chosen calendar') + '”. Shifts will sync with that calendar.');
+  } catch (e) {
+    render();
+    alert('Could not connect to that calendar: ' + e.message + '. Nothing was stored.');
   }
 }
 async function liveSyncResolvePending(entry, decision) {
@@ -323,6 +371,8 @@ function liveSyncAction(action, entry) {
   if (action === 'live-sync-now') return liveSyncNow(entry, false);
   if (action === 'live-auto-delete') return liveSyncToggleAutoDelete(entry);
   if (action === 'live-apple-connect') return liveSyncAppleConnect();
+  if (action === 'live-apple-pick') return liveSyncApplePickUse();
+  if (action === 'live-apple-pick-cancel') { liveSyncApplePick = null; return render(); }
   if (action === 'live-wizard') { liveSyncWizard = !liveSyncWizard; return render(); }
   if (action === 'live-refresh') {
     liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchLog()).then(() => render());
@@ -352,6 +402,10 @@ function liveSyncProviderCard(provider) {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Syncs to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div></div>';
   }
   if (provider === 'apple') {
+    if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
+      const opts = liveSyncApplePick.calendars.map((c) => '<option value="' + escapeHTML(c.url) + '">' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
+      return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Pick a calendar</span></div><div class="muted">iCloud would not let CRNA Hub create a new calendar, but your sign-in worked. Choose one of your existing calendars to sync shifts with — CRNA Hub will only write its own shifts there, and will not read, move, or delete your other events.</div><div class="form-grid"><div class="field"><label for="f_liveApplePick">Use this calendar</label><select id="f_liveApplePick">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-pick">Connect to this calendar</button><button type="button" class="tiny secondary" data-action="live-apple-pick-cancel">Cancel</button></div></div>';
+    }
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">Apple has no one-click OAuth for calendar apps, so this one is honestly different: create an <strong>app-specific password</strong> once in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It goes straight to the server-side sync function, is stored encrypted there, and is never stored on this device or shown again. Revoking it in your Apple account disconnects sync at once. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div>';
   }
   return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">One click to the provider consent screen, then back here — no files to upload, no passwords typed into this app. Syncs to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';

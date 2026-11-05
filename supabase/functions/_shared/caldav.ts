@@ -52,6 +52,20 @@ function absHref(href: string): string {
   return `${CALDAV_HOST}${h.startsWith("/") ? h : "/" + h}`;
 }
 
+// Resolve an href against the URL that returned it. iCloud's discovery
+// answers live on a per-account pXX-caldav.icloud.com host; resolving a
+// relative href against the generic caldav.icloud.com host instead would
+// send the next request to the wrong host (the discovery host only
+// redirects, and a MKCALENDAR must not go through a redirect).
+function resolveHref(href: string, base: string): string {
+  const h = href.replace(/&amp;/g, "&").trim();
+  try {
+    return new URL(h, base).href;
+  } catch {
+    return absHref(h);
+  }
+}
+
 function decodeXml(s: string): string {
   return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
@@ -83,19 +97,21 @@ function checkDav(res: Response, step: string): void {
   if (!res.ok) throw stepError(step, res.status);
 }
 
-// Returns the URL of the "CRNA Hub" calendar, creating it if needed.
-// Each discovery step has its own error code (with the HTTP status) so a
-// failure names the step instead of collapsing into apple_dav_failed:
-//   apple_principal_failed_<status> / apple_principal_missing
-//   apple_home_failed_<status>      / apple_home_missing
-//   apple_list_failed_<status>
-//   apple_calendar_create_failed_<status>
-// A 401 at ANY step is apple_auth_failed (bad Apple ID / app-specific
-// password), never a discovery error.
-export async function ensureAppleCalendar(
+// A discovered iCloud calendar: its server URL and its display name.
+// The URL is what sync stores (calendar_id); the name is only shown to
+// the user when they have to pick a calendar.
+export interface AppleCalendarInfo {
+  url: string;
+  name: string | null;
+}
+
+// Discovery only: principal -> calendar-home-set -> calendar list.
+// Returns the home-set URL plus every calendar collection found there.
+// Throws the same step-specific errors as ensureAppleCalendar.
+export async function discoverAppleCalendars(
   appleId: string,
   password: string,
-): Promise<string> {
+): Promise<{ homeUrl: string; calendars: AppleCalendarInfo[] }> {
   const root = await dav(CALDAV_HOST + "/", appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`, "0");
   checkDav(root, "principal_failed");
@@ -106,7 +122,7 @@ export async function ensureAppleCalendar(
   }
   const principalHref = principalSection ? firstHref(principalSection) : null;
   if (!principalHref) throw new Error("apple_principal_missing");
-  const principalUrl = absHref(principalHref);
+  const principalUrl = resolveHref(principalHref, CALDAV_HOST + "/");
   const homeRes = await dav(principalUrl, appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set/></d:prop></d:propfind>`, "0");
   checkDav(homeRes, "home_failed");
@@ -114,30 +130,97 @@ export async function ensureAppleCalendar(
   const homeSection = elementContent(homeXml, "calendar-home-set");
   const homeHref = homeSection ? firstHref(homeSection) : null;
   if (!homeHref) throw new Error("apple_home_missing");
-  const homeUrl = absHref(homeHref);
+  const homeUrl = resolveHref(homeHref, principalUrl);
   const listRes = await dav(homeUrl, appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>`, "1");
   checkDav(listRes, "list_failed");
   const listXml = await listRes.text();
   const responses = listXml.split(/<(?:[A-Za-z_][\w.-]*:)?response(?:\s[^>]*)?>/i).slice(1);
   const norm = (u: string) => u.replace(/\/$/, "");
+  const calendars: AppleCalendarInfo[] = [];
   for (const resp of responses) {
     const href = firstHref(resp);
     if (!href) continue;
-    if (norm(absHref(href)) === norm(homeUrl)) continue;
+    const url = resolveHref(href, homeUrl);
+    if (norm(url) === norm(homeUrl)) continue;
     const typeSection = elementContent(resp, "resourcetype");
     const isCalendar = !!typeSection &&
       /<(?:[A-Za-z_][\w.-]*:)?calendar(?:[\s/>])/i.test(typeSection);
+    if (!isCalendar) continue;
     const nameRaw = elementContent(resp, "displayname");
-    const name = nameRaw !== null ? decodeXml(nameRaw) : null;
-    if (isCalendar && name === "CRNA Hub") return absHref(href);
+    calendars.push({ url, name: nameRaw !== null ? decodeXml(nameRaw) : null });
   }
-  const newUrl = homeUrl.replace(/\/?$/, "/") + "crna-hub/";
-  const mk = await dav(newUrl, appleId, password, "MKCALENDAR",
-    `<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop><d:displayname>CRNA Hub</d:displayname><c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>`, null);
-  if (mk.ok || mk.status === 405) return newUrl;
-  if (mk.status === 401) throw new Error("apple_auth_failed");
-  throw stepError("calendar_create_failed", mk.status);
+  return { homeUrl, calendars };
+}
+
+// Verify a user-chosen existing calendar URL: it must sit under the
+// account's calendar home-set and be a calendar collection. Used by the
+// pick-an-existing-calendar fallback in connect-apple.
+export async function verifyAppleCalendar(
+  appleId: string,
+  password: string,
+  calendarUrl: string,
+): Promise<string> {
+  const { homeUrl } = await discoverAppleCalendars(appleId, password);
+  const norm = (u: string) => u.replace(/\/$/, "");
+  if (!norm(calendarUrl).startsWith(norm(homeUrl))) {
+    throw new Error("apple_calendar_not_found");
+  }
+  const res = await dav(calendarUrl, appleId, password, "PROPFIND",
+    `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>`, "0");
+  if (res.status === 401) throw new Error("apple_auth_failed");
+  if (!res.ok) throw stepError("calendar_verify_failed", res.status);
+  const xml = await res.text();
+  const typeSection = elementContent(xml, "resourcetype");
+  const isCalendar = !!typeSection &&
+    /<(?:[A-Za-z_][\w.-]*:)?calendar(?:[\s/>])/i.test(typeSection);
+  if (!isCalendar) throw new Error("apple_calendar_not_found");
+  return calendarUrl;
+}
+
+// Returns the URL of the "CRNA Hub" calendar, creating it if needed.
+// Each discovery step has its own error code (with the HTTP status) so a
+// failure names the step instead of collapsing into apple_dav_failed:
+//   apple_principal_failed_<status> / apple_principal_missing
+//   apple_home_failed_<status>      / apple_home_missing
+//   apple_list_failed_<status>
+//   apple_calendar_create_failed_<status>
+// A 401 at ANY step is apple_auth_failed (bad Apple ID / app-specific
+// password), never a discovery error.
+//
+// Why the create URL is a UUID: iCloud calendar collections are
+// addressed by a UUID under the calendar home-set
+// (https://pXX-caldav.icloud.com/<dsid>/calendars/<UUID>/), the form
+// Apple's own clients use. The previous code asked iCloud to create a
+// collection at a friendly slug ("crna-hub"), which iCloud refuses with
+// 403 — authentication had already passed, so it was never a password
+// problem. If creation is still refused, the thrown error carries the
+// discovered calendars on (error as any).calendars so the caller can
+// offer "pick an existing calendar" instead of failing the connect.
+export async function ensureAppleCalendar(
+  appleId: string,
+  password: string,
+): Promise<string> {
+  const { homeUrl, calendars } = await discoverAppleCalendars(appleId, password);
+  for (const cal of calendars) {
+    if (cal.name === "CRNA Hub") return cal.url;
+  }
+  const newUrl = homeUrl.replace(/\/?$/, "/") + crypto.randomUUID() + "/";
+  const fullBody = `<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop><d:displayname>CRNA Hub</d:displayname><c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>`;
+  const minimalBody = `<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop><d:displayname>CRNA Hub</d:displayname></d:prop></d:set></c:mkcalendar>`;
+  for (const body of [fullBody, minimalBody]) {
+    const mk = await dav(newUrl, appleId, password, "MKCALENDAR", body, null);
+    if (mk.ok || mk.status === 405) return newUrl;
+    if (mk.status === 401) throw new Error("apple_auth_failed");
+    // Only retry with the minimal body; a second 403 (or any other
+    // refusal) is the final answer, not a reason to keep hammering.
+    if (body === fullBody) continue;
+    const e = stepError("calendar_create_failed", mk.status);
+    (e as unknown as { calendars: AppleCalendarInfo[] }).calendars = calendars;
+    throw e;
+  }
+  // Unreachable: the loop always returns or throws.
+  throw new Error("apple_dav_failed");
 }
 
 function icsEscape(t: string): string {
@@ -265,7 +348,7 @@ export async function fetchAppleEvents(
     const etag = etagRaw !== null ? decodeXml(etagRaw) : undefined;
     if (!href || href.replace(/\/$/, "") === calendarUrl.replace(/\/$/, "")) continue;
     if (etag && knownEtags.get(href) === etag) continue;
-    const get = await dav(absHref(href), appleId, password, "GET", null, null, "text/calendar");
+    const get = await dav(resolveHref(href, calendarUrl), appleId, password, "GET", null, null, "text/calendar");
     if (!get.ok) continue;
     const ev = parseIcsEvent(await get.text(), href);
     if (ev) events.push(ev);
