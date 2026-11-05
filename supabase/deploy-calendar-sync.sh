@@ -9,4 +9,4 @@ cd "$(dirname "$0")/.."
 supabase functions deploy google-auth outlook-auth sync-calendar
 echo "Deployed. Next: set function secrets (APP_URL, CALENDAR_ENCRYPTION_KEY,"
 echo "GOOGLE_CLIENT_ID/SECRET, OUTLOOK_CLIENT_ID/SECRET) and run"
-echo "supabase-schema-003.sql in the Supabase SQL Editor."
+echo "supabase-schema-003.sql and supabase-schema-004.sql in the Supabase SQL Editor."
