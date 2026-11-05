@@ -11,13 +11,14 @@
 // reachable" on such devices even when the function is live.
 //
 // Security notes:
-// - This is NOT an open proxy. Only four allowlisted functions are
+// - This is NOT an open proxy. Only five allowlisted functions are
 //   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync), and only
 //   allowlisted actions: sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
 //   set-auto-delete/resolve-deletion, the OAuth "start" action for
 //   google-auth/outlook-auth, and portal-sync config/status/
-//   verify-nbcrna/verify-license/connect-aana. Everything else is
+//   verify-nbcrna/verify-license/connect-aana, and extract-contract
+//   extract-contract. Everything else is
 //   rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client
 //   key already embedded in supabase-config.js), plus the user's own
@@ -45,6 +46,9 @@ const FUNCTIONS = {
   // Same token rule as sync-calendar: the public config check is
   // token-less, everything else requires the user's token.
   'portal-sync': new Set(['config', 'status', 'verify-nbcrna', 'verify-license', 'connect-aana']),
+  // AI contract reading (Facilities + Import & Backup "Read with AI"):
+  // one action, POST only, requires the user's token like the rest.
+  'extract-contract': new Set(['extract-contract']),
 };
 
 function bad(res, code, status) {
@@ -99,7 +103,9 @@ module.exports = async (req, res) => {
     headers['Content-Type'] = 'application/json';
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+  // Vision reads take longer than a sync status check: give the AI
+  // call 60s through the proxy (the Edge Function itself aborts at 60s).
+  const timer = setTimeout(() => controller.abort(), payload.function === 'extract-contract' ? 60000 : 25000);
   try {
     const upstreamRes = await fetch(upstream, {
       method,
