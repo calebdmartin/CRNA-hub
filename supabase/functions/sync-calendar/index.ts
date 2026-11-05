@@ -74,7 +74,21 @@
 //   calendar, and a source event that disappears is never treated as a
 //   deletion (a full scan cannot see deletions, and an absence is not
 //   evidence). A locally deleted imported shift is never re-imported:
-//   its import-map row survives the deletion and blocks resurrection.
+//   its import-map row survives the deletion and blocks resurrection —
+//   but ONLY once the deletion is known, via migration 005 flags
+//   (seen_locally / deleted_locally on calendar_import_map) or a
+//   tombstone sent with this sync. Before 005, a row whose shift never
+//   reached the device (an earlier sync's response was lost, e.g. the
+//   old 25-second proxy timeout) looked exactly like a deleted shift,
+//   so every one of its events was skipped forever — 231 parsed Holzer
+//   shifts skipped with 0 imported on Nov 5, 2026. With 005, such a
+//   stale row is REPAIRED instead: the shift is re-created with the
+//   same id (counted as `repaired`). Until 005 runs, the code keeps the
+//   old safe skip behaviour and the client offers an explicit
+//   "Re-import missing shifts" button, which clears stale rows (rows
+//   whose shift is not on the device and not flagged deleted) so the
+//   next pass imports them fresh. Skips are counted by reason
+//   (skippedNotShift / skippedDeleted) instead of one opaque total.
 //
 // Sync algorithm — newest edit wins, deletions never silent:
 //   * One dedicated provider calendar named "CRNA Hub" per provider.
@@ -123,6 +137,7 @@ import {
   LocalShift,
   ProviderEvent,
   authUserId,
+  decideStaleImportRow,
   decryptSecret,
   encryptSecret,
   encryptionConfigured,
@@ -454,6 +469,21 @@ async function saveImportMapRow(row: Record<string, unknown>): Promise<void> {
   }
 }
 
+async function deleteImportMapRow(userId: string, provider: string, shiftId: string): Promise<void> {
+  try {
+    await sbDelete(
+      "calendar_import_map",
+      `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}&shift_id=eq.${encodeURIComponent(shiftId)}`,
+    );
+  } catch {
+    // Degraded mode (migration 004 not run): nothing to delete.
+  }
+}
+
+// decideStaleImportRow lives in ../_shared/calendar.ts (pure, exported
+// for unit tests) — it decides what happens to an import-map row whose
+// paired shift is not on the device.
+
 // Full scan of the user's chosen Apple import-source calendar. The source
 // has no sync token of its own (conn.sync_token belongs to the dedicated
 // calendar), and the event count is small (tens of shifts), so a full
@@ -494,6 +524,12 @@ interface SyncBody {
   provider?: unknown;
   localShifts?: LocalShift[];
   tombstones?: { shiftId?: string; providerEventId?: string }[];
+  // Explicit client repair: clear stale import-map rows (paired shifts
+  // that never reached the device) so they import fresh on this sync.
+  // Rows flagged deleted_locally (migration 005) and tombstoned shifts
+  // are never cleared by this. Until 005 runs this is the only way to
+  // recover shifts lost to an earlier undelivered sync response.
+  repairStaleImport?: boolean;
 }
 
 async function handleSync(userId: string, body: SyncBody): Promise<Response> {
@@ -508,6 +544,18 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     ? body.localShifts.filter((s) => s && typeof s.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.date ?? ""))
     : [];
   const localById = new Map(localShifts.map((s) => [s.id, s]));
+  // Shifts the user deleted in the app, sent with this sync. They are
+  // applied to the provider in step 1 — and they are also the durable
+  // proof that an imported shift was deleted on purpose (see the import
+  // section: a tombstone is what separates "deleted" from "never
+  // delivered"). The client clears its tombstones after a successful
+  // sync, so a tombstoned import row is also flagged deleted_locally
+  // (migration 005) in the import section below.
+  const tombstonedIds = new Set(
+    (Array.isArray(body.tombstones) ? body.tombstones : [])
+      .map((t) => t.shiftId)
+      .filter((id): id is string => typeof id === "string" && !!id),
+  );
   const mapRows = await getMapRows(userId, provider);
   const mapByEvent = new Map<string, Conn>();
   const mapByShift = new Map<string, Conn>();
@@ -584,6 +632,12 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     parsed: number;
     fetchMethod: string | null;
     error: string | null;
+    // Skip reasons (skipped is the total): not-shift events vs shifts
+    // the user deleted. repaired counts stale rows re-created because
+    // their shift never reached the device.
+    skippedNotShift: number;
+    skippedDeleted: number;
+    repaired: number;
   } | null = null;
 
   const dropMap = async (shiftId: string) => {
@@ -811,6 +865,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       parsed: 0,
       fetchMethod: null,
       error: null,
+      skippedNotShift: 0,
+      skippedDeleted: 0,
+      repaired: 0,
     };
     let sourceEvents: ProviderEvent[] = [];
     try {
@@ -825,9 +882,52 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     }
     if (!imported.error) {
       const importRows = await getImportMapRows(userId, provider);
-      const importByEvent = new Map(
+      // Migration 005 flags exist only if a returned row carries them
+      // (select=* returns every column). With no rows there is nothing
+      // stale to repair, so the distinction does not matter.
+      const hasImportFlags = importRows.length > 0 &&
+        Object.prototype.hasOwnProperty.call(importRows[0], "deleted_locally");
+      let importByEvent = new Map(
         importRows.map((r) => [String(r.source_event_id), r as Conn]),
       );
+      // A paired shift that IS on the device was delivered: mark it
+      // seen so a later deletion is recognised as a deletion, not as
+      // "never delivered". Best effort — if migration 005 has not run,
+      // the upsert fails on the unknown column and is swallowed.
+      for (const r of importRows) {
+        const sid = String(r.shift_id ?? "");
+        if (sid && localById.has(sid) && r.seen_locally !== true) {
+          await saveImportMapRow({ ...r, seen_locally: true });
+        }
+      }
+      // A tombstone for an imported shift is proof the user deleted it
+      // on purpose. Flag it durably: the client clears its tombstones
+      // after this sync, so without the flag the next sync would treat
+      // the row as stale and resurrect the shift.
+      for (const r of importRows) {
+        const sid = String(r.shift_id ?? "");
+        if (sid && tombstonedIds.has(sid) && r.deleted_locally !== true) {
+          await saveImportMapRow({ ...r, deleted_locally: true });
+        }
+      }
+      // Explicit client repair ("Re-import missing shifts"): clear
+      // stale rows — paired shifts that are not on the device, not
+      // flagged deleted, and not tombstoned with this sync — so the
+      // events below import fresh. This is the recovery path until
+      // migration 005 runs (after 005, stale rows repair themselves
+      // in the loop below and this button is rarely needed).
+      if (body.repairStaleImport === true) {
+        for (const r of importRows) {
+          const sid = String(r.shift_id ?? "");
+          if (
+            sid && !localById.has(sid) && r.deleted_locally !== true &&
+            !tombstonedIds.has(sid)
+          ) {
+            await deleteImportMapRow(userId, provider, sid);
+            importByEvent.delete(String(r.source_event_id));
+          }
+        }
+      }
       // Dedupe keys: local shifts as sent, plus shifts created from the
       // dedicated calendar earlier in this same sync.
       const seenKeys = new Set(
@@ -842,6 +942,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       for (const ev of sourceEvents) {
         if (!ev.date || ev.cancelled) {
           imported.skipped++;
+          imported.skippedNotShift++;
           continue;
         }
         const parsed = parseWorkShiftTitle(ev.summary ?? "", ev.date);
@@ -850,6 +951,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           // Not a Holzer shift (personal event, holiday, reminder…):
           // skipped and counted, never imported as a junk shift.
           imported.skipped++;
+          imported.skippedNotShift++;
           continue;
         }
         const pay = parsed.pay || ev.pay || "";
@@ -890,10 +992,70 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           continue;
         }
         if (importRow) {
-          // Previously imported, then deleted on this device: never
-          // re-import it (resurrection). The import-map row stays so
-          // the next sync skips it again.
-          imported.skipped++;
+          // Paired before, shift not on this device. Three states,
+          // decided by decideStaleImportRow (see its comment — this
+          // used to be one blanket skip, which is how 231 delivered-
+          // never shifts were lost on Nov 5, 2026).
+          const staleKey = `${ev.date}|${parsed.facility}|${parsed.type}`;
+          const decision = decideStaleImportRow({
+            deletedLocally: importRow.deleted_locally,
+            tombstoned: tombstonedIds.has(String(importRow.shift_id)),
+            keyExistsLocally: seenKeys.has(staleKey),
+            flagsSupported: hasImportFlags,
+          });
+          if (decision === "skip-deleted" || decision === "skip-legacy") {
+            imported.skipped++;
+            imported.skippedDeleted++;
+            continue;
+          }
+          if (decision === "repair-pair") {
+            // The shift is already here under another id: drop the
+            // phantom row and pair the shift that is actually here, so
+            // future source edits update it instead of re-creating it.
+            const dupe = localShifts.find(
+              (s) => `${s.date}|${s.facility}|${s.type}` === staleKey,
+            ) ?? providerChanges
+              .map((c) => (c as { shift?: LocalShift }).shift)
+              .find((s) => s && `${s.date}|${s.facility}|${s.type}` === staleKey);
+            if (dupe) {
+              await deleteImportMapRow(userId, provider, String(importRow.shift_id));
+              await saveImportMapRow({
+                user_id: userId,
+                provider,
+                shift_id: dupe.id,
+                source_calendar_url: sourceCalendarUrl,
+                source_event_id: ev.providerEventId,
+                source_updated_at: ev.updatedAt,
+              });
+            }
+            imported.duplicates++;
+            continue;
+          }
+          // repair-create: the shift was paired but never reached the
+          // device (an earlier sync's response was lost). Re-create it
+          // with the SAME id so the pairing stays valid; the next sync
+          // will see it in localShifts and mark it seen.
+          providerChanges.push({
+            action: "create",
+            shift: {
+              id: String(importRow.shift_id),
+              date: ev.date,
+              facility: parsed.facility,
+              type: parsed.type,
+              pay,
+              note: `Imported from ${imported.sourceCalendarName}`,
+              source: "apple-import",
+              updatedAt: ev.updatedAt,
+            },
+          });
+          counts.created++;
+          imported.created++;
+          imported.repaired++;
+          await saveImportMapRow({
+            ...importRow,
+            source_updated_at: ev.updatedAt,
+          });
+          seenKeys.add(staleKey);
           continue;
         }
         const key = `${ev.date}|${parsed.facility}|${parsed.type}`;

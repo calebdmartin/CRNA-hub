@@ -199,7 +199,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, repaired: data.imported.repaired || 0, at: new Date().toISOString() };
   }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
@@ -219,12 +219,19 @@ async function liveSyncNow(provider, silent) {
   if (typeof cloudSession === 'undefined' || !cloudSession) return;
   liveSyncBusy = provider;
   liveSyncError = '';
+  // One-shot repair flag: set by the "Re-import missing shifts" button
+  // when an earlier sync lost shifts. Cleared as soon as it is sent, so
+  // a normal sync never re-imports a shift the user deleted on purpose.
+  const repairStaleImport = !!liveSyncState.repairImport;
+  liveSyncState.repairImport = false;
+  liveSyncStateSave();
   try {
     const payload = {
       action: 'sync',
       provider,
       localShifts: db.shifts.map((x) => ({ id: x.id, date: x.date, facility: x.facility, type: x.type, pay: x.pay, note: x.note || '', updatedAt: x.updatedAt || null })),
       tombstones: liveSyncState.tombstones.filter((t) => t.provider === provider).map((t) => ({ shiftId: t.shiftId })),
+      repairStaleImport,
     };
     const data = await liveSyncPost('sync-calendar', payload);
     const applied = liveSyncApplyChanges(provider, data);
@@ -238,7 +245,15 @@ async function liveSyncNow(provider, silent) {
         if (data.imported.error) {
           msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the dedicated-calendar sync above still ran; try Sync now again.';
         } else {
-          msg += ' Imported ' + data.imported.created + ' shift(s) from “' + data.imported.sourceCalendarName + '”' + (data.imported.updated ? ', ' + data.imported.updated + ' updated' : '') + (data.imported.duplicates ? ', ' + data.imported.duplicates + ' already here' : '') + (typeof data.imported.seen === 'number' ? ' (' + data.imported.seen + ' event(s) seen, ' + (data.imported.parsed || 0) + ' looked like shifts' + (data.imported.skipped ? ', ' + data.imported.skipped + ' skipped as not shifts' : '') + ')' : (data.imported.skipped ? ' (' + data.imported.skipped + ' event(s) in that calendar were not shifts and were skipped)' : '')) + '.';
+          // Skips are reported by reason, not as one opaque total: not
+          // shifts, shifts the user deleted, and shifts repaired after
+          // an earlier sync lost them (see decideStaleImportRow).
+          const imp = data.imported;
+          const skipBits = [];
+          if (imp.skippedNotShift) skipBits.push(imp.skippedNotShift + ' not shifts');
+          if (imp.skippedDeleted) skipBits.push(imp.skippedDeleted + ' you deleted');
+          if (imp.repaired) skipBits.push(imp.repaired + ' re-imported after a missed sync');
+          msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
         }
       }
       alert(msg);
@@ -375,6 +390,18 @@ async function liveSyncApplePickUse() {
     alert('Could not connect to that calendar: ' + e.message + '. Nothing was stored.');
   }
 }
+// Explicit repair for shifts lost to an earlier undelivered sync:
+// the server clears stale import records (paired shifts that never
+// reached this device) and pulls them in fresh on this sync. Rows
+// flagged as user-deleted are never cleared. Until migration 005 runs
+// this can also bring back an imported shift the user deleted here —
+// delete it again afterwards if it is not wanted.
+async function liveSyncRepairImport() {
+  if (!confirm('Re-import missing shifts from “' + (liveSyncConnections.apple && liveSyncConnections.apple.sourceCalendarName ? liveSyncConnections.apple.sourceCalendarName : 'your work calendar') + '”? Shifts that were paired by an earlier sync but never arrived will be pulled in again. Shifts you deleted on purpose stay deleted.')) return;
+  liveSyncState.repairImport = true;
+  liveSyncStateSave();
+  await liveSyncNow('apple', false);
+}
 // Save the Apple import-source calendar picked in the connected Apple
 // card, then sync immediately so the result ("imported N shifts from …")
 // is visible at once instead of waiting for the next app open. Only the
@@ -444,6 +471,7 @@ function liveSyncAction(action, entry) {
   if (action === 'live-apple-pick-cancel') { liveSyncApplePick = null; return render(); }
   if (action === 'live-apple-calendars') { liveSyncFetchAppleCalendars().then(() => render()); return; }
   if (action === 'live-apple-source-save') return liveSyncAppleSourceSave();
+  if (action === 'live-apple-repair-import') return liveSyncRepairImport();
   if (action === 'live-wizard') { liveSyncWizard = !liveSyncWizard; return render(); }
   if (action === 'live-refresh') {
     liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchAppleCalendars()).then(() => liveSyncFetchLog()).then(() => render());
@@ -491,7 +519,18 @@ function liveSyncProviderCard(provider) {
       card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls its Holzer shifts in (Holzer 8, Holzer 8/2nd call, Holzer 24/1st call, Holzer 10…). Events that are not Holzer shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
-        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (li.skipped ? ', ' + li.skipped + ' skipped' : '') + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
+        const skipBits = [];
+        if (li.skippedNotShift) skipBits.push(li.skippedNotShift + ' not shifts');
+        if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
+        if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
+        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
+        // An import that saw shifts but created none usually means an
+        // earlier sync paired them without ever delivering them. Offer
+        // the explicit repair: clear those stale records and pull the
+        // shifts in fresh on the next sync.
+        if (!li.error && li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0) {
+          card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Use this if shifts you expect are still missing: it clears the stale records from the earlier interrupted sync and pulls them in again. Shifts you deleted on purpose stay deleted.</p>';
+        }
       } else if (current) {
         card += '<p class="muted">Import source: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
       }
@@ -517,6 +556,7 @@ function liveSyncWizardHTML() {
     + '<ol>'
     + '<li><strong>Run migration 003</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-003.sql</code> (tables for connections, sync map, OAuth state, pending deletions, sync log).</li>'
     + '<li><strong>Run migration 004</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-004.sql</code> (Apple import-source calendar choice + import pairing table). Without it, sync still works, but the Apple “Import shifts from” picker cannot save a source.</li>'
+    + '<li><strong>Run migration 005</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-005.sql</code> (delivery flags on the import pairing table, so a shift lost to an interrupted sync is repaired instead of skipped forever as if deleted). Without it, sync still works, but the Apple card offers a manual “Re-import missing shifts” button instead of repairing automatically.</li>'
     + '<li><strong>Deploy the functions:</strong> <code>supabase link --project-ref xgoghgihfhtnyevgapyp</code>, then <code>supabase functions deploy google-auth outlook-auth sync-calendar</code> (or <code>sh supabase/deploy-calendar-sync.sh</code>).</li>'
     + '<li><strong>Set function secrets</strong> (server side only, never in this repo): <code>APP_URL</code> = the URL users open, <code>CALENDAR_ENCRYPTION_KEY</code> = output of <code>openssl rand -hex 32</code>, plus the provider IDs/secrets below.</li>'
     + '<li><strong>Google Cloud (once):</strong> enable the Google Calendar API; create a Web OAuth client; authorized redirect URI (exact): <code>' + escapeHTML(googleUri) + '</code>; scope: <code>https://www.googleapis.com/auth/calendar</code>. Copy the client ID + secret into function secrets as <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>. Add test users if Google requires verification.</li>'

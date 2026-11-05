@@ -335,6 +335,38 @@ export function parseWorkShiftTitle(
   return null;
 }
 
+// Pure decision for an import-map row whose paired shift is NOT on the
+// device. This is the exact spot that silently skipped every shift on
+// Nov 5, 2026: a row created by a sync whose response never arrived
+// (proxy timeout) was indistinguishable from a row left by a user
+// deletion, and both were skipped — and the old client alert then
+// labelled the whole total "skipped as not shifts", even though 231 of
+// them had parsed as Holzer shifts. The three states are now distinct:
+//   skip-deleted  — the user deleted the shift (flagged, or a tombstone
+//                   arrived with this sync). Never re-import.
+//   skip-legacy   — migration 005 has not run, so the flags that would
+//                   tell "never delivered" from "deleted" do not exist.
+//                   Keep the old safe skip; the client repair button is
+//                   the explicit way out until 005 runs.
+//   repair-create — the row was never delivered (never seen on the
+//                   device, not flagged deleted). Re-create the shift
+//                   with the same id so the pairing stays valid.
+//   repair-pair   — same as repair-create, except the shift is already
+//                   on the device under a different id (re-added by the
+//                   user, or created from the dedicated calendar): drop
+//                   the phantom row and pair the shift that is here.
+export function decideStaleImportRow(opts: {
+  deletedLocally?: unknown;
+  tombstoned: boolean;
+  keyExistsLocally: boolean;
+  flagsSupported: boolean;
+}): "skip-deleted" | "skip-legacy" | "repair-create" | "repair-pair" {
+  if (opts.deletedLocally === true || opts.tombstoned) return "skip-deleted";
+  if (!opts.flagsSupported) return "skip-legacy";
+  if (opts.keyExistsLocally) return "repair-pair";
+  return "repair-create";
+}
+
 export function nextDay(iso: string): string {
   const d = new Date(`${iso}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
