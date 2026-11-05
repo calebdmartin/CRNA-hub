@@ -237,6 +237,15 @@ export interface ProviderEvent {
   updatedAt: string | null;
   cancelled: boolean;
   rawUpdatedAt: string | null;
+  // Raw event title as the provider returned it. The dedicated-calendar
+  // parsers above split it into facility/type; the work-calendar import
+  // needs the raw title instead (see parseWorkShiftTitle).
+  summary?: string;
+  // Set by the server when a provider change is an import from a source
+  // calendar (e.g. "apple-import"). The browser stores it as the shift's
+  // source so imported shifts stay visibly distinct from user-entered
+  // ones and from shifts synced from the dedicated calendar.
+  source?: string;
 }
 
 export function shiftTitle(s: LocalShift): string {
@@ -277,6 +286,53 @@ export function parseDescription(desc: string): {
   const note = /^\s*Note:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
   const shiftId = /CRNA Hub shift:\s*([A-Za-z0-9-]+)/.exec(text)?.[1] ?? null;
   return { type, pay, note, shiftId };
+}
+
+// Parse a work-calendar event title (e.g. "Holzer 8", "Holzer 8/2nd call",
+// "Holzer 24/1st call", "Holzer 10") into a CRNA Hub shift. Returns null
+// when the title is not a recognisable Holzer shift — the import caller
+// must skip (and count) those events, never import them as junk shifts.
+//
+// Shift types use the app's canonical names ("8-hour day", "10-hour
+// shift", "12-hour shift", "24-hour call", "Second call"), matching the
+// contract parser in app.js. Pay uses Caleb's confirmed Holzer rules
+// ($250/hr; 8-hour day is paid 8.5h = $2,125; 10-hour is paid 10.5h =
+// $2,625; 2nd call is $2,000 day + $1,000 overnight bonus = $3,000 on a
+// weekday and a flat $2,000 on a weekend; 24/1st call is flat $4,800 on
+// a weekday and $4,200 on a weekend). A 12-hour shift has no confirmed
+// flat rate on file, so its pay is left blank (the app marks it
+// incomplete) rather than guessed. The date decides weekday vs weekend.
+export function parseWorkShiftTitle(
+  title: string,
+  date: string,
+): { facility: string; type: string; pay: string } | null {
+  const t = String(title || "").trim().toLowerCase();
+  if (!/\bholzer\b/.test(t)) return null;
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T12:00:00Z`).getUTCDay()
+    : -1;
+  const weekend = day === 0 || day === 6;
+  // 2nd call first: "Holzer 8/2nd call" and "Holzer 2nd call" both contain
+  // an 8/24 pattern that must not win over the call part.
+  if (/\b2nd\s*call\b|\bsecond\s*call\b/.test(t)) {
+    return { facility: "Holzer", type: "Second call", pay: weekend ? "2000" : "3000" };
+  }
+  // The hour number must sit next to "Holzer" (or carry an hour suffix):
+  // a bare number elsewhere in the title (e.g. a date in "Holzer 8 Nov
+  // 24") must never reclassify the shift.
+  if (/holzer\s+24\b|\b24\s*-?\s*hour\b|\b24h\b|\b24\s*\/\s*1st\b|holzer\s+1st\b|\b1st\s*call\b|\bfirst\s*call\b/.test(t)) {
+    return { facility: "Holzer", type: "24-hour call", pay: weekend ? "4200" : "4800" };
+  }
+  if (/holzer\s+12\b|\b12\s*-?\s*hour\b|\b12h\b/.test(t)) {
+    return { facility: "Holzer", type: "12-hour shift", pay: "" };
+  }
+  if (/holzer\s+10\b|\b10\s*-?\s*hour\b|\b10h\b/.test(t)) {
+    return { facility: "Holzer", type: "10-hour shift", pay: "2625" };
+  }
+  if (/holzer\s+8\b|\b8\s*-?\s*hour\b|\b8h\b/.test(t)) {
+    return { facility: "Holzer", type: "8-hour day", pay: "2125" };
+  }
+  return null;
 }
 
 export function nextDay(iso: string): string {
