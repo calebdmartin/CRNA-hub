@@ -562,7 +562,7 @@ function facilityContractPreviewHTML(){
   const p=facilityContractPreview;
   let out=(p.isPhoto?ocrDiagnosticsHTML(facilityContractOcrPages,facilityContractPendingImages,p.ocrText||''):'' )+`<p><strong>Read from:</strong> ${escapeHTML(p.fileName||'pasted text')} · <strong>Method:</strong> ${p.isPhoto?'OCR on your device (Tesseract.js) + deterministic parsing — no picture was sent to a server, and no AI model read this document. Every field below is flagged “from photo — check carefully” because OCR can misread digits and dates.':'deterministic text parsing — no AI model read this document.'}</p><p><strong>Nothing is saved yet.</strong> Correct anything wrong below, uncheck any facility you do not want, then save. Fields the contract did not state are left blank — blank means “not taken here / not applicable”, never $0.</p>`;
   p.facilities.forEach((f,i)=>{
-    const rateInputs=FACILITY_RATE_KEYS.map(k=>`<div class="field"><label for="f_facPrev_${i}_${k}">${FACILITY_RATE_LABELS[k]} ($)</label><input id="f_facPrev_${i}_${k}" class="facContractEdit" data-i="${i}" data-field="${k}" type="number" min="0" step="0.01" value="${escapeHTML(f.rates&&f.rates[k]!=null?f.rates[k]:'')}" placeholder="Not stated in contract"></div>`).join('');
+    const rateInputs=FACILITY_RATE_KEYS.map(k=>{const un=(f.unreadable||[]).includes(k);return `<div class="field"><label for="f_facPrev_${i}_${k}">${FACILITY_RATE_LABELS[k]} ($)</label><input id="f_facPrev_${i}_${k}" class="facContractEdit" data-i="${i}" data-field="${k}" type="number" min="0" step="0.01" value="${escapeHTML(f.rates&&f.rates[k]!=null?f.rates[k]:'')}" placeholder="${un?'Not readable from photo — re-take or type':'Not stated in contract'}"></div>`}).join('');
     out+=`<div class="item" style="display:block"><label><input type="checkbox" class="facContractInclude" data-i="${i}" ${f.include?'checked':''}> Save this facility</label>
     <div class="form-grid">
     <div class="field"><label for="f_facPrev_${i}_name">Facility name</label><input id="f_facPrev_${i}_name" class="facContractEdit" data-i="${i}" data-field="name" type="text" value="${escapeHTML(f.name||'')}" placeholder="Not found — type the facility name"></div>
@@ -570,7 +570,8 @@ function facilityContractPreviewHTML(){
     <div class="field"><label for="f_facPrev_${i}_address">Address</label><input id="f_facPrev_${i}_address" class="facContractEdit" data-i="${i}" data-field="address" type="text" value="${escapeHTML(f.address||'')}" placeholder="Not stated in contract"></div>
     ${rateInputs}
     </div>
-    <p class="muted">Found: ${f.found.length?escapeHTML(f.found.join(', ')):'nothing recognised'}.${f.missing.length?(' Not found in the contract — fill in by hand if you know it: '+escapeHTML(f.missing.join(', '))+'.'):''}${f.effectiveStart?(' Contract dates: '+fmt(f.effectiveStart)+' to '+fmt(f.effectiveEnd||f.effectiveStart)+'.'):''}${p.shiftCount?(' This document also lists '+p.shiftCount+' shift(s) — shifts are not created here; use Import & Backup to import them from the same contract.'):''}</p></div>`;
+    ${unreadableRatesWarningHTML(f.unreadable||[])}
+    <p class="muted">Found: ${f.found.length?escapeHTML(f.found.join(', ')):'nothing recognised'}.${(f.unreadable||[]).length?(' Not readable from the photos (see above): '+escapeHTML((f.unreadable||[]).map(k=>FACILITY_RATE_LABELS[k]||k).join(', '))+'.'):''}${(()=>{const unL=(f.unreadable||[]).map(k=>FACILITY_RATE_LABELS[k]||k);const rest=f.missing.filter(m=>!unL.includes(m));return rest.length?(' Not stated in the contract — fill in by hand if it applies: '+escapeHTML(rest.join(', '))+'.'):''})()}${f.effectiveStart?(' Contract dates: '+fmt(f.effectiveStart)+' to '+fmt(f.effectiveEnd||f.effectiveStart)+'.'):''}${p.shiftCount?(' This document also lists '+p.shiftCount+' shift(s) — shifts are not created here; use Import & Backup to import them from the same contract.'):''}</p></div>`;
   });
   out+=`<div class="toolbar" style="margin-top:12px"><button data-action="facility-contract-approve">Save facilities — I checked this</button><button type="button" class="secondary" data-action="facility-contract-discard">Discard preview (save nothing)</button></div>`;
   return out;
@@ -1332,7 +1333,7 @@ function contractFacilityForLine(line,globalFacility){const l=line;
  if(gen)return {name:gen[1].trim(),fromSaved:false};
  if(globalFacility)return {name:globalFacility,fromHeader:true};
  return {name:'',fromSaved:false}}
-function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}/g,seg=>seg.replace(/O/g,'0').replace(/[lI](?=[0-9])/g,'1'));const rates={};let m;
+function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+: [^\n]* ---/g,' ').replace(/\$[^\n]{0,14}/g,seg=>seg.replace(/O/g,'0').replace(/[lI](?=[0-9])/g,'1'));const rates={};let m;
  const textNoWeekend=String(text).split(/\r?\n/).filter(l=>!/weekend|saturday|sunday/i.test(l)).join('\n');
  const flatBase=text;
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)\s*(?:\/\s*hr|per hour|an hour|\/hour|hourly)/i)))rates.hourly=Number(m[1].replace(/,/g,''));
@@ -1413,59 +1414,133 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  // included", "First two hours of call back included") — recorded, not priced.
  {const wk=flatText.match(/(?:2nd|21d|20d) call weeknight[\s\S]{0,200}?(\d+)(?:st|nd|rd|th)?\s*hours? of call back included/i);if(wk)rates.includedCallBackHoursWeeknight=Number(wk[1]);
   const we=flatText.match(/(?:2nd|21d|20d) call weekend[\s\S]{0,200}?(?:first two hours|(\d+)(?:st|nd|rd|th)?\s*hours?) of call back included/i);if(we)rates.includedCallBackHoursWeekend=we[1]?Number(we[1]):2;}
- // TABLE PAIRING (real-OCR fallback — Page 1 OCR was clean, the Page 2
- // rates table was not parsed): Tesseract reads a two-column table in
- // COLUMN order — all the labels first, then all the amounts — so a label
- // can be hundreds of characters from its amount and the same-line /
- // 220-char patterns above miss every rate. Pairing by ORDER fixes it:
- // rate labels in document order <-> money amounts in document order.
- // This runs last and only accepts a STRONG pairing (at least 2 labels
- // and at least as many amounts in the rates region as labels), so it
- // never invents a rate from a stray amount; it overrides earlier
- // generic matches only in that strong case, because a generic pattern
- // can join a date row ("1/4/2027 2nd Call") to the next row's amount.
- // OCR-tolerant label spellings: Ist/lst for 1st, 2na for 2nd, S for $,
- // O for 0 inside amounts. Amounts without a $ sign still count when
- // they are a comma-thousands amount with .00 (a date never looks like
- // "2,000.00"). Blank stays blank when the pairing is not strong.
+ // TABLE PAIRING, per-label nearest-amount (real-OCR fallback).
+ // Why the old order-pairing failed on Caleb's actual photos (Nov 5, 2026):
+ // it paired labels<->amounts by position and overwrote earlier matches,
+ // but on his photos only TWO rate labels survived OCR at all — the 2nd-call
+ // weeknight and weekend rows. The Regular Daily Rate ($2,000), Premium
+ // Hourly Rate ($250) and 1st-call ($175) rows are MISSING from the OCR
+ // text entirely (Page 2 OCR jumps from the dates straight to a "back
+ // time for STAT C-Sections" fragment): Tesseract skipped those table
+ // rows, it did not misread them, so no pairing can recover them — they
+ // are flagged UNREADABLE downstream (see detectUnreadableContractRates),
+ // never guessed. What pairing CAN do is pair the labels that ARE present
+ // robustly, whether the amount is inline mid-sentence ("1 hour of
+ // $1,000.00", "in call $2,000.00 pay"), in the right column hundreds of
+ // characters after the label block, or before the label (amounts-first).
+ // Order matters: BLOCK layouts are detected FIRST (all amounts in a
+ // block before the first label, or all amounts in a block after the
+ // last label) and paired by order — a per-label "nearest amount"
+ // matcher would steal the wrong amount in those layouts, because the
+ // nearest amount before a label in an amounts-first block belongs to
+ // a different label. Per-label nearest runs only for the remaining
+ // keys, and only for INLINE amounts (after the label, or immediately
+ // before it). One amount is never claimed twice; a date row's "1st
+ // Call" cannot borrow a later label (needWithin checks); footer phone
+ // numbers and bare dates never count as amounts (only $/S amounts,
+ // plus comma-thousands .00 amounts in true column-major mode).
  try{
-  const labelSpecs=[
-   {key:'rate8',rx:/regular\s+daily\s+rate/i},
-   {key:'hourly',rx:/premium\s+hourly\s+rate/i},
-   {key:'hourlyCall1st',rx:/(?:1st|ist|lst|first)\s+call\b/i,need:/hourly/i,needWithin:35},
-   {key:'rateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weeknight|mon[- ]?friday/i,needWithin:45},
-   {key:'weekendRateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weekend|saturday|sunday/i,needWithin:45},
-   {key:'rate10',rx:/10\s*-?\s*hour\s+shift\s+rate/i},
-   {key:'rate12',rx:/12\s*-?\s*hour\s+shift\s+rate/i},
-   {key:'rate24',rx:/24\s*-?\s*hour\s+call\s+rate/i},
-   {key:'callBonus',rx:/(?:overnight\s+call\s+bonus|call\s+bonus|call\s+stipend|stipend)/i}];
-  const labels=[];
-  for(const spec of labelSpecs){
-   const rx=new RegExp(spec.rx.source,spec.rx.flags.includes('g')?spec.rx.flags:spec.rx.flags+'g');
-   let h; while((h=rx.exec(flatText))!==null){
-    if(spec.need){const after=flatText.slice(h.index,h.index+spec.needWithin); if(!spec.need.test(after)) continue;}
-    if(!labels.some(l=>l.key===spec.key)) labels.push({key:spec.key,index:h.index});
-    break;
-   }
-  }
-  labels.sort((a,b)=>a.index-b.index);
-  const cleanAmt=raw=>{const d=String(raw).replace(/[Oo]/g,'0').replace(/[lI]/g,'1').replace(/[^0-9.]/g,''); const v=Number(d); return Number.isFinite(v)?v:null;};
+  const normAmt=raw=>{const d=String(raw).replace(/[Oo]/g,'0').replace(/[lI]/g,'1').replace(/[^0-9.]/g,'');const v=Number(d);return Number.isFinite(v)&&v>0?v:null};
   const amounts=[];
   const amtRx=/(?:\$|S)\s*([0-9][0-9,\s]*\.[0-9]{2})/g; let am;
-  while((am=amtRx.exec(flatText))!==null){const v=cleanAmt(am[1]); if(v!=null) amounts.push({index:am.index,value:v});}
-  const bareRx=/(\d{1,3}(?:,\d{3})+\.\d{2})/g; let bm;
-  while((bm=bareRx.exec(flatText))!==null){if(amounts.some(a=>Math.abs(a.index-bm.index)<3)) continue; const v=cleanAmt(bm[1]); if(v!=null) amounts.push({index:bm.index,value:v});}
+  while((am=amtRx.exec(flatText))!==null){const v=normAmt(am[1]);if(v!=null)amounts.push({index:am.index,value:v});}
   amounts.sort((a,b)=>a.index-b.index);
-  if(labels.length>=2){
-   const firstLabel=labels[0].index;
-   let pool=amounts.filter(a=>a.index>firstLabel);
-   if(pool.length<labels.length){const before=amounts.filter(a=>a.index<=firstLabel); if(before.length>=labels.length) pool=before;}
-   if(pool.length>=labels.length){
-    for(let i=0;i<labels.length;i++){rates[labels[i].key]=pool[i].value;}
+  const claimed=new Set();
+  const labelSpecs=[
+   {key:'rate8',rx:/regular\s+daily\s+rate/i,after:600,before:80},
+   {key:'hourly',rx:/premium\s+hourly\s+rate/i,after:600,before:80},
+   {key:'hourlyCall1st',rx:/(?:1st|ist|lst|first)\s+call\b/i,need:/hourly/i,needWithin:35,after:600,before:80},
+   {key:'rateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weeknight|mon[- ]?friday/i,needWithin:60,after:400,before:80},
+   {key:'weekendRateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weekend|saturday|sunday/i,needWithin:60,after:400,before:80},
+   {key:'rate24',rx:/24\s*-?\s*hour\s+call\s+rate/i,after:400,before:80},
+   {key:'callBonus',rx:/(?:overnight\s+call\s+bonus|call\s+bonus|call\s+stipend|stipend)/i,after:400,before:80}];
+  const findLabelOccurrences=spec=>{
+   const rx=new RegExp(spec.rx.source,spec.rx.flags.includes('g')?spec.rx.flags:spec.rx.flags+'g');
+   const out=[]; let h;
+   while((h=rx.exec(flatText))!==null){
+    if(spec.need){const after=flatText.slice(h.index,h.index+spec.needWithin);if(!spec.need.test(after))continue}
+    out.push({key:spec.key,index:h.index});break}
+   return out};
+  // (1) BLOCK layouts, paired by order. This runs FIRST and OVERRIDES
+  // the qualified fill() results above: in a block layout those fills
+  // grab the WRONG amount (e.g. in an amounts-first block, the $ amount
+  // 220 chars before "Premium Hourly Rate" is the Daily Rate's $2,000,
+  // not the $250 premium rate). A block is only trusted when a whole
+  // block of amounts sits before the first label or after the last one
+  // with no label interleaved — inline layouts never look like that,
+  // so their (correct) fill() results are never overridden here.
+  const allLabels=[];
+  for(const spec of labelSpecs)allLabels.push(...findLabelOccurrences(spec));
+  allLabels.sort((a,b)=>a.index-b.index);
+  if(allLabels.length>=2){
+   const firstLabel=allLabels[0].index,lastLabel=allLabels[allLabels.length-1].index;
+   const beforeBlock=amounts.filter(a=>a.index<firstLabel);
+   const afterBlock=amounts.filter(a=>a.index>lastLabel+400);
+   let blockPool=null;
+   if(beforeBlock.length>=allLabels.length)blockPool=beforeBlock;
+   else if(afterBlock.length>=allLabels.length){
+    blockPool=afterBlock;
+    if(blockPool.length<allLabels.length){
+     const bareRx=/(\d{1,3}(?:,\d{3})+\.\d{2})/g; let bm;
+     while((bm=bareRx.exec(flatText))!==null){if(amounts.some(a=>Math.abs(a.index-bm.index)<3))continue;const v=normAmt(bm[1]);if(v!=null&&bm.index>lastLabel+400)blockPool.push({index:bm.index,value:v})}
+     blockPool.sort((a,b)=>a.index-b.index);
+    }
    }
+   if(blockPool&&blockPool.length>=allLabels.length){
+    for(let i=0;i<allLabels.length;i++){rates[allLabels[i].key]=blockPool[i].value;claimed.add(blockPool[i].index)}
+   }
+  }
+  // Amounts already found by the qualified fill() patterns are claimed
+  // next, so the per-label matcher below never re-assigns them.
+  const foundVals=Object.values(rates).filter(v=>typeof v==='number');
+  for(const v of foundVals){const a=amounts.find(x=>x.value===v&&!claimed.has(x.index));if(a)claimed.add(a.index)}
+  // (2) Per-label nearest INLINE amount, for whatever is still missing.
+  const claimNearest=(labelIdx,afterMax,beforeMax)=>{
+   let best=null,bestDist=Infinity;
+   for(const a of amounts){if(claimed.has(a.index))continue;
+    const d=a.index-labelIdx;
+    if(d>=0&&d<=afterMax&&d<bestDist){best=a;bestDist=d}
+    else if(d<0&&-d<=beforeMax&&-d<bestDist){best=a;bestDist=-d}}
+   if(best){claimed.add(best.index);return best.value}return null};
+  for(const spec of labelSpecs){
+   if(rates[spec.key]!=null)continue;
+   const occ=findLabelOccurrences(spec);
+   for(const o of occ){const v=claimNearest(o.index,spec.after,spec.before);if(v!=null){rates[spec.key]=v;break}}
   }
  }catch(e){/* table pairing is a fallback only — never break parsing */}
  return rates}
+// --- Rates a photo did NOT read vs rates the contract did NOT state ---
+// On Caleb's actual photos (Nov 5, 2026) the Regular Daily Rate ($2,000),
+// Premium Hourly Rate ($250) and 1st-call ($175) rows are MISSING from the
+// OCR text entirely: Page 2 OCR jumps from the assignment dates straight
+// to a "back time for STAT C-Sections" fragment. Tesseract skipped those
+// table rows — it did not misread them — so no parser can recover them and
+// they must NEVER be guessed. But leaving them as plain "Not stated in
+// contract" is wrong too: the contract DOES state them, the photo just did
+// not read them. This detector runs only on photo OCR text, and only when
+// there is positive evidence the rates table was partially read — a
+// 2nd-call row with its amount, a "call back included" fragment, or a
+// "back time for STAT C-Sections" fragment (the tail of the 1st-call row).
+// Then a missing Daily / Premium / 1st-call / weekend-2nd rate is
+// UNREADABLE, not "not stated". A memo, a CAMC contract with no call
+// rows, or pasted text returns nothing here: missing there really does
+// mean not stated. Keys are facility-rate keys (hourlyRate, rate8, ...).
+function detectUnreadableContractRates(text,rates){
+ const t=String(text||'');
+ const hasSecond=rates&&(rates.rateSecond!=null||rates.weekendRateSecond!=null);
+ const hasCallFragment=/back\s+time\s+for\s+STAT/i.test(t)||/call\s+back\s+included/i.test(t)||/premium\s+pay\s+accrues/i.test(t);
+ const hasSecondLabel=/(?:2nd|21d|20d|2na|second)\s+call/i.test(t);
+ if(!hasSecond&&!hasCallFragment&&!hasSecondLabel)return [];
+ const out=[];
+ if(rates.rate8==null)out.push('rate8');
+ if(rates.hourly==null)out.push('hourlyRate');
+ if(rates.hourlyCall1st==null)out.push('hourlyCall1st');
+ if(rates.rateSecond!=null&&rates.weekendRateSecond==null&&/weekend|saturday|sunday/i.test(t))out.push('weekendRateSecond');
+ return out}
+function unreadableRatesWarningHTML(keys){
+ if(!keys||!keys.length)return '';
+ const names=keys.map(k=>FACILITY_RATE_LABELS[k]||k);
+ return '<p class="hint"><strong>Not readable from these photos — not the same as “not stated”.</strong> The app could not read: '+escapeHTML(names.join(', '))+'. These rates are in the rates table at the bottom of page 2 of this contract, but the photo read skipped those rows — the table may have been cut off at a page edge, or read as a picture rather than text. <strong>Re-photograph that section closer</strong> (fill the frame with just the rates table, flat, well-lit), then upload the new photo, or type the values in the fields below. Nothing was guessed.</p>'}
 function firstCallPay(hourlyCall1st,premiumHourly,weekend){if(hourlyCall1st==null)return null;if(weekend)return {pay:Math.round(hourlyCall1st*24*100)/100,source:'1st call hourly rate stated in document ($'+hourlyCall1st+'/hr x 24 hours, weekend)'};if(premiumHourly!=null)return {pay:Math.round((premiumHourly*8+hourlyCall1st*16)*100)/100,source:'1st call rate stated in document (weekday: 8h x $'+premiumHourly+'/hr + 16h x $'+hourlyCall1st+'/hr)'};return {pay:Math.round(hourlyCall1st*24*100)/100,source:'1st call hourly rate stated in document ($'+hourlyCall1st+'/hr x 24 hours)'}}
 function contractResolvePay(row,rates,facilityObj,savedContract){const weekend=row.date?([0,6].includes(new Date(row.date+'T12:00:00').getDay())):false;
  const flatKey=row.type==='24-hour call'?(weekend&&rates.weekendRate24?['weekendRate24','weekend flat rate stated in document']:['rate24','flat rate stated in document'])
@@ -1482,7 +1557,7 @@ function contractResolvePay(row,rates,facilityObj,savedContract){const weekend=r
  if(savedContract&&savedContract.rates){const r=savedContract.rates;if(row.type==='24-hour call'){const fc=firstCallPay(r.hourlyCall1st,r.hourly,weekend);if(fc)return {pay:String(fc.pay),source:fc.source+' — from a saved contract',flags:['rate reused from a saved contract — not stated in this document']}}const spay=row.type==='24-hour call'?r.rate24:row.type==='Second call'?r.rateSecond:row.type==='8-hour day'?r.rate8:row.type==='10-hour shift'?r.rate10:row.type==='12-hour shift'?r.rate12:null;
    if(spay!=null)return {pay:String(spay),source:'saved contract rate (not stated in this document)',flags:['rate reused from a saved contract — not stated in this document']}}
  return {pay:'',source:'',flags:['unknown rate — pay not yet priced (incomplete, not $0)']}}
-function parseContractText(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,'');const years=(clean.match(/\b(19|20)\d{2}\b/g)||[]);let defaultYear=new Date().getFullYear();{const counts={};let best=null,bestN=0;for(const y of years){counts[y]=(counts[y]||0)+1;if(counts[y]>bestN){bestN=counts[y];best=y}}if(best!=null)defaultYear=+best}
+function parseContractText(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,'').replace(/--- Page \d+: [^\n]* ---/g,' ');const years=(clean.match(/\b(19|20)\d{2}\b/g)||[]);let defaultYear=new Date().getFullYear();{const counts={};let best=null,bestN=0;for(const y of years){counts[y]=(counts[y]||0)+1;if(counts[y]>bestN){bestN=counts[y];best=y}}if(best!=null)defaultYear=+best}
  const rates=contractExtractRates(clean);
  let globalFacility='';const lab=clean.match(/(?:facility|hospital|location|site)\s*:\s*([A-Za-z][^,\n;:]{2,60})/i);if(lab)globalFacility=lab[1].trim();
  if(!globalFacility){const known=(db.facilities||[]).find(f=>clean.toLowerCase().includes(f.name.toLowerCase()));if(known)globalFacility=known.name}
@@ -1541,7 +1616,7 @@ function contractExtractAddress(text,facilityName){
   return '';
 }
 function parseFacilityContract(text,fileName){
-  const clean=String(text||'').replace(/^\uFEFF/,'');
+  const clean=String(text||'').replace(/^\uFEFF/,'').replace(/--- Page \d+: [^\n]* ---/g,' ');
   const rates=contractExtractRates(clean);
   let parsed=null;try{parsed=parseContractText(clean,fileName)}catch(e){parsed={contract:{facility:'',effectiveStart:'',effectiveEnd:'',rates},rows:[]}}
   const names=[];
@@ -1558,7 +1633,7 @@ function parseFacilityContract(text,fileName){
   const rateFields={};
   const map={hourly:'hourlyRate',paidHours8:'paidHours8',rate8:'rate8',rate10:'rate10',rate12:'rate12',rate24:'rate24',hourlyCall1st:'hourlyCall1st',rateSecond:'rateSecond',callBonus:'callBonus',weekendRate24:'weekendRate24',weekendRateSecond:'weekendRateSecond'};
   for(const [k,v] of Object.entries(rates))if(map[k]&&rateOrNull(v)!=null)rateFields[map[k]]=String(rateOrNull(v));
-  if(rates.includedCallBackHoursWeeknight!=null||rates.includedCallBackHoursWeekend!=null){const bits=[];if(rates.includedCallBackHoursWeeknight!=null)bits.push('(?:2nd|21d|20d) call weeknight: first '+rates.includedCallBackHoursWeeknight+' hour(s) of call back included in call pay');if(rates.includedCallBackHoursWeekend!=null)bits.push('(?:2nd|21d|20d) call weekend: first '+rates.includedCallBackHoursWeekend+' hour(s) of call back included in call pay');rateFields._includedNote=bits.join('; ')}
+  if(rates.includedCallBackHoursWeeknight!=null||rates.includedCallBackHoursWeekend!=null){const bits=[];if(rates.includedCallBackHoursWeeknight!=null)bits.push('2nd call weeknight: first '+rates.includedCallBackHoursWeeknight+' hour(s) of call back included in call pay');if(rates.includedCallBackHoursWeekend!=null)bits.push('2nd call weekend: first '+rates.includedCallBackHoursWeekend+' hour(s) of call back included in call pay');rateFields._includedNote=bits.join('; ')}
   const found=[],missing=[];
   for(const k of FACILITY_RATE_KEYS){if(rateFields[k]!=null)found.push(FACILITY_RATE_LABELS[k]+' '+currency(Number(rateFields[k])));else missing.push(FACILITY_RATE_LABELS[k])}
   if(rateFields._includedNote)found.push(rateFields._includedNote);
@@ -1586,7 +1661,7 @@ function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,
  return {contract,rows}}
 function contractPreviewHTML(){if(!contractPreview)return '<p class="muted">No contract parsed yet. Choose a file or paste text above, then click “Parse contract” — nothing is saved until you approve the preview below.</p>';
  const c=contractPreview.contract,rows=contractPreview.rows,need=rows.filter(r=>r.flags.length).length,clean=rows.length-need;
- return (contractPreview.isPhoto?ocrDiagnosticsHTML(contractOcrPages,contractPendingImages,contractPreview.ocrText||''):'')+`<p><strong>Parsed from:</strong> ${escapeHTML(contractPreview.fileName||'pasted text')} · <strong>Method:</strong> ${contractPreview.isPhoto?'OCR on your device (Tesseract.js) + deterministic parsing — no picture was sent to a server, and no AI model read this document. Every row below is flagged “from photo — check carefully” because OCR can misread digits and dates.':'deterministic text parsing — no AI model read this document.'}</p>
+ return (contractPreview.isPhoto?ocrDiagnosticsHTML(contractOcrPages,contractPendingImages,contractPreview.ocrText||''):'')+unreadableRatesWarningHTML(contractPreview.unreadableRates||[])+`<p><strong>Parsed from:</strong> ${escapeHTML(contractPreview.fileName||'pasted text')} · <strong>Method:</strong> ${contractPreview.isPhoto?'OCR on your device (Tesseract.js) + deterministic parsing — no picture was sent to a server, and no AI model read this document. Every row below is flagged “from photo — check carefully” because OCR can misread digits and dates.':'deterministic text parsing — no AI model read this document.'}</p>
  <p class="muted">Contract on file will be: ${escapeHTML(c.facility||'(facility to confirm)')} · ${c.effectiveStart?fmt(c.effectiveStart):'—'} to ${c.effectiveEnd?fmt(c.effectiveEnd):'—'} · Rates found: ${Object.keys(c.rates||{}).length?Object.entries(c.rates).map(([k,v])=>`${k} ${currency(v)}`).join(', '):'none stated in the document'}</p>
  <p>${rows.length} shift(s) in preview · ${clean} clean · ${need} need review. <strong>Nothing has been saved yet.</strong> Edit a row, uncheck rows you do not want, then click Approve. Rows with a missing date or facility cannot be approved until fixed or unchecked.</p>
  <div style="overflow-x:auto"><table class="contract-table"><thead><tr><th>Include</th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ($)</th><th>Flags / pricing source</th></tr></thead><tbody>
@@ -1620,7 +1695,44 @@ async function getContractImages(contractId){const dbx=await contractImageDb();c
 async function getContractImage(contractId){const dbx=await contractImageDb();return new Promise((res,rej)=>{const req=dbx.transaction('files','readonly').objectStore('files').get(contractId);req.onsuccess=()=>res(req.result||null);req.onerror=()=>rej(req.error)})}
 async function viewContractImage(contractId,page){try{const recs=await getContractImages(contractId);if(!recs.length){alert('No picture is stored on this device for this contract.');return}const rec=page!=null?(recs.find(r=>(r.page??0)===page)||recs[page]||null):recs[0];if(!rec||!rec.blob){alert('No picture is stored on this device for this contract.');return}const url=URL.createObjectURL(rec.blob);window.open(url,'_blank');setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(err){alert('Could not open the stored picture: '+err.message)}}
 async function loadTesseract(){if(window.Tesseract)return window.Tesseract;await new Promise((res,rej)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';sc.onload=res;sc.onerror=()=>rej(new Error('OCR library (Tesseract.js CDN) failed to load — check your connection and try again, or paste the contract text instead.'));document.head.appendChild(sc)});if(!window.Tesseract)throw new Error('OCR library failed to initialise.');return window.Tesseract}
-async function ocrImageFile(file,onProgress){const T=await loadTesseract();const out=await T.recognize(file,'eng',{logger:m=>{if(onProgress)onProgress(m)}});return (out&&out.data&&out.data.text)||''}
+async function ocrImageFile(file,onProgress,opts){const T=await loadTesseract();const params={logger:m=>{if(onProgress)onProgress(m)}};if(opts&&opts.psm)params.tessedit_pageseg_mode=String(opts.psm);try{const out=await T.recognize(file,'eng',params);return (out&&out.data&&out.data.text)||''}catch(e){if(opts&&opts.psm){const out=await T.recognize(file,'eng',{logger:m=>{if(onProgress)onProgress(m)}});return (out&&out.data&&out.data.text)||''}throw e}}
+// Score OCR text for how much of a rates table it contains: distinct rate
+// labels found, $ amounts found, characters read. Used to pick the best
+// of several OCR passes over the same photo.
+function ocrScoreText(text){const t=String(text||'');const labels=[/regular\s+daily\s+rate/i,/premium\s+hourly\s+rate/i,/(?:1st|ist|lst|first)\s+call/i,/(?:2nd|21d|20d|2na|second)\s+call/i,/call\s+weeknight|weeknight/i,/call\s+weekend|weekend/i];let n=0;for(const rx of labels)if(rx.test(t))n++;const amounts=(t.match(/\$\s*[\d,]+\.\d{2}/g)||[]).length;return {labels:n,amounts,chars:t.trim().length}}
+// Upscale + contrast-boost a photo on a canvas before OCR. Returns a Blob
+// or null if the browser cannot do it — never throws.
+async function preprocessImageForOcr(file){try{if(typeof createImageBitmap!=='function'||typeof document==='undefined')return null;const bmp=await createImageBitmap(file);const scale=Math.max(1.5,Math.min(2.5,2400/Math.max(bmp.width||1,bmp.height||1)));const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*scale);cv.height=Math.round(bmp.height*scale);const ctx=cv.getContext('2d');if(!ctx)return null;try{ctx.filter='grayscale(1) contrast(1.5) brightness(1.05)'}catch(e){}ctx.drawImage(bmp,0,0,cv.width,cv.height);if(bmp.close)bmp.close();return await new Promise(res=>{try{cv.toBlob(b=>res(b),'image/png')}catch(e){res(null)}})}catch(e){return null}}
+// Multi-pass OCR for contract photos. The default Tesseract pass (PSM 3,
+// automatic page segmentation) SKIPPED the rates-table rows on Caleb's
+// photos entirely — Page 2 OCR jumps from the dates to a "back time for
+// STAT C-Sections" fragment, so the Daily / Premium / 1st-call rows were
+// never in the text for the parser to find. A different segmentation
+// mode (PSM 6: assume a uniform block of text) and a contrast-boosted
+// image can read table rows the default pass drops. So: run the default
+// pass; if it already found at least 3 rate labels, accept it (fast path
+// — most photos). Otherwise re-read with PSM 6, then with a preprocessed
+// image + PSM 6, and keep the pass that found the most rate labels
+// (then most $ amounts, then most characters). Every pass is on-device;
+// a failed pass is skipped, never fatal. Returns {text, pass} where
+// pass is 'default', 'psm6' or 'preprocessed-psm6'.
+async function ocrBestPassForFile(file,onProgress){
+ const passes=[{name:'default'},{name:'psm6',psm:'6'},{name:'preprocessed-psm6',preprocess:true,psm:'6'}];
+ let best=null;
+ for(const pass of passes){
+  if(best&&best.score.labels>=3)break;
+  try{
+   if(pass.name!=='default'&&onProgress)onProgress({status:'re-reading with a different layout ('+pass.name+') — trying to read table rows the first pass skipped',progress:null});
+   let src=file;
+   if(pass.preprocess){const pre=await preprocessImageForOcr(file);if(!pre)continue;src=pre}
+   const t=await ocrImageFile(src,onProgress,pass.psm?{psm:pass.psm}:null);
+   const sc=ocrScoreText(t);
+   const cand={text:t,pass:pass.name,score:sc};
+   if(!best||sc.labels>best.score.labels||(sc.labels===best.score.labels&&(sc.amounts>best.score.amounts||(sc.amounts===best.score.amounts&&sc.chars>best.score.chars))))best=cand;
+  }catch(e){continue}
+ }
+ if(!best)throw new Error('OCR could not read this picture.');
+ return best}
 // --- Multi-page contract pictures ---
 // A contract photographed page by page: every picture input accepts several
 // files. Pages are OCR'd on-device one by one, in the order selected, and
@@ -1634,10 +1746,10 @@ function isImageFile(f){if(!f)return false;const n=String(f.name||'').toLowerCas
 function orderedOcrPages(pages,files){return (files||[]).map(f=>pages.find(p=>p.file===f)).filter(Boolean)}
 function combinedOcrText(pages,files){const ordered=files?orderedOcrPages(pages,files):pages;return ordered.map((p,i)=>'--- Page '+(i+1)+': '+p.name+' ---\n'+(p.text||'')).join('\n\n')}
 function ocrPageStatus(pg){if(pg&&pg.status)return pg.status;const t=String((pg&&pg.text)||'');return t.trim().length?'ok':'empty'}
-function ocrDiagnosticsHTML(pages,files,text){const ordered=files?orderedOcrPages(pages,files):(pages||[]);if(!ordered.length)return '';const total=String(text||'').replace(/--- Page \d+: [^\n]* ---/g,'').trim().length;let out='<div class="item"><strong>What the app read from your photos</strong><ul>';ordered.forEach((pg,i)=>{const st=ocrPageStatus(pg);const chars=String(pg.text||'').trim().length;out+='<li>Page '+(i+1)+' ('+escapeHTML(pg.name||'photo')+'): '+(st==='ok'?chars+' characters read':st==='failed'?('could not be read'+(pg.error?(' — '+escapeHTML(pg.error)):'')):'0 characters — no readable text, try a clearer, well-lit photo of this page, or re-take it')+'</li>'});out+='</ul>';if(total<200)out+='<p class="hint">Very little text was read from these photos ('+total+' characters). Rates in a table or faint print often need a clearer, closer, well-lit photo with the page flat and upright. Nothing was invented — fields the app could not read are left blank for you to fill in.</p>';out+='<details><summary>View the text the app read</summary><pre style="white-space:pre-wrap">'+escapeHTML(String(text||'(no text read)'))+'</pre></details></div>';return out}
+function ocrDiagnosticsHTML(pages,files,text){const ordered=files?orderedOcrPages(pages,files):(pages||[]);if(!ordered.length)return '';const total=String(text||'').replace(/--- Page \d+: [^\n]* ---/g,'').trim().length;let out='<div class="item"><strong>What the app read from your photos</strong><ul>';ordered.forEach((pg,i)=>{const st=ocrPageStatus(pg);const chars=String(pg.text||'').trim().length;out+='<li>Page '+(i+1)+' ('+escapeHTML(pg.name||'photo')+'): '+(st==='ok'?chars+' characters read'+(pg.ocrPass&&pg.ocrPass!=='default'?(' (re-read with '+escapeHTML(pg.ocrPass)+')'):'' ):st==='failed'?('could not be read'+(pg.error?(' — '+escapeHTML(pg.error)):'')):'0 characters — no readable text, try a clearer, well-lit photo of this page, or re-take it')+'</li>'});out+='</ul>';if(total<200)out+='<p class="hint">Very little text was read from these photos ('+total+' characters). Rates in a table or faint print often need a clearer, closer, well-lit photo with the page flat and upright. Nothing was invented — fields the app could not read are left blank for you to fill in.</p>';out+='<details><summary>View the text the app read</summary><pre style="white-space:pre-wrap">'+escapeHTML(String(text||'(no text read)'))+'</pre></details></div>';return out}
 function contractPagesHTML(kind){const imgs=kind==='contract'?contractPendingImages:facilityContractPendingImages;const pages=kind==='contract'?contractOcrPages:facilityContractOcrPages;if(!imgs.length)return '';return `<div class="item"><strong>Contract pages (${imgs.length})</strong> <span class="muted">— read in this order; Move up / Move down to reorder, Remove to drop a page. The preview is re-read from the remaining pages.</span><ol>${imgs.map((f,i)=>{const pg=(pages||[]).find(x=>x.file===f);const st=pg?ocrPageStatus(pg):'pending';const chars=pg?String(pg.text||'').trim().length:0;return `<li>${escapeHTML(f.name)}${pg?` — ${st==='ok'?chars+' characters read':st==='failed'?'could not be read':'no readable text'}`:''} <button type="button" data-action="${kind}-page-up" data-id="${i}" ${i===0?'disabled':''}>Move up</button> <button type="button" data-action="${kind}-page-down" data-id="${i}" ${i===imgs.length-1?'disabled':''}>Move down</button> <button type="button" class="secondary" data-action="${kind}-page-remove" data-id="${i}">Remove</button></li>`}).join('')}</ol></div>`}
-function reparseContractOcrPages(){if(!contractOcrPages.length){contractPreview=null;return false}const names=contractPendingImages.map(f=>f.name);const fileName=names.join(', ');const text=combinedOcrText(contractOcrPages,contractPendingImages);const p=parseContractText(text,fileName);p.rows.forEach(r=>{r.source='extracted-from-contract-photo';r.flags=['from photo — check carefully (OCR can misread digits and dates)',...r.flags]});p.contract.method='ocr + deterministic-parse (on-device OCR, no AI model, no server upload for OCR)';p.contract.source='extracted-from-contract-photo';contractPreview={...p,fileName,isPhoto:true,ocrText:text,ocrPages:contractOcrPages,imageFileName:contractPendingImages[0].name,imageFileNames:names};return contractPreview.rows.length>0}
-function reparseFacilityContractOcrPages(){if(!facilityContractOcrPages.length){facilityContractPreview=null;return false}const names=facilityContractPendingImages.map(f=>f.name);const text=combinedOcrText(facilityContractOcrPages,facilityContractPendingImages);const p=parseFacilityContract(text,names.join(', '));p.isPhoto=true;p.fileName=names.join(', ');p.ocrText=text;p.ocrPages=facilityContractOcrPages;facilityContractPreview=p;return p.facilities.some(x=>String(x.name||'').trim())||Object.values((p.facilities[0]||{}).rates||{}).some(v=>v!=null&&v!=='')}
+function reparseContractOcrPages(){if(!contractOcrPages.length){contractPreview=null;return false}const names=contractPendingImages.map(f=>f.name);const fileName=names.join(', ');const text=combinedOcrText(contractOcrPages,contractPendingImages);const p=parseContractText(text,fileName);p.unreadableRates=detectUnreadableContractRates(text,p.contract&&p.contract.rates||{});p.rows.forEach(r=>{r.source='extracted-from-contract-photo';r.flags=['from photo — check carefully (OCR can misread digits and dates)',...r.flags]});p.contract.method='ocr + deterministic-parse (on-device OCR, no AI model, no server upload for OCR)';p.contract.source='extracted-from-contract-photo';contractPreview={...p,fileName,isPhoto:true,ocrText:text,ocrPages:contractOcrPages,imageFileName:contractPendingImages[0].name,imageFileNames:names};return contractPreview.rows.length>0}
+function reparseFacilityContractOcrPages(){if(!facilityContractOcrPages.length){facilityContractPreview=null;return false}const names=facilityContractPendingImages.map(f=>f.name);const text=combinedOcrText(facilityContractOcrPages,facilityContractPendingImages);const p=parseFacilityContract(text,names.join(', '));p.isPhoto=true;p.fileName=names.join(', ');p.ocrText=text;p.ocrPages=facilityContractOcrPages;const un=detectUnreadableContractRates(text,p.contract&&p.contract.rates||{});p.unreadableRates=un;for(const f of (p.facilities||[]))f.unreadable=un;facilityContractPreview=p;return p.facilities.some(x=>String(x.name||'').trim())||Object.values((p.facilities[0]||{}).rates||{}).some(v=>v!=null&&v!=='')}
 async function importContract(e){e.preventDefault();contractImportError='';contractPendingImages=[];contractOcrPages=[];contractOcrStatus='';const files=$('f_contractFile')?Array.from($('f_contractFile').files||[]):[];const f=files[0]||null;
  const name=f?f.name:'';const ext=name?('.'+name.split('.').pop().toLowerCase()):'';const mime=f?f.type:'';
  const imageFiles=files.filter(isImageFile);const anyHeic=imageFiles.some(x=>/\.heic$/i.test(x.name||''));
@@ -1645,7 +1757,7 @@ async function importContract(e){e.preventDefault();contractImportError='';contr
    contractPendingImages=imageFiles;contractOcrStatus='Reading picture 1 of '+imageFiles.length+' on this device with OCR (Tesseract.js) — no picture is sent to a server for OCR. This can take a few seconds per page…';contractImportError='';contractPreview=null;render();
    try{
      for(let i=0;i<imageFiles.length;i++){const img=imageFiles[i];contractOcrStatus='Reading picture '+(i+1)+' of '+imageFiles.length+' ('+img.name+') on this device with OCR…';const el0=document.getElementById('contractOcrStatus');if(el0)el0.textContent=contractOcrStatus;
-       let t='';try{t=await ocrImageFile(img,m=>{const el=document.getElementById('contractOcrStatus');if(el&&m&&m.status)el.textContent=`Reading picture ${i+1} of ${imageFiles.length} (${img.name}) on this device with OCR… ${m.status}${m.progress!=null?' '+Math.round(m.progress*100)+'%':''}`});contractOcrPages.push({file:img,name:img.name,text:t,status:t.trim().length?'ok':'empty'})}catch(pageErr){contractOcrPages.push({file:img,name:img.name,text:'',status:'failed',error:String(pageErr&&pageErr.message||pageErr)})}}
+       let t='',ocrPass='default';try{const best=await ocrBestPassForFile(img,m=>{const el=document.getElementById('contractOcrStatus');if(el&&m&&m.status)el.textContent=`Reading picture ${i+1} of ${imageFiles.length} (${img.name}) on this device with OCR… ${m.status}${m.progress!=null?' '+Math.round(m.progress*100)+'%':''}`});t=best.text;ocrPass=best.pass;contractOcrPages.push({file:img,name:img.name,text:t,status:t.trim().length?'ok':'empty',ocrPass})}catch(pageErr){contractOcrPages.push({file:img,name:img.name,text:'',status:'failed',error:String(pageErr&&pageErr.message||pageErr)})}}
      contractOcrStatus='';contractOcrPages=orderedOcrPages(contractOcrPages,contractPendingImages);
      const text=combinedOcrText(contractOcrPages,contractPendingImages);
      if(!text.trim()){contractImportError='OCR read no text from these pictures. Try clearer, well-lit photos with the text upright, or paste the contract text instead. Nothing was saved.';contractPreview=null;contractPendingImages=[];contractOcrPages=[];render();return}
@@ -1686,7 +1798,7 @@ async function importFacilityContract(e){e.preventDefault();facilityContractErro
    facilityContractPendingImages=imageFiles;facilityContractOcrStatus='Reading picture 1 of '+imageFiles.length+' on this device with OCR (Tesseract.js) — no picture is sent to a server for OCR. This can take a few seconds per page…';facilityContractPreview=null;render();
    try{
      for(let i=0;i<imageFiles.length;i++){const img=imageFiles[i];facilityContractOcrStatus='Reading picture '+(i+1)+' of '+imageFiles.length+' ('+img.name+') on this device with OCR…';const el0=document.getElementById('facilityContractOcrStatus');if(el0)el0.textContent=facilityContractOcrStatus;
-       let t='';try{t=await ocrImageFile(img,m=>{const el=document.getElementById('facilityContractOcrStatus');if(el&&m&&m.status)el.textContent=`Reading picture ${i+1} of ${imageFiles.length} (${img.name}) on this device with OCR… ${m.status}${m.progress!=null?' '+Math.round(m.progress*100)+'%':''}`});facilityContractOcrPages.push({file:img,name:img.name,text:t,status:t.trim().length?'ok':'empty'})}catch(pageErr){facilityContractOcrPages.push({file:img,name:img.name,text:'',status:'failed',error:String(pageErr&&pageErr.message||pageErr)})}}
+       let t='',ocrPass='default';try{const best=await ocrBestPassForFile(img,m=>{const el=document.getElementById('facilityContractOcrStatus');if(el&&m&&m.status)el.textContent=`Reading picture ${i+1} of ${imageFiles.length} (${img.name}) on this device with OCR… ${m.status}${m.progress!=null?' '+Math.round(m.progress*100)+'%':''}`});t=best.text;ocrPass=best.pass;facilityContractOcrPages.push({file:img,name:img.name,text:t,status:t.trim().length?'ok':'empty',ocrPass})}catch(pageErr){facilityContractOcrPages.push({file:img,name:img.name,text:'',status:'failed',error:String(pageErr&&pageErr.message||pageErr)})}}
      facilityContractOcrStatus='';facilityContractOcrPages=orderedOcrPages(facilityContractOcrPages,facilityContractPendingImages);
      const text=combinedOcrText(facilityContractOcrPages,facilityContractPendingImages);
      if(!text.trim()){facilityContractError='OCR read no text from these pictures. Try clearer, well-lit photos with the text upright, or paste the contract text instead. Nothing was saved.';facilityContractPreview=null;facilityContractPendingImages=[];facilityContractOcrPages=[];render();return}
