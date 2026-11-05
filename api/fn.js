@@ -13,10 +13,10 @@
 // Security notes:
 // - This is NOT an open proxy. Only three allowlisted functions are
 //   forwarded (sync-calendar, google-auth, outlook-auth), and only
-//   allowlisted actions: sync-calendar config/status/log/sync/
-//   connect-apple/disconnect/set-auto-delete/resolve-deletion, and the
-//   OAuth "start" action for google-auth/outlook-auth. Everything else
-//   is rejected with 400.
+//   allowlisted actions: sync-calendar config/status/log/apple-calendars/
+//   sync/connect-apple/set-apple-source-calendar/disconnect/
+//   set-auto-delete/resolve-deletion, and the OAuth "start" action for
+//   google-auth/outlook-auth. Everything else is rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client
 //   key already embedded in supabase-config.js), plus the user's own
 //   Authorization Bearer token, which the Edge Function verifies
@@ -34,7 +34,7 @@ const SUPABASE_URL = 'https://xgoghgihfhtnyevgapyp.supabase.co';
 const PUBLISHABLE_KEY = 'sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX';
 
 const FUNCTIONS = {
-  'sync-calendar': new Set(['config', 'status', 'log', 'sync', 'connect-apple', 'disconnect', 'set-auto-delete', 'resolve-deletion']),
+  'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'disconnect', 'set-auto-delete', 'resolve-deletion']),
   'google-auth': new Set(['start']),
   'outlook-auth': new Set(['start']),
 };
