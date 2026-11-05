@@ -45,9 +45,12 @@ let liveSyncPushTimer = null;
 function liveSyncStateLoad() {
   try {
     const v = JSON.parse(localStorage.getItem('crna-hub-live-sync') || 'null');
-    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null };
+    // repairImport survives a reload: it is a one-shot request, not a
+    // completed action, so losing it to a refresh (or to a sync that
+    // timed out before the server answered) must not burn the repair.
+    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null, repairImport: v.repairImport === true };
   } catch (e) {}
-  return { pending: [], tombstones: [], lastImport: null };
+  return { pending: [], tombstones: [], lastImport: null, repairImport: false };
 }
 let liveSyncState = liveSyncStateLoad();
 function liveSyncStateSave() {
@@ -199,7 +202,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, repaired: data.imported.repaired || 0, at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, at: new Date().toISOString() };
   }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
@@ -246,12 +249,16 @@ async function liveSyncNow(provider, silent) {
           msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the dedicated-calendar sync above still ran; try Sync now again.';
         } else {
           // Skips are reported by reason, not as one opaque total: not
-          // shifts, shifts the user deleted, and shifts repaired after
-          // an earlier sync lost them (see decideStaleImportRow).
+          // shifts, shifts the user deleted, shifts skipped only
+          // because migration 005 has not run yet (legacy — "never
+          // delivered" cannot be told from "deleted" without it), and
+          // shifts repaired after an earlier sync lost them (see
+          // decideStaleImportRow).
           const imp = data.imported;
           const skipBits = [];
           if (imp.skippedNotShift) skipBits.push(imp.skippedNotShift + ' not shifts');
           if (imp.skippedDeleted) skipBits.push(imp.skippedDeleted + ' you deleted');
+          if (imp.skippedLegacy) skipBits.push(imp.skippedLegacy + ' skipped until migration 005 runs');
           if (imp.repaired) skipBits.push(imp.repaired + ' re-imported after a missed sync');
           msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
         }
@@ -261,6 +268,14 @@ async function liveSyncNow(provider, silent) {
   } catch (e) {
     liveSyncBusy = '';
     liveSyncError = e.message;
+    // A failed sync never proves the server got (or acted on) the
+    // repair request — and on a timeout the server may still have
+    // been working. Keep the one-shot repair flag so the next sync
+    // re-sends it instead of silently dropping the repair.
+    if (repairStaleImport) {
+      liveSyncState.repairImport = true;
+      liveSyncStateSave();
+    }
     if (e.message === 'needs_reauth' || e.message === 'not_connected') {
       await liveSyncFetchStatus();
       render();
@@ -522,13 +537,15 @@ function liveSyncProviderCard(provider) {
         const skipBits = [];
         if (li.skippedNotShift) skipBits.push(li.skippedNotShift + ' not shifts');
         if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
+        if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' skipped until migration 005 runs');
         if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
         card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
-        // An import that saw shifts but created none usually means an
-        // earlier sync paired them without ever delivering them. Offer
-        // the explicit repair: clear those stale records and pull the
-        // shifts in fresh on the next sync.
-        if (!li.error && li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0) {
+        // An import that skipped shifts usually means an earlier sync
+        // paired them without ever delivering them. Offer the explicit
+        // repair whenever anything was skipped as deleted/legacy (not
+        // only when nothing was created — a partial import like 12
+        // created / 219 skipped still needs it).
+        if (!li.error && ((li.skippedDeleted || 0) > 0 || (li.skippedLegacy || 0) > 0 || (li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0))) {
           card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Use this if shifts you expect are still missing: it clears the stale records from the earlier interrupted sync and pulls them in again. Shifts you deleted on purpose stay deleted.</p>';
         }
       } else if (current) {
