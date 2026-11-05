@@ -319,7 +319,7 @@ export async function fetchAppleEvents(
 ): Promise<{ events: ProviderEvent[]; deletedIds: string[]; syncToken: string | null }> {
   if (syncToken) {
     const report = await dav(calendarUrl, appleId, password, "REPORT",
-      `<?xml version="1.0"?><c:sync-collection xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:sync-token>${syncToken.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</c:sync-token><c:sync-level>1</c:sync-level><d:prop><d:getetag/><c:calendar-data/></d:prop></c:sync-collection>`, null);
+      `<?xml version="1.0"?><c:sync-collection xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:sync-token>${syncToken.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</c:sync-token><c:sync-level>1</c:sync-level><d:prop><d:getetag/><c:calendar-data/></d:prop></c:sync-collection>`, "1");
     if (report.ok) {
       const xml = await report.text();
       const token = /<c:sync-token>([^<]+)<\/c:sync-token>/i.exec(xml)?.[1] ?? null;
@@ -370,23 +370,34 @@ export async function fetchAppleEvents(
   return { events, deletedIds: [], syncToken: null };
 }
 
-// Full-calendar read in ONE request: a calendar-query REPORT with a
-// time-range returns every event's ICS inline, instead of one PROPFIND
-// plus one GET per event. This is what the work-calendar import uses:
-// "Caleb Work Schedule" holds 100+ events, and fetching them one at a
-// time is what pushed a sync past the proxy's 25s limit (the observed
-// "upstream_unreachable"). Returns null when the server refuses the
-// REPORT, so the caller can fall back to the etag scan above; a 401
-// still throws apple_auth_failed.
+// Full-calendar read in ONE request: a calendar-query REPORT returns every
+// event's ICS inline, instead of one PROPFIND plus one GET per event.
+// This is what the work-calendar import uses: "Caleb Work Schedule" holds
+// 100+ events, and fetching them one at a time is what pushed a sync past
+// the proxy's 25s limit (the observed "upstream_unreachable").
+//
+// Two details matter and both were wrong before:
+//  - The REPORT must carry Depth: 1 (RFC 4791). Without it iCloud may
+//    answer 207 with an empty multistatus — a "successful" 0-event reply.
+//  - There must be NO <c:time-range> filter. Caleb's shifts are ALL-DAY
+//    events (DTSTART;VALUE=DATE:20261102, i.e. midnight ET / 05:00Z).
+//    A UTC-datetime time-range (20250101T000000Z-20280101T000000Z) does
+//    not reliably match DATE-valued DTSTARTs on iCloud, so the range
+//    query returned 0 events for a calendar holding 25+ shifts in a
+//    single month — and because the REPORT had succeeded, the etag-scan
+//    fallback never ran. An unfiltered query returns every event; the
+//    import caller then filters by title/date itself.
+// Returns null when the server refuses the REPORT, so the caller can fall
+// back to the etag scan above; a 401 still throws apple_auth_failed.
 export async function fetchAppleCalendarRange(
   calendarUrl: string,
   appleId: string,
   password: string,
-  start: string,
-  end: string,
+  _start: string,
+  _end: string,
 ): Promise<ProviderEvent[] | null> {
   const report = await dav(calendarUrl, appleId, password, "REPORT",
-    `<?xml version="1.0"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="${start}" end="${end}"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`, null);
+    `<?xml version="1.0"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>`, "1");
   if (report.status === 401) throw new Error("apple_auth_failed");
   if (!report.ok) return null;
   const xml = await report.text();

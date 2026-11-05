@@ -199,7 +199,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, error: data.imported.error || null, at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, at: new Date().toISOString() };
   }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
@@ -238,7 +238,7 @@ async function liveSyncNow(provider, silent) {
         if (data.imported.error) {
           msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the dedicated-calendar sync above still ran; try Sync now again.';
         } else {
-          msg += ' Imported ' + data.imported.created + ' shift(s) from “' + data.imported.sourceCalendarName + '”' + (data.imported.updated ? ', ' + data.imported.updated + ' updated' : '') + (data.imported.duplicates ? ', ' + data.imported.duplicates + ' already here' : '') + (data.imported.skipped ? ' (' + data.imported.skipped + ' event(s) in that calendar were not shifts and were skipped)' : '') + '.';
+          msg += ' Imported ' + data.imported.created + ' shift(s) from “' + data.imported.sourceCalendarName + '”' + (data.imported.updated ? ', ' + data.imported.updated + ' updated' : '') + (data.imported.duplicates ? ', ' + data.imported.duplicates + ' already here' : '') + (typeof data.imported.seen === 'number' ? ' (' + data.imported.seen + ' event(s) seen, ' + (data.imported.parsed || 0) + ' looked like shifts' + (data.imported.skipped ? ', ' + data.imported.skipped + ' skipped as not shifts' : '') + ')' : (data.imported.skipped ? ' (' + data.imported.skipped + ' event(s) in that calendar were not shifts and were skipped)' : '')) + '.';
         }
       }
       alert(msg);
@@ -491,7 +491,7 @@ function liveSyncProviderCard(provider) {
       card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls its Holzer shifts in (Holzer 8, Holzer 8/2nd call, Holzer 24/1st call, Holzer 10…). Events that are not Holzer shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
-        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : '')) + '.</p>';
+        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (li.skipped ? ', ' + li.skipped + ' skipped' : '') + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
       } else if (current) {
         card += '<p class="muted">Import source: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
       }

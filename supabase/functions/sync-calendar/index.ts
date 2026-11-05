@@ -462,20 +462,30 @@ async function saveImportMapRow(row: Record<string, unknown>): Promise<void> {
 async function fetchAppleSourceEvents(
   conn: Conn,
   sourceUrl: string,
-): Promise<ProviderEvent[]> {
+): Promise<{ events: ProviderEvent[]; fetchMethod: string }> {
   const appleId = String(conn.provider_account ?? "");
   const password = await decryptSecret(String(conn.encrypted_password ?? ""));
   // One REPORT returns the whole calendar inline; the old path did a
   // PROPFIND plus one sequential GET per event, which took 30-80s on a
   // 100+ event work calendar and tripped the proxy's 25s limit
-  // ("upstream_unreachable" on Sync now). Fall back to the etag scan
-  // (now parallel-batched) only if the server refuses the REPORT.
+  // ("upstream_unreachable" on Sync now).
+  //
+  // Fall back to the etag scan (now parallel-batched) not only when the
+  // server refuses the REPORT, but ALSO when it succeeds with 0 events:
+  // a 0-event reply for a calendar the user just picked as their work
+  // calendar is not credible — it is how a time-range/DATE mismatch (or
+  // a missing Depth header) used to surface, silently importing nothing.
   const ranged = await fetchAppleCalendarRange(
     sourceUrl, appleId, password, "20250101T000000Z", "20280101T000000Z",
   );
-  if (ranged) return ranged;
+  if (ranged && ranged.length > 0) {
+    return { events: ranged, fetchMethod: "range" };
+  }
   const { events } = await fetchAppleEvents(sourceUrl, appleId, password, null, new Map());
-  return events;
+  return {
+    events,
+    fetchMethod: ranged === null ? "scan" : "range-empty-fallback-scan",
+  };
 }
 
 // --- Sync ------------------------------------------------------------------
@@ -570,6 +580,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     updated: number;
     skipped: number;
     duplicates: number;
+    seen: number;
+    parsed: number;
+    fetchMethod: string | null;
     error: string | null;
   } | null = null;
 
@@ -794,11 +807,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       updated: 0,
       skipped: 0,
       duplicates: 0,
+      seen: 0,
+      parsed: 0,
+      fetchMethod: null,
       error: null,
     };
     let sourceEvents: ProviderEvent[] = [];
     try {
-      sourceEvents = await fetchAppleSourceEvents(conn, sourceCalendarUrl);
+      const res = await fetchAppleSourceEvents(conn, sourceCalendarUrl);
+      sourceEvents = res.events;
+      imported.fetchMethod = res.fetchMethod;
+      imported.seen = sourceEvents.length;
     } catch {
       // A source read failure must not fail the dedicated-calendar sync
       // that already succeeded above; it is reported, not hidden.
@@ -826,6 +845,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           continue;
         }
         const parsed = parseWorkShiftTitle(ev.summary ?? "", ev.date);
+        if (parsed) imported.parsed++;
         if (!parsed) {
           // Not a Holzer shift (personal event, holiday, reminder…):
           // skipped and counted, never imported as a junk shift.
