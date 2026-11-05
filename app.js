@@ -504,8 +504,8 @@ function onboardingSteps(){
   const facilities = (db.facilities || []).length > 0;
   return [
     {n:1, title:'Create your account', desc:'Sign in on the Account tab so credential records sync to your cloud account.', done:signedIn, tab:'Account', panel:''},
-    {n:2, title:'Add facilities', desc:'Upload each hospital\'s contract first — the app reads the facility name, address, hourly rate, flat rates and call rates from it and you only correct what it missed. Entering rates by hand is the backup, below the upload. Calendar import uses this list to recognise every shift for that facility, even an event titled with just the facility name. This step checks off when at least one facility exists. Income figures are estimates from your own rates and shifts — always double-check them against your actual paystubs. CRNA Hub is not liable for mistakes.', done:facilities, tab:'Facilities', panel:''},
-    {n:3, title:'Sync your calendars', desc:'Google connects with one click. Apple needs a one-time app-specific password created in your Apple account. Outlook is not available yet — no Microsoft Entra app is registered — so use .ics import/export for Outlook for now.', done:calConnected, tab:'Import & Backup', panel:'live-sync-panel'},
+    {n:2, title:'Sync your calendars', desc:'Google connects with one click. Apple needs a one-time app-specific password created in your Apple account. Outlook is not available yet — no Microsoft Entra app is registered — so use .ics import/export for Outlook for now.', done:calConnected, tab:'Import & Backup', panel:'live-sync-panel'},
+    {n:3, title:'Add facilities', desc:'Upload each hospital\'s contract first — the app reads the facility name, address, hourly rate, flat rates and call rates from it and you only correct what it missed. Entering rates by hand is the backup, below the upload. Calendar import uses this list to recognise every shift for that facility, even an event titled with just the facility name. This step checks off when at least one facility exists. Income figures are estimates from your own rates and shifts — always double-check them against your actual paystubs. CRNA Hub is not liable for mistakes.', done:facilities, tab:'Facilities', panel:''},
     {n:4, title:'Connect credentialing services and licenses', desc:'NBCRNA (public lookup, no password), AANA (one-time sign-in), and state licenses — the Connect cards pull what each source allows, or ask the assistant to check a portal for you (Assistant tab): you sign in yourself, show the assistant the record page, and confirm what it saves. WV and Ohio block automation, so those give the manual route. Records a portal pulls are labelled with their source; the manual-entry fallback stays user-entered, not verified. This step checks off when a credential record is on file — that does NOT mean a portal pulled it.', done:cred, tab:'Credentials', panel:''},
     {n:5, title:'Upload certifications', desc:'ACLS, BLS, PALS, NRP, or another certification. The expiration date is read from the document — text files, text-layer PDFs, and photos of cards (read on your device with OCR). Check the date it finds and correct it if it is wrong; you can edit it any time. Standard reminder: 3 months before expiration.', done:docs, tab:'Credentials', panel:'cert-documents'},
     {n:6, title:'Upload current contracts', desc:'Text, CSV, .ics, text-layer PDF, or a photo (read entirely on your device). Everything is shown in a preview first — nothing is saved until you approve it.', done:contracts, tab:'Import & Backup', panel:'contract-panel'}
@@ -1389,11 +1389,11 @@ let facilityContractPreview=null,facilityContractError='',facilityContractOcrSta
 // the service-worker cache version in sw.js. Bump all three together on
 // every preview build — a static file cannot know its own commit hash,
 // so the hash lives in the deploy report, not here.
-const BUILD_STAMP='2026-11-05 · Calendar sync suggests new hospitals (ask first) · cache v23';
+const BUILD_STAMP='2026-11-05 · Onboarding: sync calendars step 2, add facilities step 3 · cache v24';
 // Income disclaimer (Nov 5, 2026): income figures are estimates from the
 // user's own rates and shifts. Short, visible but not blocking, and not
 // legal advice — shown wherever income totals or the rates behind them
-// appear (Dashboard, Facilities/contract preview, onboarding step 2).
+// appear (Dashboard, Facilities/contract preview, onboarding step 3).
 const INCOME_DISCLAIMER='Income figures are estimates from your own rates and shifts — always double-check them against your actual paystubs. CRNA Hub is not liable for mistakes.';
 let facilityContractCropNote='',facilityContractLastCropAdded=[];
 // Last region picked per contract page for 'Re-read cropped'
