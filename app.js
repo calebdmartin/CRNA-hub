@@ -1,5 +1,5 @@
 'use strict';
-const KEY='crna-hub-v2',OLD='crna-hub-starter-v1',tabs=['Dashboard','Facilities','PTO','Credentials','Mileage','Import & Backup','Assistant','Account'];
+const KEY='crna-hub-v2',OLD='crna-hub-starter-v1',tabs=['Account','Dashboard','Facilities','PTO','Credentials','Mileage','Import & Backup','Assistant'];
 const empty=()=>({shifts:[],facilities:[],pto:[],credentials:[],mileage:[],contracts:[],nbcrna:{status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',classA:'',classB:'',macEd:'',macDev:'',macEdRequired:60,macDevRequired:40,docNote:'',ceNote:'',reminders:'90,60,30,7'},aana:{status:'',number:'',expiration:'',docNote:'',ceNote:'',reminders:'90,60,30,7'},nbcrnaCE:[],aanaCE:[],licenses:[],documents:[],assistantChat:[],settings:{ptoAnnual:0,ptoStarting:0,ptoHoursPerPeriod:0}});
 function load(){let obj;try{obj=JSON.parse(localStorage.getItem(KEY)||localStorage.getItem(OLD)||'null')}catch{}const result=empty();if(obj&&typeof obj==='object')for(const k of Object.keys(result))if((k==='settings'||k==='nbcrna'||k==='aana')?obj[k]&&typeof obj[k]==='object':Array.isArray(obj[k]))result[k]=obj[k];return result}
 let db=load(),tab='Dashboard',showShiftForm=false,manualType='NBCRNA',month=new Date(),selected=localDate(new Date()),editId=null;month.setDate(1);
