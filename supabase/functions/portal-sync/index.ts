@@ -155,12 +155,29 @@ async function setPortalStatus(
       patch,
     );
   } else {
-    await sbInsert("portal_connections", {
-      user_id: userId,
-      portal,
-      state,
-      ...patch,
-    });
+    try {
+      await sbInsert("portal_connections", {
+        user_id: userId,
+        portal,
+        state,
+        ...patch,
+      });
+    } catch {
+      // The row appeared between the select and the insert (unique
+      // user_id+portal+state): re-read and patch it instead of losing
+      // the status write — a lost 'failed' write is what leaves a stale
+      // 'connected' label standing.
+      const again = await sbGet("portal_connections", q).catch(() => []);
+      if (again.length) {
+        await sbPatch(
+          "portal_connections",
+          `id=eq.${encodeURIComponent(String(again[0].id))}`,
+          patch,
+        );
+      } else {
+        throw new Error("portal_status_write_failed");
+      }
+    }
   }
 }
 
@@ -627,10 +644,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const body = await req.json().catch(() => ({}));
       const userId = await authUserId(req);
       if (!userId) return err("not_signed_in", 401);
-      if (body.action === "verify-nbcrna") return await handleVerifyNbcrna(userId, body);
-      if (body.action === "verify-license") return await handleVerifyLicense(userId, body);
-      if (body.action === "connect-aana") return await handleConnectAana(userId, body);
-      return err("unknown_action", 400);
+      try {
+        if (body.action === "verify-nbcrna") return await handleVerifyNbcrna(userId, body);
+        if (body.action === "verify-license") return await handleVerifyLicense(userId, body);
+        if (body.action === "connect-aana") return await handleConnectAana(userId, body);
+        return err("unknown_action", 400);
+      } catch (e) {
+        // Unexpected throw before the handler recorded an outcome: mark
+        // the attempt failed so no stale 'connected' row can survive it.
+        try {
+          if (body.action === "verify-nbcrna") {
+            await setPortalStatus(userId, "nbcrna", null, "failed", "The NBCRNA check failed before it could finish — no record was pulled.");
+          } else if (body.action === "connect-aana") {
+            await setPortalStatus(userId, "aana", null, "failed", "The AANA sign-in failed before it could finish — no record was pulled.");
+          } else if (body.action === "verify-license") {
+            const st = normalizeState(String(body.state ?? ""));
+            if (st) await setPortalStatus(userId, "state_board", st.abbr, "failed", "The license check failed before it could finish — no record was pulled.");
+          }
+        } catch { /* status write itself failed; nothing more to do */ }
+        throw e;
+      }
     }
     return err("method_not_allowed", 405);
   } catch (e) {

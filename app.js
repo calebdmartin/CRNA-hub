@@ -760,18 +760,71 @@ function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const r
 
 function cloudSaveKind(kind, savedId) { if (!cloudSyncEnabled()) return; (async () => { try { if (kind === 'nbcrna') { if (cloudLocalHasNbcrna()) { await sbReq('/rest/v1/nbcrna_profiles', 'POST', cloudNbcrnaRow()); await cloudUpsertPortals(); } } else if (kind === 'aana') { if (cloudLocalHasAana()) { await sbReq('/rest/v1/aana_memberships', 'POST', cloudAanaRow()); await cloudUpsertPortals(); } } else if (kind === 'licenses') { const rec = (db.licenses || []).find(x => x.id === savedId); if (rec) { await sbReq('/rest/v1/licenses', 'POST', cloudLicenseRow(rec)); await cloudUpsertPortals(); } } else if (kind === 'nbcrnaCE') { const rec = (db.nbcrnaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'nbcrna')); } else if (kind === 'aanaCE') { const rec = (db.aanaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'aana')); } else if (kind === 'documents') { const rec = (db.documents || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); } cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
 function cloudDeleteKind(kind, entryId) { if (!cloudSyncEnabled()) return; (async () => { try { const table = kind === 'licenses' ? 'licenses' : 'ce_records'; await sbReq('/rest/v1/' + table + '?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
-function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Supabase not configured — paste the publishable key (see the Account tab)' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (cloudPending || !cloudActive) return { label: 'Not connected', detail: 'Signed in — choose upload or load on the Account tab first' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') }; // Read the real portal_connections row — never derive "Connected"
-  // from having a record on file. A manual record is not a portal pull.
+// A portal card may say Connected / Verified ONLY when a real pull
+// actually returned a record. The portal_connections status string alone
+// is not proof: a stale 'connected' row, or a status refresh that never
+// landed, must never produce that label. Proof is the pulled record
+// itself: a portal source on the record plus a retrieval date.
+let portalAttemptFailed = {}; // key -> {at, error}: a pull failed this session
+let portalHealed = {}; // key -> true: a stale 'connected' row was corrected once
+function portalVerifiedRetrievedAt(key) {
+  if (key === 'nbcrna') { const n = db.nbcrna || {}; return (n.source === 'public_verification' || n.source === 'nbcrna_portal') && cloudSyncTimes.nbcrna ? cloudSyncTimes.nbcrna : ''; }
+  if (key === 'aana') { const a = db.aana || {}; return a.source === 'aana_portal' && cloudSyncTimes.aana ? cloudSyncTimes.aana : ''; }
+  return (db.licenses || []).some(x => x.source === 'state_board_portal') && cloudSyncTimes.licenses ? cloudSyncTimes.licenses : '';
+}
+function portalHealStaleConnected(key, row) {
+  if (portalHealed[key] || !row || !row.id) return;
+  portalHealed[key] = true;
+  // Make the in-memory copy honest at once so a re-render stays honest.
+  row.status = 'failed';
+  row.last_error = row.last_error || 'Last pull did not return a verified record.';
+  // Best effort: correct the stored row too, so a later load also shows
+  // the truth. The server already writes 'failed' on every failure path;
+  // this covers a stale row whose failure write never landed.
+  if (typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
+    (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'PATCH', { status: 'failed', last_error: 'Corrected: no verified record on file for this portal — last pull did not return a record.', last_synced_at: row.last_synced_at || cloudNow() }); } catch (e) {} })();
+  }
+}
+function portalNoteFailed(key, error) {
+  portalAttemptFailed[key] = { at: cloudNow(), error: error || '' };
+  // Make the in-memory copy honest at once, even if the status refresh
+  // below never lands: a failed attempt must never render as Connected.
   const rows = cloudPortals || [];
   const row = key === 'licenses'
     ? rows.filter(r => r.portal === 'state_board').sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0]
     : rows.find(r => r.portal === key);
-  if (!row) return { label: 'Not connected', detail: 'No portal pull yet — use Connect below, or the manual entry fallback' };
+  if (row) {
+    row.status = 'failed';
+    row.last_error = error || row.last_error || 'The last portal attempt failed.';
+    row.last_synced_at = cloudNow();
+    if (row.id && typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
+      (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'PATCH', { status: 'failed', last_error: error || 'The last portal attempt failed.', last_synced_at: cloudNow() }); } catch (e) {} })();
+    }
+  }
+}
+function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Supabase not configured — paste the publishable key (see the Account tab)' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (cloudPending || !cloudActive) return { label: 'Not connected', detail: 'Signed in — choose upload or load on the Account tab first' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
+  // A pull that failed in this session outranks any stored row: the
+  // refresh after a failure may itself fail to land, and the label must
+  // still show the failure, never a stale Connected.
+  const failedHere = portalAttemptFailed[key];
+  if (failedHere) return { label: 'Not verified', detail: 'Last pull failed · last attempt ' + cloudFmtWhen(failedHere.at) + (failedHere.error ? ' — ' + failedHere.error : '') + '. Use the manual lookup / manual entry below.' };
+  const rows = cloudPortals || [];
+  const row = key === 'licenses'
+    ? rows.filter(r => r.portal === 'state_board').sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0]
+    : rows.find(r => r.portal === key);
+  if (!row) return { label: 'Not verified', detail: 'No successful pull yet — use Connect below, or the manual entry fallback' };
   const when = row.last_synced_at ? ' · last attempt ' + cloudFmtWhen(row.last_synced_at) : '';
-  if (row.status === 'connected') return { label: 'Connected — live portal pull', detail: 'Verified by the portal' + when };
-  if (row.status === 'needs_reauth') return { label: 'Needs sign-in again', detail: (row.last_error || 'The portal session expired — connect again') + when };
-  if (row.status === 'failed') return { label: 'Connection failed', detail: (row.last_error || 'The last portal attempt failed') + when };
-  return { label: 'Not connected', detail: 'No portal pull yet — use Connect below, or the manual entry fallback' }; }
+  if (row.status === 'connected') {
+    const retrievedAt = portalVerifiedRetrievedAt(key);
+    if (retrievedAt) return { label: 'Connected — live portal pull', detail: 'Verified by the portal · last verified ' + cloudFmtWhen(retrievedAt) };
+    // Stale 'connected' row with no verified record behind it: never show
+    // Connected / Verified. Correct the stored row once and say so.
+    portalHealStaleConnected(key, row);
+    return { label: 'Not verified', detail: 'Last pull did not return a verified record' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
+  }
+  if (row.status === 'needs_reauth') return { label: 'Not verified — sign-in needed', detail: (row.last_error || 'The portal session expired — connect again') + when };
+  if (row.status === 'failed') return { label: 'Not verified', detail: 'Last pull failed' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
+  return { label: 'Not verified', detail: 'No successful pull yet — use Connect below, or the manual entry fallback' }; }
 function portalSourceLabel(source, when) { const labels = { 'public_verification': 'Verified — NBCRNA public lookup', 'nbcrna_portal': 'Verified — NBCRNA portal', 'aana_portal': 'Verified — AANA member sign-in', 'state_board_portal': 'Verified — state board lookup', 'user_entered': 'User-entered — not verified' }; return (labels[source] || 'User-entered — not verified') + (when ? ' · ' + cloudFmtWhen(when) : ''); }
 // --- Live portal connections (portal-sync Edge Function) ---
 // NBCRNA = public verification by name (no password). AANA = one-time
@@ -798,11 +851,13 @@ async function portalConnectNbcrna() {
     const r = data.record || {};
     db.nbcrna = { ...(db.nbcrna || {}), status: r.certification_status || 'Certified', number: r.certification_number || (db.nbcrna && db.nbcrna.number) || '', periodEnd: r.period_end || (db.nbcrna && db.nbcrna.periodEnd) || '', renewalDeadline: r.renewal_deadline || (db.nbcrna && db.nbcrna.renewalDeadline) || '', source: 'public_verification', reminders: (db.nbcrna && db.nbcrna.reminders) || '90,60,30,7' };
     cloudSyncTimes.nbcrna = data.retrievedAt || cloudNow();
-    persist();
+    delete portalAttemptFailed['nbcrna']; delete portalHealed['nbcrna'];
+    persist(); cloudSaveKind('nbcrna');
     await portalRefreshStatus();
     render();
     alert('NBCRNA verified: ' + (r.certification_number ? 'certification ' + r.certification_number + ', ' : '') + 'expires ' + (r.period_end || 'unknown') + '.\n\n' + (r.note || ''));
   } catch (e) {
+    portalNoteFailed('nbcrna', portalErrMsg(e));
     await portalRefreshStatus();
     alert('NBCRNA check did not pull a record: ' + portalErrMsg(e) + '\n\nYour manual record (if any) is unchanged.');
   } finally { portalBusy = ''; render(); }
@@ -825,11 +880,14 @@ async function portalConnectLicense() {
     if (r.license_number || r.expiration_date) {
       const rec = { id: id(), state: state.trim(), type: r.license_type || 'APRN', number: r.license_number || (num || '').trim(), issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: '', source: 'state_board_portal', reminders: '90,60,30,7' };
       db.licenses.push(rec); persist(); cloudSaveKind('licenses', rec.id);
+      cloudSyncTimes.licenses = data.retrievedAt || cloudNow();
+      delete portalAttemptFailed['licenses']; delete portalHealed['licenses'];
     }
     await portalRefreshStatus();
     render();
     alert('State license verified: ' + (r.license_number || '') + ' expires ' + (r.expiration_date || 'unknown') + '.');
   } catch (e) {
+    portalNoteFailed('licenses', portalErrMsg(e));
     await portalRefreshStatus();
     alert(portalErrMsg(e) + ((e && e.data && e.data.manualUrl) ? '\n\nManual lookup: ' + e.data.manualUrl : '') + '\n\nYour manual records are unchanged.');
   } finally { portalBusy = ''; render(); }
@@ -850,11 +908,13 @@ async function portalAanaSubmit(e) {
     const r = data.record || {};
     db.aana = { ...(db.aana || {}), status: r.membership_status || 'Active', source: 'aana_portal', reminders: (db.aana && db.aana.reminders) || '90,60,30,7' };
     cloudSyncTimes.aana = data.retrievedAt || cloudNow();
-    persist();
+    delete portalAttemptFailed['aana']; delete portalHealed['aana'];
+    persist(); cloudSaveKind('aana');
     await portalRefreshStatus();
     render();
     alert('AANA connected: membership ' + (r.membership_status || 'Active') + '.\n\n' + (r.note || ''));
   } catch (err) {
+    portalNoteFailed('aana', portalErrMsg(err));
     await portalRefreshStatus();
     alert('AANA sign-in did not complete: ' + portalErrMsg(err) + '\n\nYour manual record (if any) is unchanged.');
   } finally { password = ''; portalBusy = ''; render(); }
