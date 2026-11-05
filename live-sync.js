@@ -56,23 +56,57 @@ async function liveSyncHeaders() {
   const anon = (typeof SUPABASE_CFG !== 'undefined') ? SUPABASE_CFG.anonKey : '';
   return { apikey: anon, 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
 }
-async function liveSyncGet(name, action) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 10000);
+async function liveSyncProxyToken() {
   try {
-    const r = await fetch(liveSyncFn(name) + '?action=' + encodeURIComponent(action), { signal: ctrl.signal, headers: await liveSyncHeaders() });
-    const text = await r.text();
+    if (typeof cloudEnsureToken === 'function') await cloudEnsureToken();
+  } catch (e) {}
+  return (typeof cloudSession !== 'undefined' && cloudSession) ? cloudSession.access_token : '';
+}
+async function liveSyncProxyRequest(name, method, action, body) {
+  // Same-origin proxy first (see api/fn.js): the browser only talks to
+  // its own origin, and the Vercel function forwards to Supabase
+  // server-side. Returns {r, data} when the proxy answered, or null on
+  // a network failure — in which case the caller falls back to direct.
+  const token = await liveSyncProxyToken();
+  const payload = { function: name, method, action, body: body || null };
+  if (token) payload.token = token;
+  try {
+    const pr = await fetch('/api/fn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (pr.status === 404 || pr.status === 501) return null;
+    const text = await pr.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (e) {}
+    return { r: pr, data };
+  } catch (e) {
+    return null;
+  }
+}
+async function liveSyncFnRequest(name, method, action, body) {
+  // Proxy first, direct only on a network failure or 404/501 (proxy
+  // absent, e.g. an older preview) — never on an upstream error status,
+  // so a sync/connect call is never submitted twice.
+  const pr = await liveSyncProxyRequest(name, method, action, body);
+  if (pr) return pr;
+  const url = method === 'GET'
+    ? liveSyncFn(name) + '?action=' + encodeURIComponent(action)
+    : liveSyncFn(name);
+  const r = await fetch(url, { method, headers: await liveSyncHeaders(), body: method === 'POST' ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  return { r, data };
+}
+async function liveSyncGet(name, action) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const { r, data } = await liveSyncFnRequest(name, 'GET', action, null);
     if (!r.ok) throw new Error((data && data.error) || ('request failed (' + r.status + ')'));
     return data;
   } finally { clearTimeout(timer); }
 }
 async function liveSyncPost(name, body) {
-  const r = await fetch(liveSyncFn(name), { method: 'POST', headers: await liveSyncHeaders(), body: JSON.stringify(body) });
-  const text = await r.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch (e) {}
+  const { r, data } = await liveSyncFnRequest(name, 'POST', body && body.action, body);
   if (!r.ok) throw new Error((data && data.error) || ('request failed (' + r.status + ')'));
   return data;
 }
@@ -89,9 +123,8 @@ function liveSyncWhen(iso) {
 
 async function liveSyncFetchConfig() {
   try {
-    const r = await fetch(liveSyncFn('sync-calendar') + '?action=config');
+    const { r, data } = await liveSyncFnRequest('sync-calendar', 'GET', 'config', null);
     if (!r.ok) throw new Error('config unavailable');
-    const data = await r.json();
     liveSyncConfig = { state: 'ready', google: !!data.google, outlook: !!data.outlook, apple: !!data.apple, encryption: !!data.encryption };
   } catch (e) {
     liveSyncConfig = { state: 'unreachable', google: false, outlook: false, apple: false, encryption: false };
@@ -300,7 +333,7 @@ function liveSyncProviderCard(provider) {
   const conn = liveSyncConnections[provider];
   const configured = provider === 'apple' ? (liveSyncConfig.state === 'ready') : !!liveSyncConfig[provider];
   if (liveSyncConfig.state === 'unreachable') {
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Live sync setup not finished by the app owner yet</span></div><div class="muted">The server-side sync function is not deployed or not reachable yet. No connection is faked. See the owner-setup wizard below.</div></div>';
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Live sync could not be reached from this browser</span></div><div class="muted">The sync service did not answer from this browser — check your connection and tap “Refresh status &amp; log” below. No connection is faked.</div></div>';
   }
   if (liveSyncConfig.state === 'loading') {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Checking setup…</span></div></div>';
@@ -352,8 +385,8 @@ function liveSyncPanelHTML() {
     html += '<p class="muted">Connect once per provider — then sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. Syncs use a dedicated “CRNA Hub” calendar in each provider; your other calendars are never touched.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
-    html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button><button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button></div>';
-    if (liveSyncWizard) html += liveSyncWizardHTML();
+    html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button>' + (liveSyncConfig.state === 'ready' ? '' : '<button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button>') + '</div>';
+    if (liveSyncWizard && liveSyncConfig.state !== 'ready') html += liveSyncWizardHTML();
     if (liveSyncState.pending.length) {
       html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">These shifts were deleted (or went missing) on the provider side. Nothing has been deleted here yet. “Delete here too” removes the CRNA Hub shift; “Keep here” keeps it and re-creates it in the calendar at the next sync.</p>';
       liveSyncState.pending.forEach((p) => {
