@@ -1311,8 +1311,8 @@ function contractDateList(line,defaultYear){const dates=[];let m;
  return dates}
 function contractMoney(s){const m=String(s||'').match(/\$([\d,]+(?:\.\d{2})?)/);return m?Number(m[1].replace(/,/g,'')):null}
 function contractShiftType(line){const l=line.toLowerCase();
- if(/holzer\s+8\s*\/\s*2nd|2nd\s+call|second\s+call/.test(l))return 'Second call';
- if(/24\s*-?\s*hour|24h\b|1st\s+call|first\s+call/.test(l))return '24-hour call';
+ if(/holzer\s+8\s*\/\s*2nd|(?:2nd|21d|20d)\s+call|second\s+call/.test(l))return 'Second call';
+ if(/24\s*-?\s*hour|24h\b|(?:1st|ist|lst)\s+call|first\s+call/.test(l))return '24-hour call';
  if(/\(main\)/.test(l))return '8-hour day';
  if(/holzer\s+12\b/.test(l))return '12-hour shift';
  if(/12\s*-?\s*hour|12h\b/.test(l))return '12-hour shift';
@@ -1340,8 +1340,8 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  const flatWeekend=(label,rx)=>{const hit=text.match(rx);if(hit)rates[label]=Number(hit[1].replace(/,/g,''))};
  flat('rate24',/\$([\d,]+(?:\.\d{2})?)(?:(?!hourly)[^$\n]){0,60}?(?:24\s*-?\s*hour|24h|1st call|first call)/i);
  flat('rate24',/(?:24\s*-?\s*hour|24h|1st call|first call)(?:(?!hourly)[^$\n]){0,60}?\$([\d,]+(?:\.\d{2})?)/i);
- flat('rateSecond',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:2nd call|second call)/i);
- flat('rateSecond',/(?:2nd call|second call)[^$\n]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
+ flat('rateSecond',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:(?:2nd|21d|20d) call|second call)/i);
+ flat('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$\n]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  flat('rate8',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:8\s*-?\s*hour|8h)/i);
  flat('rate8',/(?<!after\s)(?:8\s*-?\s*hour|8h\b)[^$\n]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  flat('rate10',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:10\s*-?\s*hour|10h)/i);
@@ -1349,7 +1349,7 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  flat('rate12',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:12\s*-?\s*hour|12h)/i);
  flat('rate12',/(?:12\s*-?\s*hour|12h)[^$\n]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  flatWeekend('weekendRate24',/(?:weekend|saturday|sunday)[^$\n]{0,80}?(?:24\s*-?\s*hour|1st call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
- flatWeekend('weekendRateSecond',/(?:weekend|saturday|sunday)[^$\n]{0,80}?(?:2nd call|second call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
+ flatWeekend('weekendRateSecond',/(?:weekend|saturday|sunday)[^$\n]{0,80}?(?:(?:2nd|21d|20d) call|second call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,50}?(?:call bonus|overnight call bonus)/i))||(m=text.match(/(?:call bonus|overnight[^$\n]{0,30}bonus|bonus[^$\n]{0,30}call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i)))rates.callBonus=Number(m[1].replace(/,/g,''));
  if((m=text.match(/paid\s+for\s+(\d+(?:\.\d+)?)\s*hours/i)))rates.paidHours8=Number(m[1]);
  if((m=text.match(/(\d+(?:\.\d+)?)\s*paid\s+hours/i)))rates.paidHours8=Number(m[1]);
@@ -1357,7 +1357,7 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  if(rates.rate8==null&&(m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,40}?(?:per day|a day|day rate)/i)))rates.rate8=Number(m[1].replace(/,/g,''));
  if(rates.rate8==null&&(m=text.match(/(?:day rate|per day)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i)))rates.rate8=Number(m[1].replace(/,/g,''));
  if(rates.rate24==null&&(m=text.match(/(?:24\s*-?\s*hour|1st call|first call)\s*(?:call\s+)?rate\s*[:\-]?\s*\$([\d,]+(?:\.\d{2})?)/i)))rates.rate24=Number(m[1].replace(/,/g,''));
- if(rates.rateSecond==null&&(m=text.match(/(?:2nd call|second call)\s*(?:call\s+)?rate\s*[:\-]?\s*\$([\d,]+(?:\.\d{2})?)/i)))rates.rateSecond=Number(m[1].replace(/,/g,''));
+ if(rates.rateSecond==null&&(m=text.match(/(?:(?:2nd|21d|20d) call|second call)\s*(?:call\s+)?rate\s*[:\-]?\s*\$([\d,]+(?:\.\d{2})?)/i)))rates.rateSecond=Number(m[1].replace(/,/g,''));
  if(rates.callBonus==null&&(m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,50}?(?:on-?call bonus|call bonus)/i)))rates.callBonus=Number(m[1].replace(/,/g,''));
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)\s*\/\s*hr/i)))rates.hourly=Number(m[1].replace(/,/g,''));
  // OCR/table fallback: real addenda put the label in the left column and the
@@ -1366,7 +1366,7 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  // still missing are filled — never overwrite a rate already found, never
  // guess one. (1) QUALIFIED patterns on the flattened text (newlines
  // collapsed): the label itself is specific ("Regular Daily Rate",
- // "1st call ... Hourly", "2nd call weeknight"), so a long gap to the
+ // "1st call ... Hourly", "(?:2nd|21d|20d) call weeknight"), so a long gap to the
  // amount is safe. (2) GENERIC patterns run PER LINE, never flattened: a
  // flattened generic pattern can join a date row ("1/4/2027 2nd Call")
  // to the NEXT row's amount and invent a rate — that must not happen.
@@ -1388,9 +1388,9 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  fill('hourly',/(?:premium hourly rate|hourly rate|rate per hour|per hour)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('hourly',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:premium hourly rate|hourly rate)/i);
  if(rates.hourly==null){const h=flatText.match(/([\d,]+(?:\.\d{2})?)\s*(?:per hour|\/\s*hr|an hour)/i);if(h)rates.hourly=Number(h[1].replace(/,/g,''))}
- fill('rateSecond',/(?:2nd call|second call)[^$]{0,40}?weeknight[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
- fill('weekendRateSecond',/(?:2nd call|second call)[^$]{0,40}?weekend[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
- fill('weekendRateSecond',/(?:weekend|saturday|sunday)[^$]{0,220}?(?:2nd call|second call)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fill('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$]{0,40}?weeknight[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fill('weekendRateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$]{0,40}?weekend[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fill('weekendRateSecond',/(?:weekend|saturday|sunday)[^$]{0,220}?(?:(?:2nd|21d|20d) call|second call)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('callBonus',/(?:call stipend|stipend)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('callBonus',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:call stipend|stipend)/i);
  fillNum('paidHours8',/(\d+(?:\.\d+)?)\s*hours?\s+paid/i);
@@ -1407,12 +1407,64 @@ function contractExtractRates(text){text=String(text||'').replace(/\$[^\n]{0,14}
  fillLine('rate12',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:12\s*-?\s*hour|12h\b)/i);
  fillLine('rate24',/(?:24\s*-?\s*hour|24h\b)(?:(?!hourly)[^$]){0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fillLine('rate24',/\$\s*([\d,]+(?:\.\d{2})?)(?:(?!hourly)[^$]){0,220}?(?:24\s*-?\s*hour|24h\b)/i);
- fillLine('rateSecond',/(?:2nd call|second call)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
- fillLine('rateSecond',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:2nd call|second call)/i);
+ fillLine('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fillLine('rateSecond',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:(?:2nd|21d|20d) call|second call)/i);
  // Call-back hours included in 2nd-call pay ("1st hour of call back
  // included", "First two hours of call back included") — recorded, not priced.
- {const wk=flatText.match(/2nd call weeknight[\s\S]{0,200}?(\d+)(?:st|nd|rd|th)?\s*hours? of call back included/i);if(wk)rates.includedCallBackHoursWeeknight=Number(wk[1]);
-  const we=flatText.match(/2nd call weekend[\s\S]{0,200}?(?:first two hours|(\d+)(?:st|nd|rd|th)?\s*hours?) of call back included/i);if(we)rates.includedCallBackHoursWeekend=we[1]?Number(we[1]):2;}
+ {const wk=flatText.match(/(?:2nd|21d|20d) call weeknight[\s\S]{0,200}?(\d+)(?:st|nd|rd|th)?\s*hours? of call back included/i);if(wk)rates.includedCallBackHoursWeeknight=Number(wk[1]);
+  const we=flatText.match(/(?:2nd|21d|20d) call weekend[\s\S]{0,200}?(?:first two hours|(\d+)(?:st|nd|rd|th)?\s*hours?) of call back included/i);if(we)rates.includedCallBackHoursWeekend=we[1]?Number(we[1]):2;}
+ // TABLE PAIRING (real-OCR fallback — Page 1 OCR was clean, the Page 2
+ // rates table was not parsed): Tesseract reads a two-column table in
+ // COLUMN order — all the labels first, then all the amounts — so a label
+ // can be hundreds of characters from its amount and the same-line /
+ // 220-char patterns above miss every rate. Pairing by ORDER fixes it:
+ // rate labels in document order <-> money amounts in document order.
+ // This runs last and only accepts a STRONG pairing (at least 2 labels
+ // and at least as many amounts in the rates region as labels), so it
+ // never invents a rate from a stray amount; it overrides earlier
+ // generic matches only in that strong case, because a generic pattern
+ // can join a date row ("1/4/2027 2nd Call") to the next row's amount.
+ // OCR-tolerant label spellings: Ist/lst for 1st, 2na for 2nd, S for $,
+ // O for 0 inside amounts. Amounts without a $ sign still count when
+ // they are a comma-thousands amount with .00 (a date never looks like
+ // "2,000.00"). Blank stays blank when the pairing is not strong.
+ try{
+  const labelSpecs=[
+   {key:'rate8',rx:/regular\s+daily\s+rate/i},
+   {key:'hourly',rx:/premium\s+hourly\s+rate/i},
+   {key:'hourlyCall1st',rx:/(?:1st|ist|lst|first)\s+call\b/i,need:/hourly/i,needWithin:35},
+   {key:'rateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weeknight|mon[- ]?friday/i,needWithin:45},
+   {key:'weekendRateSecond',rx:/(?:2nd|21d|20d|2na|second)\s+call\b/i,need:/weekend|saturday|sunday/i,needWithin:45},
+   {key:'rate10',rx:/10\s*-?\s*hour\s+shift\s+rate/i},
+   {key:'rate12',rx:/12\s*-?\s*hour\s+shift\s+rate/i},
+   {key:'rate24',rx:/24\s*-?\s*hour\s+call\s+rate/i},
+   {key:'callBonus',rx:/(?:overnight\s+call\s+bonus|call\s+bonus|call\s+stipend|stipend)/i}];
+  const labels=[];
+  for(const spec of labelSpecs){
+   const rx=new RegExp(spec.rx.source,spec.rx.flags.includes('g')?spec.rx.flags:spec.rx.flags+'g');
+   let h; while((h=rx.exec(flatText))!==null){
+    if(spec.need){const after=flatText.slice(h.index,h.index+spec.needWithin); if(!spec.need.test(after)) continue;}
+    if(!labels.some(l=>l.key===spec.key)) labels.push({key:spec.key,index:h.index});
+    break;
+   }
+  }
+  labels.sort((a,b)=>a.index-b.index);
+  const cleanAmt=raw=>{const d=String(raw).replace(/[Oo]/g,'0').replace(/[lI]/g,'1').replace(/[^0-9.]/g,''); const v=Number(d); return Number.isFinite(v)?v:null;};
+  const amounts=[];
+  const amtRx=/(?:\$|S)\s*([0-9][0-9,\s]*\.[0-9]{2})/g; let am;
+  while((am=amtRx.exec(flatText))!==null){const v=cleanAmt(am[1]); if(v!=null) amounts.push({index:am.index,value:v});}
+  const bareRx=/(\d{1,3}(?:,\d{3})+\.\d{2})/g; let bm;
+  while((bm=bareRx.exec(flatText))!==null){if(amounts.some(a=>Math.abs(a.index-bm.index)<3)) continue; const v=cleanAmt(bm[1]); if(v!=null) amounts.push({index:bm.index,value:v});}
+  amounts.sort((a,b)=>a.index-b.index);
+  if(labels.length>=2){
+   const firstLabel=labels[0].index;
+   let pool=amounts.filter(a=>a.index>firstLabel);
+   if(pool.length<labels.length){const before=amounts.filter(a=>a.index<=firstLabel); if(before.length>=labels.length) pool=before;}
+   if(pool.length>=labels.length){
+    for(let i=0;i<labels.length;i++){rates[labels[i].key]=pool[i].value;}
+   }
+  }
+ }catch(e){/* table pairing is a fallback only — never break parsing */}
  return rates}
 function firstCallPay(hourlyCall1st,premiumHourly,weekend){if(hourlyCall1st==null)return null;if(weekend)return {pay:Math.round(hourlyCall1st*24*100)/100,source:'1st call hourly rate stated in document ($'+hourlyCall1st+'/hr x 24 hours, weekend)'};if(premiumHourly!=null)return {pay:Math.round((premiumHourly*8+hourlyCall1st*16)*100)/100,source:'1st call rate stated in document (weekday: 8h x $'+premiumHourly+'/hr + 16h x $'+hourlyCall1st+'/hr)'};return {pay:Math.round(hourlyCall1st*24*100)/100,source:'1st call hourly rate stated in document ($'+hourlyCall1st+'/hr x 24 hours)'}}
 function contractResolvePay(row,rates,facilityObj,savedContract){const weekend=row.date?([0,6].includes(new Date(row.date+'T12:00:00').getDay())):false;
@@ -1506,7 +1558,7 @@ function parseFacilityContract(text,fileName){
   const rateFields={};
   const map={hourly:'hourlyRate',paidHours8:'paidHours8',rate8:'rate8',rate10:'rate10',rate12:'rate12',rate24:'rate24',hourlyCall1st:'hourlyCall1st',rateSecond:'rateSecond',callBonus:'callBonus',weekendRate24:'weekendRate24',weekendRateSecond:'weekendRateSecond'};
   for(const [k,v] of Object.entries(rates))if(map[k]&&rateOrNull(v)!=null)rateFields[map[k]]=String(rateOrNull(v));
-  if(rates.includedCallBackHoursWeeknight!=null||rates.includedCallBackHoursWeekend!=null){const bits=[];if(rates.includedCallBackHoursWeeknight!=null)bits.push('2nd call weeknight: first '+rates.includedCallBackHoursWeeknight+' hour(s) of call back included in call pay');if(rates.includedCallBackHoursWeekend!=null)bits.push('2nd call weekend: first '+rates.includedCallBackHoursWeekend+' hour(s) of call back included in call pay');rateFields._includedNote=bits.join('; ')}
+  if(rates.includedCallBackHoursWeeknight!=null||rates.includedCallBackHoursWeekend!=null){const bits=[];if(rates.includedCallBackHoursWeeknight!=null)bits.push('(?:2nd|21d|20d) call weeknight: first '+rates.includedCallBackHoursWeeknight+' hour(s) of call back included in call pay');if(rates.includedCallBackHoursWeekend!=null)bits.push('(?:2nd|21d|20d) call weekend: first '+rates.includedCallBackHoursWeekend+' hour(s) of call back included in call pay');rateFields._includedNote=bits.join('; ')}
   const found=[],missing=[];
   for(const k of FACILITY_RATE_KEYS){if(rateFields[k]!=null)found.push(FACILITY_RATE_LABELS[k]+' '+currency(Number(rateFields[k])));else missing.push(FACILITY_RATE_LABELS[k])}
   if(rateFields._includedNote)found.push(rateFields._includedNote);
