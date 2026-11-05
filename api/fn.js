@@ -11,19 +11,22 @@
 // reachable" on such devices even when the function is live.
 //
 // Security notes:
-// - This is NOT an open proxy. Only three allowlisted functions are
-//   forwarded (sync-calendar, google-auth, outlook-auth), and only
+// - This is NOT an open proxy. Only four allowlisted functions are
+//   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync), and only
 //   allowlisted actions: sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
-//   set-auto-delete/resolve-deletion, and the OAuth "start" action for
-//   google-auth/outlook-auth. Everything else is rejected with 400.
+//   set-auto-delete/resolve-deletion, the OAuth "start" action for
+//   google-auth/outlook-auth, and portal-sync config/status/
+//   verify-nbcrna/verify-license/connect-aana. Everything else is
+//   rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client
 //   key already embedded in supabase-config.js), plus the user's own
 //   Authorization Bearer token, which the Edge Function verifies
 //   server-side exactly as it does for direct requests. The
 //   secret/service-role key is never used here and never appears here.
-// - The public config check (sync-calendar?action=config, booleans
-//   only, no user data) is the one call allowed without a user token.
+// - The public config check (sync-calendar?action=config and
+//   portal-sync?action=config, booleans only, no user data) is the one
+//   call allowed without a user token.
 //   Every other call requires a token and is rejected with 401 without
 //   one, so no user data is reachable through this proxy anonymously.
 // - Upstream status and body are returned verbatim, so the app's
@@ -37,6 +40,11 @@ const FUNCTIONS = {
   'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'disconnect', 'set-auto-delete', 'resolve-deletion']),
   'google-auth': new Set(['start']),
   'outlook-auth': new Set(['start']),
+  // Portal connections (Credentials tab): NBCRNA public verification,
+  // state-board verification attempts, AANA one-time sign-in, status.
+  // Same token rule as sync-calendar: the public config check is
+  // token-less, everything else requires the user's token.
+  'portal-sync': new Set(['config', 'status', 'verify-nbcrna', 'verify-license', 'connect-aana']),
 };
 
 function bad(res, code, status) {
@@ -76,7 +84,7 @@ module.exports = async (req, res) => {
     bad(res, 'action_not_allowed');
     return;
   }
-  const isPublicConfig = payload.function === 'sync-calendar' && method === 'GET' && action === 'config';
+  const isPublicConfig = (payload.function === 'sync-calendar' || payload.function === 'portal-sync') && method === 'GET' && action === 'config';
   if (!isPublicConfig && !payload.token) {
     bad(res, 'not_signed_in', 401);
     return;

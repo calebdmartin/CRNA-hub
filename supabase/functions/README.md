@@ -13,6 +13,17 @@ function secrets (server side) and in the provider consoles below.
   (Google), delta links (Outlook), and CalDAV sync-collection (Apple);
   Apple connect with an app-specific password; sync status, sync log,
   disconnect, auto-delete toggle, and deletion resolution.
+- `portal-sync/` — live credential-portal connections for the Credentials
+  tab: NBCRNA public verification by name (no password; Oracle APEX
+  submit — implemented but UNPROVEN as of Nov 5, 2026, its submit
+  endpoint 404s server-side), state-board verification attempts (WV and
+  Ohio block automation and return the manual route instead of a fake
+  pull), and AANA one-time member sign-in (credentials used in-memory
+  for one attempt only, never stored or logged; SSO is bot-gated, so it
+  usually reports that sign-in could not be completed). Every pulled
+  record is labelled with its source and retrieval date in
+  `portal_connections` / `nbcrna_profiles` / `aana_memberships` /
+  `licenses` (migration 001 tables).
 - `_shared/` — auth validation, AES-GCM token encryption, PostgREST
   helpers, shift/event mapping, and one provider module each
   (`google.ts`, `outlook.ts`, `caldav.ts`).
