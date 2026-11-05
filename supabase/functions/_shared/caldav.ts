@@ -46,46 +46,98 @@ async function dav(
 }
 
 function absHref(href: string): string {
-  if (href.startsWith("http")) return href.replace(/&amp;/g, "&");
-  return `${CALDAV_HOST}${href}`;
+  const h = href.replace(/&amp;/g, "&").trim();
+  if (h.startsWith("http://") || h.startsWith("https://")) return h;
+  if (h.startsWith("//")) return "https:" + h;
+  return `${CALDAV_HOST}${h.startsWith("/") ? h : "/" + h}`;
+}
+
+function decodeXml(s: string): string {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+// iCloud (and other CalDAV servers) vary the XML namespace prefix
+// (D:, d:, dav:, or no prefix at all) and sometimes emit a closing tag
+// instead of a self-closing one. Match on the tag LOCAL name only, so a
+// prefix change can never silently break discovery again.
+function elementContent(xml: string, local: string): string | null {
+  const re = new RegExp(
+    `<(?:[A-Za-z_][\\w.-]*:)?${local}(?:\\s[^>]*)?>([\\s\\S]*?)<\/(?:[A-Za-z_][\\w.-]*:)?${local}>`,
+    "i",
+  );
+  return re.exec(xml)?.[1] ?? null;
+}
+
+function firstHref(fragment: string): string | null {
+  const m = /<(?:[A-Za-z_][\w.-]*:)?href(?:\s[^>]*)?>([^<]+)<\/(?:[A-Za-z_][\w.-]*:)?href>/i.exec(fragment);
+  return m ? decodeXml(m[1].trim()) : null;
+}
+
+function stepError(step: string, status: number): Error {
+  return new Error(`apple_${step}_${status}`);
+}
+
+function checkDav(res: Response, step: string): void {
+  if (res.status === 401) throw new Error("apple_auth_failed");
+  if (!res.ok) throw stepError(step, res.status);
 }
 
 // Returns the URL of the "CRNA Hub" calendar, creating it if needed.
+// Each discovery step has its own error code (with the HTTP status) so a
+// failure names the step instead of collapsing into apple_dav_failed:
+//   apple_principal_failed_<status> / apple_principal_missing
+//   apple_home_failed_<status>      / apple_home_missing
+//   apple_list_failed_<status>
+//   apple_calendar_create_failed_<status>
+// A 401 at ANY step is apple_auth_failed (bad Apple ID / app-specific
+// password), never a discovery error.
 export async function ensureAppleCalendar(
   appleId: string,
   password: string,
 ): Promise<string> {
   const root = await dav(CALDAV_HOST + "/", appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:current-user-principal/></d:prop></d:propfind>`, "0");
-  if (root.status === 401) throw new Error("apple_auth_failed");
-  if (!root.ok) throw new Error("apple_dav_failed");
+  checkDav(root, "principal_failed");
   const rootXml = await root.text();
-  const inner = /<d:current-user-principal>[\s\S]*?<d:href>([^<]+)<\/d:href>/i.exec(rootXml)?.[1];
-  const principalUrl = inner ? absHref(inner) : null;
-  if (!principalUrl) throw new Error("apple_dav_failed");
+  const principalSection = elementContent(rootXml, "current-user-principal");
+  if (principalSection && /<(?:[A-Za-z_][\w.-]*:)?unauthenticated/i.test(principalSection)) {
+    throw new Error("apple_auth_failed");
+  }
+  const principalHref = principalSection ? firstHref(principalSection) : null;
+  if (!principalHref) throw new Error("apple_principal_missing");
+  const principalUrl = absHref(principalHref);
   const homeRes = await dav(principalUrl, appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-home-set/></d:prop></d:propfind>`, "0");
-  if (!homeRes.ok) throw new Error("apple_dav_failed");
+  checkDav(homeRes, "home_failed");
   const homeXml = await homeRes.text();
-  const homeHref = /<c:calendar-home-set>[\s\S]*?<d:href>([^<]+)<\/d:href>/i.exec(homeXml)?.[1];
-  if (!homeHref) throw new Error("apple_dav_failed");
+  const homeSection = elementContent(homeXml, "calendar-home-set");
+  const homeHref = homeSection ? firstHref(homeSection) : null;
+  if (!homeHref) throw new Error("apple_home_missing");
   const homeUrl = absHref(homeHref);
   const listRes = await dav(homeUrl, appleId, password, "PROPFIND",
     `<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>`, "1");
-  if (!listRes.ok) throw new Error("apple_dav_failed");
+  checkDav(listRes, "list_failed");
   const listXml = await listRes.text();
-  const responses = listXml.split(/<d:response>/i).slice(1);
+  const responses = listXml.split(/<(?:[A-Za-z_][\w.-]*:)?response(?:\s[^>]*)?>/i).slice(1);
+  const norm = (u: string) => u.replace(/\/$/, "");
   for (const resp of responses) {
-    const isCalendar = /<c:calendar\s*\/>/i.test(resp);
-    const name = /<d:displayname>([^<]*)<\/d:displayname>/i.exec(resp)?.[1];
-    const href = /<d:href>([^<]+)<\/d:href>/i.exec(resp)?.[1];
-    if (isCalendar && name === "CRNA Hub" && href) return absHref(href);
+    const href = firstHref(resp);
+    if (!href) continue;
+    if (norm(absHref(href)) === norm(homeUrl)) continue;
+    const typeSection = elementContent(resp, "resourcetype");
+    const isCalendar = !!typeSection &&
+      /<(?:[A-Za-z_][\w.-]*:)?calendar(?:[\s/>])/i.test(typeSection);
+    const nameRaw = elementContent(resp, "displayname");
+    const name = nameRaw !== null ? decodeXml(nameRaw) : null;
+    if (isCalendar && name === "CRNA Hub") return absHref(href);
   }
   const newUrl = homeUrl.replace(/\/?$/, "/") + "crna-hub/";
   const mk = await dav(newUrl, appleId, password, "MKCALENDAR",
-    `<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop><d:displayname>CRNA Hub</d:displayname></d:prop></d:set></c:mkcalendar>`, null);
+    `<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop><d:displayname>CRNA Hub</d:displayname><c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>`, null);
   if (mk.ok || mk.status === 405) return newUrl;
-  throw new Error("apple_calendar_create_failed");
+  if (mk.status === 401) throw new Error("apple_auth_failed");
+  throw stepError("calendar_create_failed", mk.status);
 }
 
 function icsEscape(t: string): string {
@@ -207,9 +259,10 @@ export async function fetchAppleEvents(
   if (!list.ok) throw new Error("apple_dav_failed");
   const xml = await list.text();
   const events: ProviderEvent[] = [];
-  for (const resp of xml.split(/<d:response>/i).slice(1)) {
-    const href = /<d:href>([^<]+)<\/d:href>/i.exec(resp)?.[1];
-    const etag = /<d:getetag>([^<]+)<\/d:getetag>/i.exec(resp)?.[1];
+  for (const resp of xml.split(/<(?:[A-Za-z_][\w.-]*:)?response(?:\s[^>]*)?>/i).slice(1)) {
+    const href = firstHref(resp);
+    const etagRaw = elementContent(resp, "getetag");
+    const etag = etagRaw !== null ? decodeXml(etagRaw) : undefined;
     if (!href || href.replace(/\/$/, "") === calendarUrl.replace(/\/$/, "")) continue;
     if (etag && knownEtags.get(href) === etag) continue;
     const get = await dav(absHref(href), appleId, password, "GET", null, null, "text/calendar");

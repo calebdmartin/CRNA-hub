@@ -407,7 +407,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "sync_failed";
-    if (msg.endsWith("refresh_failed") || msg === "apple_auth_failed") {
+    if (msg.endsWith("refresh_failed") || msg.startsWith("apple_auth_failed")) {
       await sbPatch(
         "calendar_connections",
         `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
@@ -743,6 +743,12 @@ async function handleConnectApple(userId: string, body: Record<string, unknown>)
   } catch (e) {
     const msg = e instanceof Error ? e.message : "";
     if (msg === "apple_auth_failed") return err("apple_auth_failed", 401);
+    // Pass discovery errors through verbatim (apple_principal_failed_<status>,
+    // apple_principal_missing, apple_home_failed_<status>, apple_home_missing,
+    // apple_list_failed_<status>, apple_calendar_create_failed_<status>) so the
+    // client message names the failing step instead of collapsing to a generic
+    // apple_dav_failed. The password is never included in any of these codes.
+    if (msg.startsWith("apple_")) return err(msg, 502);
     return err("apple_dav_failed", 502);
   }
   const existing = await getConnection(userId, "apple");

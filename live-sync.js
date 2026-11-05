@@ -281,7 +281,11 @@ async function liveSyncAppleConnect() {
     alert('Apple Calendar connected. Shifts will sync with your dedicated “CRNA Hub” calendar.');
   } catch (e) {
     render();
-    alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored.');
+    if (e.message && e.message.startsWith('apple_') && e.message !== 'apple_auth_failed') {
+      alert('Apple Calendar connection failed at: ' + e.message + '. That names the failing discovery step and its HTTP status — it is not a password error unless the code says apple_auth_failed. Nothing was stored.');
+    } else {
+      alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored.');
+    }
   }
 }
 async function liveSyncResolvePending(entry, decision) {
