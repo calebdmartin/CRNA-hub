@@ -10,6 +10,10 @@
 //        app-specific password (see connect-apple below).
 //   GET  ?action=status   (auth) -> per-provider connection status.
 //   GET  ?action=log      (auth) -> recent sync_log rows for this user.
+//   GET  ?action=apple-calendars (auth) -> the user's iCloud calendars
+//        [{ name, url, isDedicated }] for the import-source picker.
+//        Lists server-side with the stored CalDAV credentials; the
+//        password is never returned. Apple only.
 //   POST { action: "sync", provider, localShifts, tombstones } (auth)
 //        -> two-way sync for one provider (see algorithm below).
 //   POST { action: "connect-apple", appleId, appSpecificPassword, calendarUrl? } (auth)
@@ -24,6 +28,14 @@
 //           user pick an existing calendar and re-calls connect-apple
 //           with calendarUrl, which is verified against the account's
 //           calendar home-set before anything is stored.
+//   POST { action: "set-apple-source-calendar", calendarUrl, calendarName } (auth)
+//        -> picks the Apple calendar to IMPORT shifts from (e.g. "Caleb
+//           Work Schedule"). The URL is verified against the account's
+//           calendar home-set before anything is stored, and the
+//           dedicated "CRNA Hub" calendar cannot be picked as its own
+//           source. Empty calendarUrl clears the choice. Needs migration
+//           004 (source_calendar_url/name on calendar_connections);
+//           without it this returns { error: "migration_004_required" }.
 //   POST { action: "disconnect", provider } (auth)
 //   POST { action: "set-auto-delete", provider, autoDelete } (auth)
 //        -> autoDelete defaults to false; see the deletion rule below.
@@ -36,9 +48,39 @@
 //           deleteProvider=true (local-missing flags), the provider event
 //           is deleted too.
 //
+// Apple import source — the "Caleb Work Schedule" problem:
+//   The dedicated "CRNA Hub" calendar starts empty, so a connected Apple
+//   account with shifts only in another calendar syncs nothing. The user
+//   can therefore pick ONE additional Apple calendar as an import source.
+//   On every Apple sync, after the dedicated-calendar two-way sync, the
+//   function reads that source calendar (full scan — the source has no
+//   sync token of its own) and imports only events whose titles parse as
+//   Holzer shifts (parseWorkShiftTitle). Anything else is skipped and
+//   counted, never imported as junk, and no other calendar is ever read.
+//   Imported shifts are returned as providerChange creates/updates with
+//   source "apple-import" and note "Imported from <calendar name>", and
+//   the sync response carries an `imported` summary
+//   { sourceCalendarName, created, updated, skipped, duplicates } so the
+//   panel can say "imported N shifts from Caleb Work Schedule".
+//   Pairing lives in `calendar_import_map` (migration 004), NOT in
+//   calendar_sync_map: a shift can be paired with the dedicated calendar
+//   AND with its source event at the same time, and the two pairings must
+//   never overwrite each other. If that table does not exist yet, the
+//   import still works — dedupe then rests on the local date+facility+
+//   type guard alone, and source-side edits will not update the local
+//   shift. Imported shifts are pushed to the dedicated calendar by the
+//   normal local->provider step on the NEXT sync (once the browser sends
+//   them back as local shifts); they are never written into the source
+//   calendar, and a source event that disappears is never treated as a
+//   deletion (a full scan cannot see deletions, and an absence is not
+//   evidence). A locally deleted imported shift is never re-imported:
+//   its import-map row survives the deletion and blocks resurrection.
+//
 // Sync algorithm — newest edit wins, deletions never silent:
 //   * One dedicated provider calendar named "CRNA Hub" per provider.
-//     Other calendars are never read, written, or deleted.
+//     Other calendars are never read, written, or deleted — except the
+//     Apple import source above, which is read-only: it is never
+//     written to, and events are only ever pulled FROM it.
 //   * The `calendar_sync_map` table pairs a CRNA Hub shift id with a
 //     provider event id, plus the last-seen updated timestamps on both
 //     sides. A shift and an event are the same record only through that
@@ -91,6 +133,7 @@ import {
   nextDay,
   parseDescription,
   parseTitle,
+  parseWorkShiftTitle,
   sbDelete,
   sbGet,
   sbInsert,
@@ -115,6 +158,7 @@ import {
 } from "../_shared/outlook.ts";
 import {
   deleteAppleEvent,
+  discoverAppleCalendars,
   ensureAppleCalendar,
   fetchAppleEvents,
   putAppleEvent,
@@ -206,6 +250,7 @@ async function fetchGoogle(
         updatedAt: ev.updated ?? null,
         cancelled: ev.status === "cancelled",
         rawUpdatedAt: ev.updated ?? null,
+        summary: String(ev.summary ?? ""),
       });
     }
     nextSyncToken = data.nextSyncToken ?? nextSyncToken;
@@ -287,6 +332,7 @@ async function fetchOutlook(
         updatedAt: ev.lastModifiedDateTime ?? null,
         cancelled: removed,
         rawUpdatedAt: ev.lastModifiedDateTime ?? null,
+        summary: String(ev.subject ?? ""),
       });
     }
     if (data["@odata.deltaLink"]) {
@@ -365,6 +411,50 @@ async function appleWrite(
   await putAppleEvent(calendarUrl, appleId, password, s);
 }
 
+// --- Apple import source (calendar_import_map, migration 004) ----------
+// All three helpers swallow DB errors on purpose: until the owner runs
+// supabase-schema-004.sql the table/columns do not exist, and the import
+// must degrade to the local date+facility+type dedupe guard instead of
+// failing the whole sync.
+async function getImportMapRows(
+  userId: string,
+  provider: string,
+): Promise<Record<string, unknown>[]> {
+  try {
+    return await sbGet(
+      "calendar_import_map",
+      `select=*&user_id=eq.${encodeURIComponent(userId)}&provider=eq.${encodeURIComponent(provider)}`,
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function saveImportMapRow(row: Record<string, unknown>): Promise<void> {
+  try {
+    await sbUpsert("calendar_import_map", row, "user_id,provider,shift_id");
+  } catch {
+    // Degraded mode (migration 004 not run): the pairing is not stored,
+    // so the next sync re-checks the same event against the local dedupe
+    // guard instead of against this row. Nothing is double-created.
+  }
+}
+
+// Full scan of the user's chosen Apple import-source calendar. The source
+// has no sync token of its own (conn.sync_token belongs to the dedicated
+// calendar), and the event count is small (tens of shifts), so a full
+// scan each sync is the correct trade: it also means a source event that
+// disappears is simply absent, never a deletion signal.
+async function fetchAppleSourceEvents(
+  conn: Conn,
+  sourceUrl: string,
+): Promise<ProviderEvent[]> {
+  const appleId = String(conn.provider_account ?? "");
+  const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+  const { events } = await fetchAppleEvents(sourceUrl, appleId, password, null, new Map());
+  return events;
+}
+
 // --- Sync ------------------------------------------------------------------
 
 interface SyncBody {
@@ -436,6 +526,29 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   const pendingDeletions: Record<string, unknown>[] = [];
   const handledLocal = new Set<string>();
   const autoDelete = conn.auto_delete === true;
+
+  // Apple import source, if the user picked one. The columns come from
+  // migration 004; until the owner runs supabase-schema-004.sql they are
+  // simply absent from the row, so this is unset and the sync behaves
+  // exactly as before. The dedicated calendar can never be its own
+  // import source (a stale stored value is ignored, not acted on).
+  const normUrl = (u: string) => String(u ?? "").replace(/\/$/, "");
+  const sourceCalendarUrl = provider === "apple"
+    ? String(conn.source_calendar_url ?? "").trim()
+    : "";
+  const sourceCalendarName = provider === "apple"
+    ? String(conn.source_calendar_name ?? "").trim()
+    : "";
+  const hasSource = provider === "apple" && !!sourceCalendarUrl &&
+    normUrl(sourceCalendarUrl) !== normUrl(String(conn.calendar_id ?? ""));
+  let imported: {
+    sourceCalendarName: string;
+    created: number;
+    updated: number;
+    skipped: number;
+    duplicates: number;
+    error: string | null;
+  } | null = null;
 
   const dropMap = async (shiftId: string) => {
     await sbDelete(
@@ -645,6 +758,153 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     counts.created++;
   }
 
+  // 2b. Apple import source: pull Holzer shifts from the calendar the
+  // user picked (e.g. "Caleb Work Schedule"). Read-only — nothing here
+  // ever writes to the source calendar, and a source event that
+  // disappears is never treated as a deletion. Runs after the
+  // dedicated-calendar loop so its dedupe keys also cover shifts the
+  // dedicated loop just created in this same sync.
+  if (hasSource) {
+    imported = {
+      sourceCalendarName: sourceCalendarName || sourceCalendarUrl,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      duplicates: 0,
+      error: null,
+    };
+    let sourceEvents: ProviderEvent[] = [];
+    try {
+      sourceEvents = await fetchAppleSourceEvents(conn, sourceCalendarUrl);
+    } catch {
+      // A source read failure must not fail the dedicated-calendar sync
+      // that already succeeded above; it is reported, not hidden.
+      imported.error = "source_fetch_failed";
+    }
+    if (!imported.error) {
+      const importRows = await getImportMapRows(userId, provider);
+      const importByEvent = new Map(
+        importRows.map((r) => [String(r.source_event_id), r as Conn]),
+      );
+      // Dedupe keys: local shifts as sent, plus shifts created from the
+      // dedicated calendar earlier in this same sync.
+      const seenKeys = new Set(
+        localShifts.map((s) => `${s.date}|${s.facility}|${s.type}`),
+      );
+      for (const ch of providerChanges) {
+        const sh = (ch as { shift?: LocalShift }).shift;
+        if (ch.action === "create" && sh) {
+          seenKeys.add(`${sh.date}|${sh.facility}|${sh.type}`);
+        }
+      }
+      for (const ev of sourceEvents) {
+        if (!ev.date || ev.cancelled) {
+          imported.skipped++;
+          continue;
+        }
+        const parsed = parseWorkShiftTitle(ev.summary ?? "", ev.date);
+        if (!parsed) {
+          // Not a Holzer shift (personal event, holiday, reminder…):
+          // skipped and counted, never imported as a junk shift.
+          imported.skipped++;
+          continue;
+        }
+        const pay = parsed.pay || ev.pay || "";
+        const importRow = importByEvent.get(ev.providerEventId);
+        const local = importRow
+          ? localById.get(String(importRow.shift_id))
+          : undefined;
+        if (local) {
+          // Already imported: only a genuinely newer source edit flows
+          // back (newest edit wins, same rule as the dedicated sync).
+          const sourceUpdated = String(ev.updatedAt ?? "");
+          const localUpdated = String(local.updatedAt ?? "");
+          if (
+            sourceUpdated && sourceUpdated > localUpdated &&
+            sourceUpdated !== String(importRow?.source_updated_at ?? "")
+          ) {
+            providerChanges.push({
+              action: "update",
+              shift: {
+                id: local.id,
+                date: ev.date,
+                facility: parsed.facility,
+                type: parsed.type,
+                pay,
+                note: local.note ||
+                  `Imported from ${imported.sourceCalendarName}`,
+                source: "apple-import",
+                updatedAt: sourceUpdated,
+              },
+            });
+            counts.updated++;
+            imported.updated++;
+            await saveImportMapRow({
+              ...importRow,
+              source_updated_at: sourceUpdated,
+            });
+          }
+          continue;
+        }
+        if (importRow) {
+          // Previously imported, then deleted on this device: never
+          // re-import it (resurrection). The import-map row stays so
+          // the next sync skips it again.
+          imported.skipped++;
+          continue;
+        }
+        const key = `${ev.date}|${parsed.facility}|${parsed.type}`;
+        if (seenKeys.has(key)) {
+          // Same shift already on this device (user-entered, or created
+          // from the dedicated calendar this sync): pair it so future
+          // source edits can update it, but never create a second copy.
+          const dupe = localShifts.find(
+            (s) => `${s.date}|${s.facility}|${s.type}` === key,
+          ) ?? providerChanges
+            .map((c) => (c as { shift?: LocalShift }).shift)
+            .find((s) => s && `${s.date}|${s.facility}|${s.type}` === key);
+          if (dupe) {
+            await saveImportMapRow({
+              user_id: userId,
+              provider,
+              shift_id: dupe.id,
+              source_calendar_url: sourceCalendarUrl,
+              source_event_id: ev.providerEventId,
+              source_updated_at: ev.updatedAt,
+            });
+          }
+          imported.duplicates++;
+          continue;
+        }
+        const newId = crypto.randomUUID();
+        await saveImportMapRow({
+          user_id: userId,
+          provider,
+          shift_id: newId,
+          source_calendar_url: sourceCalendarUrl,
+          source_event_id: ev.providerEventId,
+          source_updated_at: ev.updatedAt,
+        });
+        providerChanges.push({
+          action: "create",
+          shift: {
+            id: newId,
+            date: ev.date,
+            facility: parsed.facility,
+            type: parsed.type,
+            pay,
+            note: `Imported from ${imported.sourceCalendarName}`,
+            source: "apple-import",
+            updatedAt: ev.updatedAt,
+          },
+        });
+        counts.created++;
+        imported.created++;
+        seenKeys.add(key);
+      }
+    }
+  }
+
   // 3. Local shifts -> provider creates / updates.
   for (const s of localShifts) {
     if (handledLocal.has(s.id)) continue;
@@ -735,6 +995,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     providerChanges,
     pendingDeletions,
     counts: { ...counts, providerCreated, providerUpdated },
+    // Null when no Apple import source is picked; otherwise the panel
+    // renders "imported N shifts from <name>" from this object.
+    imported,
     lastSyncedAt: String(connPatch.last_synced_at),
   });
 }
@@ -806,12 +1069,107 @@ async function handleDisconnect(userId: string, provider: Provider): Promise<Res
     "calendar_sync_map",
     `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
   );
+  // Import pairings go too (a fresh connect re-imports from the source
+  // calendar); the table may not exist yet if migration 004 never ran.
+  try {
+    await sbDelete(
+      "calendar_import_map",
+      `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
+    );
+  } catch { /* table absent: nothing to delete */ }
   await sbDelete(
     "calendar_connections",
     `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
   );
   await writeSyncLog(userId, provider, "disconnect", {}, null);
   return json({ ok: true, provider });
+}
+
+// List the user's iCloud calendars (server-side, with the stored CalDAV
+// credentials) for the import-source picker. Returns only names and
+// URLs — never the Apple ID or password. The dedicated calendar is
+// flagged so the client can exclude it from the picker.
+async function handleAppleCalendars(userId: string): Promise<Response> {
+  const conn = await getConnection(userId, "apple");
+  if (!conn || conn.status !== "connected") return err("not_connected", 409);
+  try {
+    const appleId = String(conn.provider_account ?? "");
+    const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+    const { calendars } = await discoverAppleCalendars(appleId, password);
+    const dedicated = String(conn.calendar_id ?? "").replace(/\/$/, "");
+    return json({
+      ok: true,
+      calendars: calendars.map((c) => ({
+        name: c.name ?? "Unnamed calendar",
+        url: c.url,
+        isDedicated: c.url.replace(/\/$/, "") === dedicated,
+      })),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg === "apple_auth_failed") return err("needs_reauth", 401);
+    return err("apple_dav_failed", 502);
+  }
+}
+
+// Pick (or clear) the Apple import-source calendar. The URL is verified
+// against the account's calendar home-set before anything is stored, so
+// a made-up or foreign URL can never become a source. The dedicated
+// "CRNA Hub" calendar cannot be picked as its own source. Only the URL
+// and display name are stored — no credentials change here.
+async function handleSetAppleSourceCalendar(
+  userId: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const conn = await getConnection(userId, "apple");
+  if (!conn || conn.status !== "connected") return err("not_connected", 409);
+  const calendarUrl = String(body.calendarUrl ?? "").trim();
+  const calendarName = String(body.calendarName ?? "").trim();
+  if (!calendarUrl) {
+    try {
+      await sbPatch(
+        "calendar_connections",
+        `user_id=eq.${encodeURIComponent(userId)}&provider=eq.apple`,
+        { source_calendar_url: null, source_calendar_name: null },
+      );
+    } catch {
+      return err("migration_004_required", 503);
+    }
+    return json({ ok: true, provider: "apple", sourceCalendarUrl: null, sourceCalendarName: null });
+  }
+  if (!/^https:\/\/[A-Za-z0-9-]+\.icloud\.com\//.test(calendarUrl)) {
+    return err("apple_calendar_not_found", 400);
+  }
+  if (calendarUrl.replace(/\/$/, "") === String(conn.calendar_id ?? "").replace(/\/$/, "")) {
+    return err("source_is_dedicated_calendar", 400);
+  }
+  try {
+    const appleId = String(conn.provider_account ?? "");
+    const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+    const verified = await verifyAppleCalendar(appleId, password, calendarUrl);
+    try {
+      await sbPatch(
+        "calendar_connections",
+        `user_id=eq.${encodeURIComponent(userId)}&provider=eq.apple`,
+        { source_calendar_url: verified, source_calendar_name: calendarName || null },
+      );
+    } catch {
+      // The columns come from migration 004; without it the PATCH is
+      // rejected. Say so plainly instead of a generic write failure.
+      return err("migration_004_required", 503);
+    }
+    return json({
+      ok: true,
+      provider: "apple",
+      sourceCalendarUrl: verified,
+      sourceCalendarName: calendarName || null,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg === "apple_auth_failed") return err("needs_reauth", 401);
+    if (msg === "apple_calendar_not_found") return err("apple_calendar_not_found", 400);
+    return err("apple_dav_failed", 502);
+  }
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -834,9 +1192,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const userId = await authUserId(req);
       if (!userId) return err("not_signed_in", 401);
       if (action === "status") {
+        // select=* (mapped to safe fields only below): the 004 columns
+        // source_calendar_url/name may not exist yet, and an explicit
+        // select naming them would fail the whole status call until the
+        // owner runs migration 004. Encrypted tokens are read server-side
+        // only and never leave this function.
         const rows = await sbGet(
           "calendar_connections",
-          `select=provider,status,auto_delete,last_synced_at&user_id=eq.${encodeURIComponent(userId)}`,
+          `select=*&user_id=eq.${encodeURIComponent(userId)}`,
         );
         return json({
           ok: true,
@@ -845,8 +1208,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
             status: r.status,
             autoDelete: r.auto_delete === true,
             lastSyncedAt: r.last_synced_at ?? null,
+            sourceCalendarUrl: (r.source_calendar_url as string | null) ?? null,
+            sourceCalendarName: (r.source_calendar_name as string | null) ?? null,
           })),
         });
+      }
+      if (action === "apple-calendars") {
+        return await handleAppleCalendars(userId);
       }
       if (action === "log") {
         const rows = await sbGet(
@@ -864,6 +1232,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (body.action === "sync") return await handleSync(userId, body);
       if (body.action === "connect-apple") {
         return await handleConnectApple(userId, body);
+      }
+      if (body.action === "set-apple-source-calendar") {
+        return await handleSetAppleSourceCalendar(userId, body);
       }
       if (body.action === "disconnect" && isProvider(body.provider)) {
         return await handleDisconnect(userId, body.provider);
