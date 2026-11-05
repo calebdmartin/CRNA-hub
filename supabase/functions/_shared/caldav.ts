@@ -301,6 +301,10 @@ export function parseIcsEvent(ics: string, _fallbackHref: string): ProviderEvent
     updatedAt,
     cancelled: props.STATUS === "CANCELLED",
     rawUpdatedAt: updatedAt,
+    // Raw title, kept for the work-calendar import: parseTitle above
+    // splits "Holzer 8" into facility "Holzer 8" / type "Shift", which
+    // is wrong for import — parseWorkShiftTitle needs the raw title.
+    summary: icsUnescape(props.SUMMARY ?? ""),
   };
 }
 
