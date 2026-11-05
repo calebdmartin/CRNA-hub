@@ -24,7 +24,7 @@ function credentialDeadlines(){
   const n=db.nbcrna||{};push('NBCRNA certification',n.renewalDeadline||n.periodEnd,n.reminders,'NBCRNA');
   const a=db.aana||{};push('AANA membership',a.expiration,a.reminders,'AANA');
   (db.licenses||[]).forEach(x=>push((x.state||'License')+' '+(x.type||''),x.expiry,x.reminders,'State license'));
-  (db.documents||[]).forEach(x=>push((x.certType||'Certification')+' certification',x.expiry,'90,60,30,7','Certification document · '+(x.expirySource==='extracted'?'expiration extracted from document':x.expirySource==='user-entered'?'expiration entered manually':'no expiration found')));
+  (db.documents||[]).forEach(x=>push((x.certType||'Certification')+' certification',x.expiry,'90,60,30,7','Certification document · standard 3-month (90-day) reminder · '+(x.expirySource==='extracted'?'expiration extracted from document':x.expirySource==='user-entered'?'expiration entered manually':'no expiration found')));
   (db.credentials||[]).forEach(x=>{const days=daysUntil(x.expiry);if(days!==null&&(days<0||days<=90))items.push({label:x.name||'Credential',date:x.expiry,days,source:'Credential'})});
   return items.sort((a,b)=>a.date.localeCompare(b.date));
 }
@@ -89,7 +89,7 @@ function onboardingSteps(){
     {n:1, title:'Create your account', desc:'Sign in on the Account tab so credential records sync to your cloud account.', done:signedIn, tab:'Account', panel:''},
     {n:2, title:'Sync your calendars', desc:'Google connects with one click. Apple needs a one-time app-specific password created in your Apple account. Outlook is not available yet — no Microsoft Entra app is registered — so use .ics import/export for Outlook for now.', done:calConnected, tab:'Import & Backup', panel:'live-sync-panel'},
     {n:3, title:'Connect credentialing services and licenses', desc:'NBCRNA (public lookup, no password), AANA (one-time sign-in), and state licenses — the Connect cards pull what each source allows. WV and Ohio block automation, so those give the manual route. Records a portal pulls are labelled with their source; the manual-entry fallback stays user-entered, not verified. This step checks off when a credential record is on file — that does NOT mean a portal pulled it.', done:cred, tab:'Credentials', panel:''},
-    {n:4, title:'Upload certifications', desc:'ACLS, BLS, PALS, NRP, or another certification. Text files and text-layer PDFs have their expiration date read from the document; images cannot be read for a date, so enter it by hand.', done:docs, tab:'Credentials', panel:'cert-documents'},
+    {n:4, title:'Upload certifications', desc:'ACLS, BLS, PALS, NRP, or another certification. The expiration date is read from the document — text files, text-layer PDFs, and photos of cards (read on your device with OCR). Check the date it finds and correct it if it is wrong; you can edit it any time. Standard reminder: 3 months before expiration.', done:docs, tab:'Credentials', panel:'cert-documents'},
     {n:5, title:'Upload current contracts', desc:'Text, CSV, .ics, text-layer PDF, or a photo (read entirely on your device). Everything is shown in a preview first — nothing is saved until you approve it.', done:contracts, tab:'Import & Backup', panel:'contract-panel'}
   ];
 }
@@ -111,9 +111,16 @@ function ptoPage(){const x=db.pto.find(x=>x.id===editId)||{},balance=num(db.sett
 // Supabase Storage (bucket certification-documents, path <user_id>/<file>)
 // when signed in and synced; otherwise only metadata is kept on-device and
 // the UI says so plainly. Never a public URL. Expiration dates are parsed
-// from the document text where the document actually states one, never
-// invented; images cannot be read, so they prompt for manual entry.
+// from the document where the document actually states one, never invented:
+// text files and text-layer PDFs from their text, images with on-device OCR
+// (Tesseract.js, loaded only when a picture is chosen — no picture is sent
+// to a server for OCR). A date the user edits by hand is stored as
+// user-entered. Standard reminder: 3 months (90 days) before expiration,
+// plus 60, 30 and 7 days.
 let docStorageError = '';
+let docOcrStatus = '';
+function docEndOfMonth(y, m) { const dt = new Date(Date.UTC(y, m, 0)); return dt.toISOString().slice(0, 10); }
+function addDaysISO(dateStr, n) { if (!dateStr) return ''; const d = new Date(dateStr + 'T12:00:00'); if (Number.isNaN(d.getTime())) return ''; d.setDate(d.getDate() + n); return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-'); }
 function docStorageStatus() {
   if (!SUPABASE_CONFIGURED) return 'Supabase not configured — sign in and storage are unavailable, so file details here are saved on this device only and the file itself is not stored.';
   if (!cloudSession) return 'Sign in and enable document storage to upload files. Until you sign in on the Account tab, file details here are saved on this device only — the file itself is not stored.';
@@ -130,22 +137,58 @@ function parseDocDate(raw) {
   if ((m = s.match(new RegExp('^(\\d{1,2})\\s+' + months + '\\s+(\\d{4})$', 'i')))) return docValidISO(+m[3], mi[m[2].toLowerCase()], +m[1]);
   if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return docValidISO(+m[1], +m[2], +m[3]);
   if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return docValidISO(+m[3], +m[1], +m[2]);
+  if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/))) return docValidISO(2000 + +m[3], +m[1], +m[2]);
+  // Month/year only (common on AHA cards, e.g. "12/2027" or "Dec 2027"):
+  // read as the last day of that month, and the UI asks the user to check it.
+  if ((m = s.match(/^(\d{1,2})\/(\d{4})$/))) { if (+m[1] >= 1 && +m[1] <= 12) return docEndOfMonth(+m[2], +m[1]); return ''; }
+  if ((m = s.match(new RegExp('^' + months + '\\s+(\\d{4})$', 'i')))) return docEndOfMonth(+m[2], mi[m[1].toLowerCase()]);
   return '';
 }
-function extractExpiryDate(text) {
-  const t = String(text || '').replace(/\s+/g, ' ');
+function normalizeOcrDateText(t) {
+  // Tesseract often reads 0 as O and 1 as l/I, and '/' as l or 1, inside dates.
+  // Normalise only digit-adjacent characters so ordinary words are untouched.
+  let x = String(t || '');
+  // 'O' read for '0': at the start of a date token ("O6/2028"), after a digit
+  // ("3O/2028"), or between digits ("2O28"). Only digit-adjacent, so words
+  // like "Provider" are untouched.
+  x = x.replace(/(^|[^\dA-Za-z])[Oo](\d)/g, '$10$2');
+  x = x.replace(/(\d)[Oo](?![A-Za-z])/g, '$10');
+  // '/' read as 'l', 'I' or '|': normalise after the O fixes above, so
+  // "12l2O27" first becomes "12l2027" and then "12/2027".
+  x = x.replace(/(\d{1,2})[lI|](\d{1,2})[lI|](\d{2,4})/g, '$1/$2/$3');
+  x = x.replace(/(\d{1,2})[lI|](\d{4})/g, '$1/$2');
+  // Remaining 'l'/'I' next to a digit is a '1' ("l5" -> "15").
+  x = x.replace(/(^|[^\dA-Za-z])[lI](\d)/g, '$11$2');
+  x = x.replace(/(\d)[lI](?![A-Za-z])/g, '$11');
+  return x;
+}
+function extractExpiryDateInfo(text, opts) {
+  const raw = String(text || '');
+  let t = raw.replace(/\s+/g, ' ');
+  if (opts && opts.ocr) t = normalizeOcrDateText(t);
   const months = '(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)';
-  const datePat = '(?:' + months + '\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+' + months + '\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}\\/\\d{4})';
-  const re = new RegExp('(?:expir\\w*(?:\\s+date)?|valid\\s+(?:through|until|thru)|good\\s+through|valid\\s+until|renewal\\s+date|certification\\s+expires?)[^0-9]{0,40}(' + datePat + ')', 'gi');
+  const datePat = '(?:' + months + '\\s+\\d{1,2},?\\s+\\d{4}|' + months + '\\s+\\d{4}|\\d{1,2}\\s+' + months + '\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}|\\d{1,2}\\/\\d{4})';
+  // 1) A date next to an expiration label — the confident case.
+  const re = new RegExp('(?:exp\\.?\\s*(?:iration)?\\s*(?:date)?|expir\\w*(?:\\s+date)?|valid\\s+(?:thru|through|until|to)|good\\s+through|renewal\\s+date|certification\\s+expires?|card\\s+expires?)[^0-9]{0,40}(' + datePat + ')', 'gi');
   let m;
-  while ((m = re.exec(t))) { const iso = parseDocDate(m[1]); if (iso) return iso; }
-  return '';
+  while ((m = re.exec(t))) { const iso = parseDocDate(m[1]); if (iso) return { iso, via: 'label' }; }
+  // 2) No labelled date: take the latest date in the document, but only when
+  // there are at least two distinct dates — on a cert card the later one is
+  // the expiration (the earlier one is the issue date). With a single date
+  // there is no way to tell issue from expiration, so return nothing rather
+  // than guess. The caller tells the user to check a fallback date.
+  const all = new RegExp('(' + datePat + ')', 'gi');
+  const seen = [];
+  while ((m = all.exec(t))) { const iso = parseDocDate(m[1]); if (iso && seen.indexOf(iso) === -1) seen.push(iso); }
+  if (seen.length >= 2) { seen.sort(); return { iso: seen[seen.length - 1], via: 'latest-date' }; }
+  return { iso: '', via: 'none' };
 }
+function extractExpiryDate(text, opts) { return extractExpiryDateInfo(text, opts).iso; }
 function documentsSection(doc) {
   const docs = (db.documents || []).slice().sort((a, b) => (a.expiry || '9999').localeCompare(b.expiry || '9999'));
-  return `<section class="panel" id="cert-documents"><h2>Certification documents</h2><p class="muted">${escapeHTML(docStorageStatus())}</p><p class="muted">Upload a certification card or certificate for ACLS, BLS, PALS, NRP, or another certification. When the document states an expiration / valid-through date (text files and text-layer PDFs), it is read from the document and shown below — check it and correct it if it is wrong. Images cannot be read for a date, and a document that states no expiration is marked "no expiration found": in both cases enter the date manually. Nothing here is invented. Expiring certifications appear on the Dashboard under Credential deadlines, on the same 90/60/30/7-day windows as licenses.</p>${docStorageError ? `<p class="hint">Storage note: ${escapeHTML(docStorageError)}</p>` : ''}
-  <form data-kind="documents"><div class="form-grid">${select('type', 'Certification type', ['ACLS', 'BLS', 'PALS', 'NRP', 'Other'], doc.certType && ['ACLS', 'BLS', 'PALS', 'NRP'].includes(doc.certType) ? doc.certType : (doc.certType ? 'Other' : 'ACLS'))}${field('otherType', 'Other certification (if Other)', 'text', doc.certType && !['ACLS', 'BLS', 'PALS', 'NRP'].includes(doc.certType) ? doc.certType : '')}${field('issue', 'Issue date', 'date', doc.issue || '')}${field('expiry', 'Expiration date (leave blank to read it from the file)', 'date', doc.expiry || '')}${field('file', 'Certification document file', 'file', '', 'accept=".pdf,.txt,.png,.jpg,.jpeg"')}</div>${formEnd(editId && db.documents.some(x => x.id === editId) ? 'Save certification document' : 'Add certification document')}</form>
-  ${docs.length ? docs.map(x => { const d = daysUntil(x.expiry); const src = x.expirySource === 'extracted' ? 'Expiration extracted from document' : x.expirySource === 'user-entered' ? 'Expiration entered manually' : 'No expiration found'; return `<div class="item"><div><strong>${escapeHTML(x.certType || 'Certification')}</strong>${x.fileName ? ' · ' + escapeHTML(x.fileName) : ''}${x.issue ? ' · issued ' + fmt(x.issue) : ''}<div class="muted">${x.expiry ? ('Expires ' + fmt(x.expiry) + (d !== null ? ` <span class="${d < 0 ? 'expired' : d <= 7 ? 'expired' : d <= 30 ? 'warning' : 'success'}">${d < 0 ? ('Expired ' + Math.abs(d) + ' days ago') : d === 0 ? 'Due today' : ('Due in ' + d + ' days')}</span>` : '')) : '<span class="warning">No expiration found — enter it manually</span>'} · ${src} · ${x.storagePath ? 'Stored in your private cloud storage' : 'File details on this device only — file not stored'}</div></div><div class="item-actions">${x.storagePath ? `<button class="tiny secondary" data-action="download-doc" data-id="${escapeHTML(x.id)}">Download</button>` : ''}<button class="tiny secondary" data-action="edit-documents" data-id="${escapeHTML(x.id)}">${x.storagePath ? 'Replace / edit' : 'Edit'}</button><button class="tiny danger" data-action="delete-documents" data-id="${escapeHTML(x.id)}">Delete</button></div></div>`; }).join('') : '<p class="muted">No certification documents yet.</p>'}</section>`;
+  return `<section class="panel" id="cert-documents"><h2>Certification documents</h2><p class="muted">${escapeHTML(docStorageStatus())}</p><p class="muted">Upload a certification card or certificate for ACLS, BLS, PALS, NRP, or another certification. When the document states an expiration / valid-through date, it is read from the document and shown below — check it and correct it if it is wrong: text files and text-layer PDFs from their text, and photos of cards with on-device OCR (Tesseract.js, loaded only when you pick a picture — no picture is sent to a server for OCR). A date read from a month/year only (e.g. "Dec 2027") is taken as the last day of that month — check it. A document that states no expiration is marked "no expiration found": enter the date manually. Nothing here is invented. <strong>Standard reminder: 3 months (90 days) before expiration</strong>, plus 60, 30 and 7 days — expiring certifications appear on the Dashboard under Credential deadlines at those windows. You can edit the issue and expiration dates on any saved certification with its Edit button.</p>${docOcrStatus ? `<p class="hint" id="docOcrStatus">${escapeHTML(docOcrStatus)}</p>` : ''}${docStorageError ? `<p class="hint">Storage note: ${escapeHTML(docStorageError)}</p>` : ''}
+  <form data-kind="documents"><div class="form-grid">${select('type', 'Certification type', ['ACLS', 'BLS', 'PALS', 'NRP', 'Other'], doc.certType && ['ACLS', 'BLS', 'PALS', 'NRP'].includes(doc.certType) ? doc.certType : (doc.certType ? 'Other' : 'ACLS'))}${field('otherType', 'Other certification (if Other)', 'text', doc.certType && !['ACLS', 'BLS', 'PALS', 'NRP'].includes(doc.certType) ? doc.certType : '')}${field('issue', 'Issue date', 'date', doc.issue || '')}${field('expiry', 'Expiration date (leave blank to read it from the file)', 'date', doc.expiry || '')}${field('file', 'Certification document file', 'file', '', 'accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,.heic"')}</div>${formEnd(editId && db.documents.some(x => x.id === editId) ? 'Save certification document' : 'Add certification document')}</form>
+  ${docs.length ? docs.map(x => { const d = daysUntil(x.expiry); const src = x.expirySource === 'extracted' ? 'Expiration extracted from document' : x.expirySource === 'user-entered' ? 'Expiration entered manually' : 'No expiration found'; return `<div class="item"><div><strong>${escapeHTML(x.certType || 'Certification')}</strong>${x.fileName ? ' · ' + escapeHTML(x.fileName) : ''}${x.issue ? ' · issued ' + fmt(x.issue) : ''}<div class="muted">${x.expiry ? ('Expires ' + fmt(x.expiry) + (d !== null ? ` <span class="${d < 0 ? 'expired' : d <= 7 ? 'expired' : d <= 30 ? 'warning' : 'success'}">${d < 0 ? ('Expired ' + Math.abs(d) + ' days ago') : d === 0 ? 'Due today' : ('Due in ' + d + ' days')}</span>` : '') + (addDaysISO(x.expiry, -90) ? ` · 3-month reminder ${fmt(addDaysISO(x.expiry, -90))}` : '')) : '<span class="warning">No expiration found — enter it manually</span>'} · ${src} · ${x.storagePath ? 'Stored in your private cloud storage' : 'File details on this device only — file not stored'}</div></div><div class="item-actions">${x.storagePath ? `<button class="tiny secondary" data-action="download-doc" data-id="${escapeHTML(x.id)}">Download</button>` : ''}<button class="tiny secondary" data-action="edit-documents" data-id="${escapeHTML(x.id)}">${x.storagePath ? 'Replace / edit' : 'Edit'}</button><button class="tiny danger" data-action="delete-documents" data-id="${escapeHTML(x.id)}">Delete</button></div></div>`; }).join('') : '<p class="muted">No certification documents yet.</p>'}</section>`;
 }
 async function submitDocument(e) {
   docStorageError = '';
@@ -157,21 +200,40 @@ async function submitDocument(e) {
   const isEdit = editId && (db.documents || []).some(x => x.id === editId);
   const recId = isEdit ? editId : id();
   const oldRec = isEdit ? (db.documents || []).find(x => x.id === editId) : null;
-  let expiry = manualExpiry, expirySource = manualExpiry ? 'user-entered' : 'none', note = '';
+  // A date the user types (or leaves as-is after changing it) is user-entered.
+  // An edit that leaves the previously extracted date untouched keeps its
+  // 'extracted' source; changing it flips the source to 'user-entered'.
+  let expiry = manualExpiry, expirySource = manualExpiry ? ((isEdit && oldRec && manualExpiry === oldRec.expiry) ? (oldRec.expirySource || 'user-entered') : 'user-entered') : 'none', note = '';
   if (file) {
     try {
       if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
-        const ex = extractExpiryDate(await extractPdfText(file));
-        if (!manualExpiry && ex) { expiry = ex; expirySource = 'extracted'; }
+        const info = extractExpiryDateInfo(await extractPdfText(file));
+        if (!manualExpiry && info.iso) { expiry = info.iso; expirySource = 'extracted'; if (info.via === 'latest-date') note = 'Expiration taken from the latest date in the document — please check it is the expiration date, not the issue date, and correct it if it is wrong.'; }
         else if (!manualExpiry) note = 'No expiration date found in this document — please enter it manually.';
       } else if (file.type.startsWith('text/') || /\.txt$/i.test(file.name)) {
-        const ex = extractExpiryDate(await file.text());
-        if (!manualExpiry && ex) { expiry = ex; expirySource = 'extracted'; }
+        const info = extractExpiryDateInfo(await file.text());
+        if (!manualExpiry && info.iso) { expiry = info.iso; expirySource = 'extracted'; if (info.via === 'latest-date') note = 'Expiration taken from the latest date in the document — please check it is the expiration date, not the issue date, and correct it if it is wrong.'; }
         else if (!manualExpiry) note = 'No expiration date found in this document — please enter it manually.';
-      } else if (file.type.startsWith('image/')) {
-        note = 'This is an image — the expiration date could not be read from it. Please enter it manually.';
+      } else if (file.type.startsWith('image/') || /\.(png|jpe?g|webp|heic)$/i.test(file.name)) {
+        // Photos of cards: read on this device with OCR (Tesseract.js, loaded
+        // only now). No picture is sent to a server for OCR. The OCR text goes
+        // through the same date extraction as text/PDFs, preferring a date
+        // next to an expiration label. If OCR finds no confident date, say so
+        // plainly — never invent one.
+        docOcrStatus = 'Reading your picture on this device with OCR (Tesseract.js) — no picture is sent to a server for OCR. This can take a few seconds…';
+        render();
+        try {
+          const ocrText = await ocrImageFile(file, m => { const el = document.getElementById('docOcrStatus'); if (el && m && m.status) el.textContent = `Reading your picture on this device with OCR… ${m.status}${m.progress != null ? ' ' + Math.round(m.progress * 100) + '%' : ''}`; });
+          docOcrStatus = '';
+          if (!ocrText.trim()) note = 'OCR read no text from this picture. Try a clearer, well-lit photo with the text upright, or enter the expiration date manually.';
+          else {
+            const info = extractExpiryDateInfo(ocrText, { ocr: true });
+            if (!manualExpiry && info.iso) { expiry = info.iso; expirySource = 'extracted'; if (info.via === 'latest-date') note = 'Expiration taken from the latest date in the picture — please check it is the expiration date, not the issue date, and correct it if it is wrong.'; }
+            else if (!manualExpiry) note = 'OCR read text from this picture but found no expiration date in it — please enter it manually.';
+          }
+        } catch (err) { docOcrStatus = ''; note = 'Could not read this picture with on-device OCR: ' + err.message + ' Try a clearer photo, or enter the expiration date manually.'; }
       } else { note = 'This file type could not be read for an expiration date — please enter it manually.'; }
-    } catch (err) { note = 'Could not read this file for an expiration date: ' + err.message + ' — please enter it manually.'; }
+    } catch (err) { docOcrStatus = ''; note = 'Could not read this file for an expiration date: ' + err.message + ' — please enter it manually.'; }
   } else if (!manualExpiry) note = 'No expiration entered and no file to read — enter the expiration manually.';
   let storagePath = oldRec ? oldRec.storagePath || '' : '', storageStatus = oldRec ? oldRec.storageStatus || 'local_details_only' : 'no_file', fileName = oldRec ? oldRec.fileName || '' : '';
   if (file) {
@@ -190,8 +252,11 @@ async function submitDocument(e) {
   const rec = { id: recId, certType, issue, expiry, expirySource, fileName, storagePath, storageStatus, uploadedAt: (oldRec && oldRec.uploadedAt) || cloudNow() };
   if (isEdit) db.documents = db.documents.map(x => x.id === recId ? rec : x); else db.documents = [...(db.documents || []), rec];
   editId = null; persist();
-  if (cloudSyncEnabled()) { try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); } catch (err) { docStorageError = err.message; } }
+  // Show the saved record immediately, before the cloud round-trip: a slow or
+  // failing cloud save must never leave the list looking empty after a save.
+  docOcrStatus = '';
   render();
+  if (cloudSyncEnabled()) { try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); } catch (err) { docStorageError = err.message; render(); } }
   let msg = 'Certification document saved.';
   if (expirySource === 'extracted') msg += ' Expiration extracted from the document: ' + fmt(expiry) + '. Check it and correct it if it is wrong.';
   else if (note) msg += ' ' + note;
@@ -673,7 +738,7 @@ async function cloudUpsertPortals() { const states = []; (db.licenses || []).for
 // reset to 'connected' by a manual upload, or vice versa.
 const missing = desired.filter(d => !(existing || []).some(e => e.portal === d.portal && (e.state || null) === (d.state || null))); if (missing.length) { const rows = missing.map(d => ({ id: id(), user_id: cloudUid(), portal: d.portal, state: d.state, status: 'not_connected', last_synced_at: null, last_error: null })); await sbReq('/rest/v1/portal_connections', 'POST', rows); } }
 async function cloudUploadLocal() { if (!cloudSession) return; try { const rows = []; if (cloudLocalHasNbcrna()) rows.push(sbReq('/rest/v1/nbcrna_profiles', 'POST', cloudNbcrnaRow())); if (cloudLocalHasAana()) rows.push(sbReq('/rest/v1/aana_memberships', 'POST', cloudAanaRow())); if ((db.licenses || []).length) rows.push(sbReq('/rest/v1/licenses', 'POST', (db.licenses || []).map(cloudLicenseRow))); const ceRows = (db.nbcrnaCE || []).map(x => cloudCeRow(x, 'nbcrna')).concat((db.aanaCE || []).map(x => cloudCeRow(x, 'aana'))); if ((db.documents || []).length) rows.push(sbReq('/rest/v1/documents', 'POST', (db.documents || []).map(cloudDocumentRow))); if (ceRows.length) rows.push(sbReq('/rest/v1/ce_records', 'POST', ceRows)); await Promise.all(rows); await cloudUpsertPortals(); cloudActive = true; cloudPending = null; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); render(); alert('On-device credential records uploaded to your cloud account.'); } catch (e) { cloudOffline = true; cloudError = e.message; render(); alert('Upload failed: ' + e.message); } }
-function cloudApplyData(data) { const prevN = db.nbcrna || {}, prevA = db.aana || {}; cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; db.nbcrna = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, docNote: prevN.docNote || '', ceNote: prevN.ceNote || '', reminders: prevN.reminders || '90,60,30,7' }; cloudSyncTimes.nbcrna = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); db.licenses = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7' })); if ((data.licenses || []).length) cloudSyncTimes.licenses = (data.licenses || []).map(r => r.last_synced_at || '').sort().pop(); if (data.aana) { const r = data.aana; db.aana = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: prevA.docNote || '', ceNote: prevA.ceNote || '', reminders: prevA.reminders || '90,60,30,7' }; cloudSyncTimes.aana = r.last_synced_at || ''; } db.nbcrnaCE = (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A' })); db.aanaCE = (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '' }));if (Array.isArray(data.documents)) db.documents = data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '' }));
+function cloudApplyData(data) { const prevN = db.nbcrna || {}, prevA = db.aana || {}; cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; db.nbcrna = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, docNote: prevN.docNote || '', ceNote: prevN.ceNote || '', reminders: prevN.reminders || '90,60,30,7' }; cloudSyncTimes.nbcrna = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); db.licenses = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7' })); if ((data.licenses || []).length) cloudSyncTimes.licenses = (data.licenses || []).map(r => r.last_synced_at || '').sort().pop(); if (data.aana) { const r = data.aana; db.aana = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: prevA.docNote || '', ceNote: prevA.ceNote || '', reminders: prevA.reminders || '90,60,30,7' }; cloudSyncTimes.aana = r.last_synced_at || ''; } db.nbcrnaCE = (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A' })); db.aanaCE = (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '' }));if (Array.isArray(data.documents)) { const cloudDocs = data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '' })); const cloudIds = new Set(cloudDocs.map(r => r.id)); const localOnly = (db.documents || []).filter(x => !cloudIds.has(x.id)); db.documents = [...cloudDocs, ...localOnly]; }
 cloudActive = true; cloudPending = null; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudLoadIntoLocal() { if (!cloudSession) return; try { const data = await cloudFetchAll(); cloudApplyData(data); render(); alert('Cloud credential records loaded onto this device.'); } catch (e) { cloudOffline = true; cloudError = e.message; render(); alert('Sync failed: ' + e.message); } }
 async function cloudAfterSignIn() { try { const data = await cloudFetchAll(); const counts = cloudCountsOf(data); if (cloudActive) { cloudApplyData(data); } else { cloudPending = { counts: counts, hasLocal: cloudLocalHasRecords() }; } render(); setTab('Account'); } catch (e) { cloudOffline = true; cloudError = e.message; cloudPending = { counts: null, hasLocal: cloudLocalHasRecords() }; render(); setTab('Account'); } }
