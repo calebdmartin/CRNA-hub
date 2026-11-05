@@ -35,14 +35,19 @@ let liveSyncBusy = '';
 // Holds the Apple ID + app-specific password only until the pick is made
 // or cancelled; never persisted, never stored on this device.
 let liveSyncApplePick = null; // { appleId, password, calendars: [{url, name}] }
+// Apple import-source picker: the user's iCloud calendars, listed
+// server-side (never the password). Empty until fetched for a connected
+// Apple account; the dedicated "CRNA Hub" calendar is flagged on each
+// entry (isDedicated) and excluded from the picker.
+let liveSyncAppleCalendars = [];
 let liveSyncPushTimer = null;
 
 function liveSyncStateLoad() {
   try {
     const v = JSON.parse(localStorage.getItem('crna-hub-live-sync') || 'null');
-    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [] };
+    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null };
   } catch (e) {}
-  return { pending: [], tombstones: [] };
+  return { pending: [], tombstones: [], lastImport: null };
 }
 let liveSyncState = liveSyncStateLoad();
 function liveSyncStateSave() {
@@ -156,6 +161,16 @@ async function liveSyncFetchLog() {
     liveSyncLog = Array.isArray(data.log) ? data.log : [];
   } catch (e) { liveSyncLog = []; }
 }
+async function liveSyncFetchAppleCalendars() {
+  // Only for a connected Apple account; anything else leaves the list
+  // empty and the picker hidden. A failure here is not a sync failure —
+  // the picker just shows "could not load calendars" with a retry.
+  if (!liveSyncConnections.apple || liveSyncConnections.apple.status !== 'connected') { liveSyncAppleCalendars = []; return; }
+  try {
+    const data = await liveSyncGet('sync-calendar', 'apple-calendars');
+    liveSyncAppleCalendars = Array.isArray(data.calendars) ? data.calendars : [];
+  } catch (e) { liveSyncAppleCalendars = []; }
+}
 
 function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
@@ -164,20 +179,28 @@ function liveSyncApplyChanges(provider, data) {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
       if (db.shifts.some((x) => x.date === s.date && x.facility === s.facility && x.type === s.type)) return;
-      db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: 'calendar-' + provider, status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
+      // Imported shifts arrive with source 'apple-import' (and a note
+      // naming the calendar they came from); dedicated-calendar shifts
+      // carry no source and default to 'calendar-<provider>'.
+      db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
       created++;
     } else if (ch.action === 'update' && ch.shift) {
       const s = ch.shift, x = db.shifts.find((y) => y.id === s.id);
       if (!x) return;
       x.date = s.date; x.facility = s.facility; x.type = s.type;
       x.pay = s.pay ? String(s.pay) : x.pay; x.note = s.note || '';
-      x.source = 'calendar-' + provider; x.updatedAt = s.updatedAt || x.updatedAt;
+      x.source = s.source || x.source || ('calendar-' + provider); x.updatedAt = s.updatedAt || x.updatedAt;
       updated++;
     } else if (ch.action === 'delete' && ch.shiftId) {
       db.shifts = db.shifts.filter((x) => x.id !== ch.shiftId);
       deleted++;
     }
   });
+  // Remember the last Apple import result so the panel can say
+  // "imported N shifts from Caleb Work Schedule" after the alert closes.
+  if (data.imported && typeof data.imported === 'object') {
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, error: data.imported.error || null, at: new Date().toISOString() };
+  }
   (data.pendingDeletions || []).forEach((p) => {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
       liveSyncState.pending.push({ provider: p.provider, shiftId: p.shiftId, date: p.date || '', facility: p.facility || '', type: p.type || '', localMissing: !!p.localMissing });
@@ -209,7 +232,17 @@ async function liveSyncNow(provider, silent) {
     await liveSyncFetchLog();
     liveSyncBusy = '';
     render();
-    if (!silent) alert('Synced ' + liveSyncLabel(provider) + ': ' + applied.created + ' created, ' + applied.updated + ' updated, ' + applied.deleted + ' deleted, ' + applied.flagged + ' flagged for your confirmation (see Pending deletions below).');
+    if (!silent) {
+      let msg = 'Synced ' + liveSyncLabel(provider) + ': ' + applied.created + ' created, ' + applied.updated + ' updated, ' + applied.deleted + ' deleted, ' + applied.flagged + ' flagged for your confirmation (see Pending deletions below).';
+      if (data.imported && typeof data.imported === 'object') {
+        if (data.imported.error) {
+          msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the dedicated-calendar sync above still ran; try Sync now again.';
+        } else {
+          msg += ' Imported ' + data.imported.created + ' shift(s) from “' + data.imported.sourceCalendarName + '”' + (data.imported.updated ? ', ' + data.imported.updated + ' updated' : '') + (data.imported.duplicates ? ', ' + data.imported.duplicates + ' already here' : '') + (data.imported.skipped ? ' (' + data.imported.skipped + ' event(s) in that calendar were not shifts and were skipped)' : '') + '.';
+        }
+      }
+      alert(msg);
+    }
   } catch (e) {
     liveSyncBusy = '';
     liveSyncError = e.message;
@@ -291,9 +324,10 @@ async function liveSyncAppleConnect() {
     await liveSyncPost('sync-calendar', { action: 'connect-apple', appleId, appSpecificPassword: password });
     liveSyncApplePick = null;
     await liveSyncFetchStatus();
+    await liveSyncFetchAppleCalendars();
     await liveSyncFetchLog();
     render();
-    alert('Apple Calendar connected. Shifts will sync with your dedicated “CRNA Hub” calendar.');
+    alert('Apple Calendar connected. Shifts will sync with your dedicated “CRNA Hub” calendar. If your shifts live in another calendar (for example “Caleb Work Schedule”), pick it below under “Import shifts from” and sync — those shifts will be pulled in.');
   } catch (e) {
     // iCloud refused to create a new calendar: offer the user's
     // existing calendars instead of failing the whole connect.
@@ -328,12 +362,43 @@ async function liveSyncApplePickUse() {
     await liveSyncPost('sync-calendar', { action: 'connect-apple', appleId, appSpecificPassword: password, calendarUrl });
     liveSyncApplePick = null;
     await liveSyncFetchStatus();
+    await liveSyncFetchAppleCalendars();
     await liveSyncFetchLog();
     render();
     alert('Apple Calendar connected to “' + (picked && picked.name ? picked.name : 'your chosen calendar') + '”. Shifts will sync with that calendar.');
   } catch (e) {
     render();
     alert('Could not connect to that calendar: ' + e.message + '. Nothing was stored.');
+  }
+}
+// Save the Apple import-source calendar picked in the connected Apple
+// card, then sync immediately so the result ("imported N shifts from …")
+// is visible at once instead of waiting for the next app open. Only the
+// calendar URL + name are sent; the password is never involved here.
+async function liveSyncAppleSourceSave() {
+  const sel = document.getElementById('f_liveAppleSource');
+  const calendarUrl = sel ? sel.value : '';
+  const picked = liveSyncAppleCalendars.find((c) => c.url === calendarUrl);
+  const calendarName = picked ? (picked.name || '') : '';
+  try {
+    await liveSyncPost('sync-calendar', { action: 'set-apple-source-calendar', calendarUrl, calendarName });
+    await liveSyncFetchStatus();
+    await liveSyncFetchAppleCalendars();
+    render();
+    if (!calendarUrl) {
+      alert('Import source cleared — Apple sync now uses the dedicated “CRNA Hub” calendar only.');
+      return;
+    }
+    await liveSyncNow('apple', false);
+  } catch (e) {
+    render();
+    if (e.message === 'migration_004_required') {
+      alert('The app owner still needs to run migration 004 (supabase-schema-004.sql) in the Supabase SQL Editor before an import source can be saved. Sync itself is unaffected — it still uses the dedicated “CRNA Hub” calendar.');
+    } else if (e.message === 'source_is_dedicated_calendar') {
+      alert('That is the dedicated “CRNA Hub” calendar — pick a different calendar to import from.');
+    } else {
+      alert('Could not save that import source: ' + e.message + '. Nothing was changed.');
+    }
   }
 }
 async function liveSyncResolvePending(entry, decision) {
@@ -373,9 +438,11 @@ function liveSyncAction(action, entry) {
   if (action === 'live-apple-connect') return liveSyncAppleConnect();
   if (action === 'live-apple-pick') return liveSyncApplePickUse();
   if (action === 'live-apple-pick-cancel') { liveSyncApplePick = null; return render(); }
+  if (action === 'live-apple-calendars') { liveSyncFetchAppleCalendars().then(() => render()); return; }
+  if (action === 'live-apple-source-save') return liveSyncAppleSourceSave();
   if (action === 'live-wizard') { liveSyncWizard = !liveSyncWizard; return render(); }
   if (action === 'live-refresh') {
-    liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchLog()).then(() => render());
+    liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchAppleCalendars()).then(() => liveSyncFetchLog()).then(() => render());
     return;
   }
   if (action === 'live-confirm-delete') return liveSyncResolvePending(entry, 'delete');
@@ -399,7 +466,33 @@ function liveSyncProviderCard(provider) {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Needs reconnecting</span></div><div class="muted">Access expired or was revoked. Reconnect to restore sync. Nothing was deleted.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Reconnect</button></div></div>';
   }
   if (conn && conn.status === 'connected') {
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Syncs to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div></div>';
+    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
+    if (provider === 'apple') {
+      // Import source: the dedicated calendar starts empty, so shifts
+      // that live in another iCloud calendar (e.g. "Caleb Work
+      // Schedule") never arrive unless the user picks that calendar
+      // here. Read-only pull: only Holzer-titled events become shifts,
+      // anything else is skipped, and nothing is ever written back.
+      const current = conn.sourceCalendarUrl || '';
+      const importable = liveSyncAppleCalendars.filter((c) => !c.isDedicated);
+      let picker;
+      if (!liveSyncAppleCalendars.length) {
+        picker = '<p class="muted">Your iCloud calendars could not be listed yet.</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-calendars">Load my calendars</button></div>';
+      } else if (!importable.length) {
+        picker = '<p class="muted">No other iCloud calendar was found to import from — only the dedicated “CRNA Hub” calendar exists.</p>';
+      } else {
+        const opts = '<option value="">No import — “CRNA Hub” calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
+        picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Import shifts from</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save import source &amp; sync now</button></div>';
+      }
+      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls its Holzer shifts in (Holzer 8, Holzer 8/2nd call, Holzer 24/1st call, Holzer 10…). Events that are not Holzer shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
+      const li = liveSyncState.lastImport;
+      if (li && li.provider === 'apple') {
+        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : '')) + '.</p>';
+      } else if (current) {
+        card += '<p class="muted">Import source: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
+      }
+    }
+    return card + '</div>';
   }
   if (provider === 'apple') {
     if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
@@ -419,6 +512,7 @@ function liveSyncWizardHTML() {
     + '<p class="muted">Everything in the app and the Edge Functions is already built. Live sync turns on the moment the owner finishes these steps — no app change is needed after that. End users never see this wizard unless setup is unfinished.</p>'
     + '<ol>'
     + '<li><strong>Run migration 003</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-003.sql</code> (tables for connections, sync map, OAuth state, pending deletions, sync log).</li>'
+    + '<li><strong>Run migration 004</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-004.sql</code> (Apple import-source calendar choice + import pairing table). Without it, sync still works, but the Apple “Import shifts from” picker cannot save a source.</li>'
     + '<li><strong>Deploy the functions:</strong> <code>supabase link --project-ref xgoghgihfhtnyevgapyp</code>, then <code>supabase functions deploy google-auth outlook-auth sync-calendar</code> (or <code>sh supabase/deploy-calendar-sync.sh</code>).</li>'
     + '<li><strong>Set function secrets</strong> (server side only, never in this repo): <code>APP_URL</code> = the URL users open, <code>CALENDAR_ENCRYPTION_KEY</code> = output of <code>openssl rand -hex 32</code>, plus the provider IDs/secrets below.</li>'
     + '<li><strong>Google Cloud (once):</strong> enable the Google Calendar API; create a Web OAuth client; authorized redirect URI (exact): <code>' + escapeHTML(googleUri) + '</code>; scope: <code>https://www.googleapis.com/auth/calendar</code>. Copy the client ID + secret into function secrets as <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>. Add test users if Google requires verification.</li>'
@@ -440,7 +534,7 @@ function liveSyncPanelHTML() {
     if (liveSyncWizard) html += liveSyncWizardHTML();
     html += '<p class="muted">Manual fallback (works today, no sign-in): .ics import/export below.</p>';
   } else {
-    html += '<p class="muted">Connect once per provider — then sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. Syncs use a dedicated “CRNA Hub” calendar in each provider; your other calendars are never touched.</p>';
+    html += '<p class="muted">Connect once per provider — then sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. Syncs write to a dedicated “CRNA Hub” calendar in each provider; your other calendars are never written to. Apple can also <strong>read</strong> one calendar you pick (see the Apple card) to pull your existing shifts in.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
     html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button>' + (liveSyncConfig.state === 'ready' ? '' : '<button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button>') + '</div>';
@@ -479,6 +573,7 @@ async function liveSyncInit() {
   if (typeof cloudSession === 'undefined' || !cloudSession) return;
   await liveSyncFetchConfig();
   await liveSyncFetchStatus();
+  await liveSyncFetchAppleCalendars();
   await liveSyncFetchLog();
   const connected = liveSyncConnectedProviders();
   if (connected.length) {
