@@ -251,7 +251,11 @@ async function liveSyncNow(provider, silent) {
       render();
       if (!silent) alert(liveSyncLabel(provider) + ' needs reconnecting — click Connect again and approve access. Nothing was deleted.');
     } else if (!silent) {
-      alert('Sync with ' + liveSyncLabel(provider) + ' failed: ' + e.message + '. Nothing was deleted. See the sync log below.');
+      if (e.message === 'sync_timed_out') {
+        alert('Sync with ' + liveSyncLabel(provider) + ' timed out before the calendar service answered. Nothing was deleted. Tap Sync now again — the next attempt usually finishes faster.');
+      } else {
+        alert('Sync with ' + liveSyncLabel(provider) + ' failed: ' + e.message + '. Nothing was deleted. See the sync log below.');
+      }
       render();
     }
   }

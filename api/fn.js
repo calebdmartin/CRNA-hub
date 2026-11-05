@@ -104,7 +104,15 @@ module.exports = async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.status(upstreamRes.status).send(text);
   } catch (e) {
-    res.status(502).json({ error: 'upstream_unreachable', message: 'Could not reach the sync service.' });
+    // A timeout is a different failure from an unreachable service:
+    // the sync itself was still running server-side (a big calendar
+    // scan used to take 30-80s), so the client can say "try again"
+    // instead of implying the service is down.
+    if (controller.signal.aborted) {
+      res.status(502).json({ error: 'sync_timed_out', message: 'The sync service took too long to answer. Nothing was changed — tap Sync now again.' });
+    } else {
+      res.status(502).json({ error: 'upstream_unreachable', message: 'Could not reach the sync service.' });
+    }
   } finally {
     clearTimeout(timer);
   }

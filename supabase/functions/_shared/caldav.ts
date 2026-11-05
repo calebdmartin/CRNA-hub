@@ -346,18 +346,58 @@ export async function fetchAppleEvents(
   if (!list.ok) throw new Error("apple_dav_failed");
   const xml = await list.text();
   const events: ProviderEvent[] = [];
+  // Collect first, then fetch in parallel batches: the old code awaited
+  // one GET per event in sequence, so a calendar with ~100 events took
+  // 30-80s of iCloud round trips and the sync proxy gave up at 25s
+  // ("upstream_unreachable"). Eight at a time keeps it to a few seconds.
+  const targets: string[] = [];
   for (const resp of xml.split(/<(?:[A-Za-z_][\w.-]*:)?response(?:\s[^>]*)?>/i).slice(1)) {
     const href = firstHref(resp);
     const etagRaw = elementContent(resp, "getetag");
     const etag = etagRaw !== null ? decodeXml(etagRaw) : undefined;
     if (!href || href.replace(/\/$/, "") === calendarUrl.replace(/\/$/, "")) continue;
     if (etag && knownEtags.get(href) === etag) continue;
-    const get = await dav(resolveHref(href, calendarUrl), appleId, password, "GET", null, null, "text/calendar");
-    if (!get.ok) continue;
-    const ev = parseIcsEvent(await get.text(), href);
-    if (ev) events.push(ev);
+    targets.push(href);
+  }
+  for (let i = 0; i < targets.length; i += 8) {
+    const batch = await Promise.all(targets.slice(i, i + 8).map(async (href) => {
+      const get = await dav(resolveHref(href, calendarUrl), appleId, password, "GET", null, null, "text/calendar");
+      if (!get.ok) return null;
+      return parseIcsEvent(await get.text(), href);
+    }));
+    for (const ev of batch) if (ev) events.push(ev);
   }
   return { events, deletedIds: [], syncToken: null };
+}
+
+// Full-calendar read in ONE request: a calendar-query REPORT with a
+// time-range returns every event's ICS inline, instead of one PROPFIND
+// plus one GET per event. This is what the work-calendar import uses:
+// "Caleb Work Schedule" holds 100+ events, and fetching them one at a
+// time is what pushed a sync past the proxy's 25s limit (the observed
+// "upstream_unreachable"). Returns null when the server refuses the
+// REPORT, so the caller can fall back to the etag scan above; a 401
+// still throws apple_auth_failed.
+export async function fetchAppleCalendarRange(
+  calendarUrl: string,
+  appleId: string,
+  password: string,
+  start: string,
+  end: string,
+): Promise<ProviderEvent[] | null> {
+  const report = await dav(calendarUrl, appleId, password, "REPORT",
+    `<?xml version="1.0"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:time-range start="${start}" end="${end}"/></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`, null);
+  if (report.status === 401) throw new Error("apple_auth_failed");
+  if (!report.ok) return null;
+  const xml = await report.text();
+  const events: ProviderEvent[] = [];
+  for (const resp of xml.split(/<(?:[A-Za-z_][\w.-]*:)?response(?:\s[^>]*)?>/i).slice(1)) {
+    const dataRaw = elementContent(resp, "calendar-data");
+    if (!dataRaw) continue;
+    const ev = parseIcsEvent(decodeXml(dataRaw), firstHref(resp) ?? "");
+    if (ev) events.push(ev);
+  }
+  return events;
 }
 
 export async function putAppleEvent(

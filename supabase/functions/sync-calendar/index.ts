@@ -160,6 +160,7 @@ import {
   deleteAppleEvent,
   discoverAppleCalendars,
   ensureAppleCalendar,
+  fetchAppleCalendarRange,
   fetchAppleEvents,
   putAppleEvent,
   verifyAppleCalendar,
@@ -381,18 +382,30 @@ async function fetchApple(
 ): Promise<Fetched> {
   const appleId = String(conn.provider_account ?? "");
   const password = await decryptSecret(String(conn.encrypted_password ?? ""));
-  const calendarUrl = await ensureAppleCalendar(appleId, password);
+  // The dedicated calendar URL is stored on the connection row at
+  // connect time: reusing it skips the 3-request discovery round trip
+  // on every sync. Only if the stored URL fails do we re-discover
+  // (e.g. the calendar was deleted and recreated) and retry once.
+  const storedUrl = String(conn.calendar_id ?? "").trim();
   const known = new Map<string, string>();
-  const { events, deletedIds, syncToken } = await fetchAppleEvents(
-    calendarUrl,
-    appleId,
-    password,
-    conn.sync_token ? String(conn.sync_token) : null,
-    known,
-  );
+  const syncToken = conn.sync_token ? String(conn.sync_token) : null;
+  let calendarUrl = storedUrl;
+  let fetchedEvents: Awaited<ReturnType<typeof fetchAppleEvents>> | null = null;
+  if (storedUrl) {
+    try {
+      fetchedEvents = await fetchAppleEvents(storedUrl, appleId, password, syncToken, known);
+    } catch {
+      fetchedEvents = null;
+    }
+  }
+  if (!fetchedEvents) {
+    calendarUrl = await ensureAppleCalendar(appleId, password);
+    fetchedEvents = await fetchAppleEvents(calendarUrl, appleId, password, syncToken, known);
+  }
+  const { events, deletedIds, syncToken: newSyncToken } = fetchedEvents;
   // The fallback etag scan cannot see deletions (an event simply stops
   // appearing), so deletedIds only ever comes from sync-collection.
-  return { events, deletedIds, syncToken, deltaLink: null };
+  return { events, deletedIds, syncToken: newSyncToken, deltaLink: null };
 }
 
 async function appleWrite(
@@ -403,7 +416,8 @@ async function appleWrite(
 ): Promise<void> {
   const appleId = String(conn.provider_account ?? "");
   const password = await decryptSecret(String(conn.encrypted_password ?? ""));
-  const calendarUrl = await ensureAppleCalendar(appleId, password);
+  const calendarUrl = String(conn.calendar_id ?? "").trim()
+    || await ensureAppleCalendar(appleId, password);
   if (method === "delete") {
     await deleteAppleEvent(calendarUrl, appleId, password, providerEventId ?? `${s.id}@crna-hub`);
     return;
@@ -451,6 +465,15 @@ async function fetchAppleSourceEvents(
 ): Promise<ProviderEvent[]> {
   const appleId = String(conn.provider_account ?? "");
   const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+  // One REPORT returns the whole calendar inline; the old path did a
+  // PROPFIND plus one sequential GET per event, which took 30-80s on a
+  // 100+ event work calendar and tripped the proxy's 25s limit
+  // ("upstream_unreachable" on Sync now). Fall back to the etag scan
+  // (now parallel-batched) only if the server refuses the REPORT.
+  const ranged = await fetchAppleCalendarRange(
+    sourceUrl, appleId, password, "20250101T000000Z", "20280101T000000Z",
+  );
+  if (ranged) return ranged;
   const { events } = await fetchAppleEvents(sourceUrl, appleId, password, null, new Map());
   return events;
 }
