@@ -243,7 +243,7 @@ run(`
   globalThis.__facPage = facilitiesPage();
   globalThis.__onboard3 = onboardingSteps()[2];
   globalThis.__onboardHtml = onboardingHTML();
-  globalThis.__buildStamp = BUILD_STAMP;
+  globalThis.__buildStamp = typeof BUILD_STAMP;
 `);
 t('disclaimer shows on the Dashboard near the income totals',
   sandbox.__dash.includes(DISCLAIMER));
@@ -253,7 +253,7 @@ t('guide no longer carries the disclaimer as a step paragraph',
   sandbox.__onboard3.title === 'Add facilities & contracts' &&
   !sandbox.__onboard3.direction.includes('Income figures are estimates') &&
   !sandbox.__onboardHtml.includes('Income figures are estimates'));
-t('build stamp is a tiny version line (cache v38, no changelog)', sandbox.__buildStamp.includes('cache v38') && !sandbox.__buildStamp.includes('TDZ'));
+t('build stamp is gone entirely (Nov 6 sweep: no version line in the UI)', sandbox.__buildStamp === 'undefined');
 t('no key-like secrets in app.js',
   !/(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/.test(fs.readFileSync(R + 'app.js', 'utf8')));
 console.log('hospital-suggestion test done');

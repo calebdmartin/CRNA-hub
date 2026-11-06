@@ -98,12 +98,12 @@ for (const [name, html] of Object.entries(pages)) {
     !html.includes('TDZ') && !html.includes('Still seeing an old build') &&
     !html.includes('helpers + SHIFT_STATUSES'));
 }
-t('Account small print carries the tiny version line, exactly once',
-  (pages.Account.match(/CRNA Hub version:/g) || []).length === 1 &&
-  pages.Account.includes('cache v38'));
-t('build stamp itself is a tiny version string (no changelog)',
-  run(`BUILD_STAMP`).includes('cache v38') && !run(`BUILD_STAMP`).includes('fix'));
-t('service worker cache bumped to v38', swSrc.includes("crna-hub-shell-v38"));
+t('Account small print carries NO version line (Nov 6 sweep: build stamp removed)',
+  (pages.Account.match(/CRNA Hub version:/g) || []).length === 0 &&
+  !pages.Account.includes('cache v'));
+t('build stamp is gone entirely from the app',
+  run(`typeof BUILD_STAMP`) === 'undefined' && !appSrc.includes('checkAppUpdate'));
+t('service worker cache bumped to v39', swSrc.includes("crna-hub-shell-v39"));
 
 // ---------- 4. Contract upload still works end to end (pasted text) ----------
 (async () => {

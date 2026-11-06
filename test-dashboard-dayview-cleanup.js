@@ -167,9 +167,10 @@ t('step 3 pay stub panel: one line, stub-never-stored kept, disclaimer out of th
 t('step 5 cert panel: one line instead of the how-it-works essay',
   cred.includes('Upload a cert and we’ll read its expiration date') &&
   !cred.includes('Tesseract.js') && !cred.includes('taken as the last day of that month'));
-t('step 4 cards: covers/finalFlow/Safari essays gone; status + stand-in label kept',
+t('step 4 cards: essays + ALL scaffolding gone (final-design status, stand-in label); status kept',
   !cred.includes('What the check covers') && !cred.includes('will not load here') &&
-  cred.includes('Final-design status:') && cred.includes('Preview stand-in'));
+  !cred.includes('Final-design status:') && !cred.includes('Preview stand-in') &&
+  cred.includes('Status:'));
 t('step 1 account panel: long sign-in/profile essays condensed',
   !acct.includes('Connect on the Credentials tab opens each real portal for you to sign in yourself') &&
   !acct.includes('in the Profile — step 1 panel'));

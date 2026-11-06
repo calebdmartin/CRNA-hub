@@ -158,17 +158,18 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   `);
 
   // --- 1. Final-model copy in the panel. ---
-  t('panel describes one connection + pick your existing work calendar',
-    sandbox.__panel.includes('pick the calendar your shifts already live in') &&
-    sandbox.__panel.includes('the app pulls from that calendar only'));
-  t('panel says the app keeps its own calendar behind the scenes',
-    sandbox.__panel.includes('keeps its own calendar behind the scenes'));
+  t('panel direction is one condensed line: connect once, pick your calendar',
+    sandbox.__panel.includes('Connect once, pick the calendar your shifts live in, and we’ll pull them in.'));
+  t('panel carries no preview/final-model scaffolding copy (Nov 6 sweep)',
+    !sandbox.__panel.includes('Preview stand-in') && !sandbox.__panel.includes('EventKit') &&
+    !sandbox.__panel.includes('behind the scenes') && !sandbox.__panel.includes('owner-setup') &&
+    !sandbox.__panel.includes('finished app'));
   t('panel never tells the user to create or label a "CRNA Hub" calendar',
     !sandbox.__panel.includes('dedicated') &&
     !sandbox.__panel.includes('Create a calendar') &&
     !sandbox.__panel.includes('“CRNA Hub” calendar'));
-  t('panel names the Apple preview stand-in honestly',
-    sandbox.__panel.includes('Preview stand-in') && sandbox.__panel.includes('EventKit'));
+  t('panel names no preview stand-in anywhere (Nov 6 sweep)',
+    !sandbox.__panel.includes('Preview stand-in') && !sandbox.__panel.includes('preview-standin'));
   t('Apple card has the work-calendar picker, not an "import source" picker',
     sandbox.__appleCard.includes('Your work calendar') &&
     sandbox.__appleCard.includes('Save work calendar &amp; sync now') &&
@@ -176,8 +177,9 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   t('work-calendar picker lists the work calendar and excludes the app-owned one',
     sandbox.__appleCard.includes('Caleb Work Schedule') &&
     !sandbox.__appleCard.includes('<option value="cal-app"'));
-  t('connected card says shifts go to the app-owned calendar, work calendar never written to',
-    sandbox.__appleCard.includes('your work calendar is never written to'));
+  t('connected card shows only compact status labels: last sync + auto-delete on/off',
+    sandbox.__appleCard.includes('Last sync:') && sandbox.__appleCard.includes('Auto-delete: OFF') &&
+    !sandbox.__appleCard.includes('Saved shifts') && !sandbox.__appleCard.includes('never written to'));
 
   // --- 2. Onboarding step 2 is a one-line direction; the final-model
   // copy lives on the sync panel (section 1), not in the guide. ---
@@ -198,25 +200,21 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     liveSyncConnections = { apple: { status: 'connected', autoDelete: false, lastSyncedAt: '2026-11-05T12:00:00Z', sourceCalendarUrl: 'cal-work', sourceCalendarName: 'Caleb Work Schedule' } };
     liveSyncApplePick = null;
   `);
-  t('disconnected Apple card leads with the final flow (one tap, grant access, pick work calendar)',
-    sandbox.__appleOff.includes('grant calendar access') &&
-    sandbox.__appleOff.includes('pick the calendar your shifts already live in'));
-  t('disconnected Apple card carries the stand-in label',
-    sandbox.__appleOff.includes('Preview stand-in — the finished app uses EventKit, no password needed'));
-  t('password field sits INSIDE the visually distinct stand-in box',
-    (() => {
-      const h = sandbox.__appleOff;
-      const box = h.indexOf('preview-standin');
-      const pw = h.indexOf('f_liveApplePw');
-      const end = h.indexOf('</div></div>', pw);
-      return box > -1 && pw > box && end > pw;
-    })());
+  t('disconnected Apple card leads with clean app-specific-password guidance, no scaffolding',
+    sandbox.__appleOff.includes('app-specific password') &&
+    sandbox.__appleOff.includes('Never enter your normal Apple password here') &&
+    !sandbox.__appleOff.includes('Preview stand-in') && !sandbox.__appleOff.includes('finished app') &&
+    !sandbox.__appleOff.includes('EventKit'));
+  t('password field sits inside the Apple card, after the guidance',
+    sandbox.__appleOff.indexOf('app-specific password') > -1 &&
+    sandbox.__appleOff.indexOf('f_liveApplePw') > sandbox.__appleOff.indexOf('app-specific password'));
   t('disconnected Apple card never presents the password as the designed path',
     !sandbox.__appleOff.includes('Apple has no one-click OAuth') &&
     !sandbox.__appleOff.includes('dedicated'));
-  t('pick-a-calendar card is framed as the final flow, not a failure workaround',
+  t('pick-a-calendar card is one clean line + the picker, no final-flow framing',
     sandbox.__applePick.includes('Pick your work calendar') &&
-    sandbox.__applePick.includes('In the finished app this picker is the whole connection'));
+    sandbox.__applePick.includes('Pick the calendar your shifts live in — we’ll pull from that one only.') &&
+    !sandbox.__applePick.includes('finished app'));
 
   // --- 4. Legacy connect alert is gone by design (Nov 5 polish): the
   // connect-calendar action now just opens the Account tab, where the
@@ -224,12 +222,10 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   t('connect-calendar action no longer shows a stale "not built yet" alert',
     !appSrc.includes('calSyncAlert') && appSrc.includes("if(action==='connect-calendar'){setTab('Account');return}"));
 
-  // --- 5. Wizard names EventKit + the stand-in for Apple. ---
-  run(`globalThis.__wizard = liveSyncWizardHTML();`);
-  t('owner-setup wizard: Apple step is EventKit / preview stand-in, not a password design',
-    sandbox.__wizard.includes('EventKit') &&
-    sandbox.__wizard.includes('Preview stand-in') &&
-    sandbox.__wizard.includes('work-calendar picker'));
+  // --- 5. Owner-setup wizard is GONE (Nov 6 sweep: dev scaffolding). ---
+  t('owner-setup wizard no longer exists and is not rendered',
+    run(`typeof liveSyncWizardHTML`) === 'undefined' &&
+    !sandbox.__panel.includes('wizard') && !sandbox.__panel.includes('Wizard'));
 
   // --- 6. Apply changes: dedupe, past-confirmed / future-proposed (Bug 1), unpriced-never-$0, suggestions, pending deletions. ---
   run(`

@@ -78,8 +78,8 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 t('no "Import & Backup" tab in tabs or the render map',
   run(`tabs.indexOf('Import & Backup')`) === -1 &&
   !appSrc.includes("'Import & Backup':importPage"));
-t('no user-facing "Import & Backup" copy remains (only the removal-note comment; the build stamp no longer carries it)',
-  (appSrc.match(/Import & Backup/g) || []).length === 1);
+t('no "Import & Backup" copy remains anywhere in app.js (Nov 6 sweep removed the last comment)',
+  (appSrc.match(/Import & Backup/g) || []).length === 0);
 run(`
   db.facilities = [{id:'f1', name:'Holzer', aliases:'', rate8:'2125', rate10:'2625', rate12:'', rate24:'', rateSecond:'3000', weekendRateSecond:'2000', hourlyRate:'250', paidHours8:'8.5', callBonus:'1000'}];
   db.shifts = [];
@@ -218,9 +218,9 @@ t('QGenda panel: subscription URL, secret handling, and the sign-in fallback',
   sandbox.__qg.includes('No QGenda password is ever asked for or stored') &&
   sandbox.__qg.includes('I signed in to QGenda') &&
   sandbox.__qg.includes('no background sync'));
-t('QGenda panel is honest that the official API is a later step, not built here',
-  sandbox.__qg.includes('official QGenda API') &&
-  sandbox.__qg.includes('later step'));
+t('QGenda panel carries no roadmap/API scaffolding (Nov 6 sweep)',
+  !sandbox.__qg.includes('official QGenda API') &&
+  !sandbox.__qg.includes('later step'));
 run(`
   db.settings.qgendaConnected = true;
   globalThis.__stepsQg = onboardingSteps();

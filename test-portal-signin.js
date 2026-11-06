@@ -92,26 +92,21 @@ t('spec: monitoring is weekly with 90/60/30/7 escalation; public automatic, priv
 t('spec: server owns the NBCRNA pull + blocked answers + status rows; native owns the sheet',
   run(`PORTAL_NATIVE_SPEC.serverOwns.join(' ')`).includes('NBCRNA public verification pull') &&
   run(`PORTAL_NATIVE_SPEC.nativeOwns.join(' ')`).includes('system sign-in sheet'));
-t('stand-in label constant is the exact agreed wording',
-  run(`PORTAL_STANDIN_LABEL`) === STANDIN);
+t('stand-in label constant is GONE (Nov 6 sweep)',
+  run(`typeof PORTAL_STANDIN_LABEL`) === 'undefined');
 
-// --- 2. Credentials tab: final model leads, stand-in is boxed and labelled.
+// --- 2. Credentials tab: clean Connect cards, no scaffolding (Nov 6 sweep).
 run(`globalThis.__cred = credentialsPage();`);
-t('Credentials tab states the final model (system sign-in sheet + Face ID, app never sees the password)',
-  sandbox.__cred.includes('system sign-in sheet') &&
-  sandbox.__cred.includes('iPhone Passwords + Face ID') &&
-  sandbox.__cred.includes('the app never sees your password'));
-t('Credentials tab: final model is stated BEFORE the stand-in label',
-  sandbox.__cred.indexOf('system sign-in sheet') < sandbox.__cred.indexOf(STANDIN));
-t('Credentials tab: stand-in is in a visually distinct .standin box with its label',
-  sandbox.__cred.includes('class="standin"') &&
-  sandbox.__cred.includes('<span class="standin-label">Preview stand-in</span>') &&
-  sandbox.__cred.includes(STANDIN));
-t('Credentials tab: each Connect card states its final-design status honestly',
-  sandbox.__cred.includes('Final-design status:') &&
-  sandbox.__cred.includes('<strong>unproven</strong>') &&
-  sandbox.__cred.includes('<strong>likely_blocked</strong>') &&
-  sandbox.__cred.includes('<strong>blocked</strong>'));
+t('Credentials tab: Connect cards carry only the clean sign-in line (no final-model essay)',
+  sandbox.__cred.includes('Sign in on the portal') &&
+  sandbox.__cred.includes('We never ask for your portal password') &&
+  !sandbox.__cred.includes('system sign-in sheet') && !sandbox.__cred.includes('Face ID'));
+t('Credentials tab: no stand-in label or box anywhere',
+  !sandbox.__cred.includes('standin') && !sandbox.__cred.includes(STANDIN));
+t('Credentials tab: no final-design status readout on any card',
+  !sandbox.__cred.includes('Final-design status:') &&
+  !sandbox.__cred.includes('<strong>unproven</strong>') &&
+  !sandbox.__cred.includes('<strong>likely_blocked</strong>'));
 t('Credentials tab: Connect / check-it / Safari actions still present on every card',
   sandbox.__cred.includes('Connect NBCRNA — open portal') &&
   sandbox.__cred.includes('Connect AANA — open portal') &&
@@ -142,26 +137,24 @@ t('Connect AANA opens the real AANA login URL in a new tab',
   sandbox.__openedAana.length === 2 && sandbox.__openedAana[1] === 'https://www.aana.com/login');
 t('"I signed in — check it" starts the assistant check (intro step, NBCRNA)',
   sandbox.__checkStep === 'intro' && sandbox.__checkSource === 'nbcrna');
-t('portal-check intro step states the per-source final flow and labels the stand-in',
-  sandbox.__assistantHtml.includes('system sign-in sheet') &&
-  sandbox.__assistantHtml.includes(STANDIN) &&
-  sandbox.__assistantHtml.includes('class="standin"') &&
+t('portal-check intro step states the clean per-source how, with no scaffolding',
+  sandbox.__assistantHtml.includes('Open the portal and sign in yourself') &&
+  !sandbox.__assistantHtml.includes('system sign-in sheet') &&
+  !sandbox.__assistantHtml.includes(STANDIN) && !sandbox.__assistantHtml.includes('standin') &&
   sandbox.__assistantHtml.includes('MAC Ed / MAC Dev'));
-t('portal-check intro step: final flow is stated before the stand-in',
-  sandbox.__assistantHtml.indexOf('system sign-in sheet') < sandbox.__assistantHtml.indexOf(STANDIN));
 
 // --- 4. Assistant tab intro + assistant answer: final first, stand-in labelled.
 run(`portalCheck = null; globalThis.__portalIntro = portalCheckHTML();`);
-t('Assistant portal-check intro leads with the final model and boxes the stand-in',
-  sandbox.__portalIntro.indexOf('system sign-in sheet') < sandbox.__portalIntro.indexOf(STANDIN) &&
-  sandbox.__portalIntro.includes('class="standin"'));
+t('Assistant portal-check intro is one clean line + Check buttons, no scaffolding',
+  sandbox.__portalIntro.includes('Sign in on the portal') &&
+  !sandbox.__portalIntro.includes('system sign-in sheet') &&
+  !sandbox.__portalIntro.includes(STANDIN) && !sandbox.__portalIntro.includes('standin'));
 run(`globalThis.__answer = answerQuestion('check my NBCRNA portal');`);
-t('assistant answer describes the sheet first and labels the new tab as the stand-in',
-  sandbox.__answer.includes('system sign-in sheet') &&
-  sandbox.__answer.includes(STANDIN) &&
-  sandbox.__answer.indexOf('system sign-in sheet') < sandbox.__answer.indexOf(STANDIN) &&
+t('assistant answer is clean: sign in yourself, show the page, nothing saved until approved',
+  !sandbox.__answer.includes('system sign-in sheet') &&
+  !sandbox.__answer.includes(STANDIN) &&
   sandbox.__answer.includes('never store a portal password') &&
-  sandbox.__answer.includes('never claim a record is verified unless I actually read it'));
+  sandbox.__answer.includes('never call a record verified unless I actually read it'));
 
 // --- 5. Onboarding step 4: one-line direction; the final model +
 // stand-in labelling live on the Credentials page (the destination).
@@ -169,10 +162,9 @@ run(`globalThis.__step4 = onboardingSteps()[3]; globalThis.__credPage = credenti
 t('onboarding step 4 direction is one short line: connect, sign in on the portal page, no password here',
   sandbox.__step4.direction.includes('Connect NBCRNA, AANA, and your state licenses') &&
   sandbox.__step4.direction.includes('never a password here'));
-t('Credentials page (step 4 destination) still leads with the sheet and labels the new-tab preview as the stand-in',
-  sandbox.__credPage.includes('system sign-in sheet') &&
-  sandbox.__credPage.includes(STANDIN) &&
-  sandbox.__credPage.indexOf('system sign-in sheet') < sandbox.__credPage.indexOf(STANDIN));
+t('Credentials page (step 4 destination) carries no scaffolding at all',
+  !sandbox.__credPage.includes('system sign-in sheet') &&
+  !sandbox.__credPage.includes(STANDIN) && !sandbox.__credPage.includes('standin'));
 
 // --- 6. Deterministic portal-page parsing: reads what is there, invents nothing.
 run(`
@@ -222,10 +214,10 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
   t('reading the page builds a preview and still saves nothing',
     run(`portalCheck && portalCheck.step`) === 'preview' && run(`db.nbcrna.status`) === '');
   run(`globalThis.__previewHtml = portalCheckHTML();`);
-  t('preview shows what was found, says nothing is saved until approved, and names the source on save',
+  t('preview shows what was found and says nothing is saved until approved',
     sandbox.__previewHtml.includes('Preview — NBCRNA portal check') &&
     sandbox.__previewHtml.includes('Nothing is saved until you approve below') &&
-    sandbox.__previewHtml.includes('assistant portal check — read from the page you provided, not a server portal pull'));
+    sandbox.__previewHtml.includes('Found:'));
 
   // Approve the preview: now it saves, labelled assistant_portal_check.
   run(`
@@ -290,11 +282,11 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     sandbox.__blockedLabel === 'Blocked — automation not allowed');
   t('a never-checked monitor is due now',
     sandbox.__dueNew === true);
-  t('monitoring panel states the schedule, the re-sign-in prompt, and the preview background limit',
-    sandbox.__monHtml.includes('weekly by default') &&
-    sandbox.__monHtml.includes('prompts you to sign in when due') &&
-    sandbox.__monHtml.includes('never silently logs in') &&
-    sandbox.__monHtml.includes('cannot run checks in the background while it is closed'));
+  t('monitoring panel is one clean line: weekly, faster near renewal, no password stored; no preview-limit scaffolding',
+    sandbox.__monHtml.includes('weekly — faster near renewal') &&
+    sandbox.__monHtml.includes('never store a portal password') &&
+    !sandbox.__monHtml.includes('Web-preview limit') &&
+    !sandbox.__monHtml.includes('finished app'));
 
   console.log(failures === 0 ? '\nAll portal-sign-in tests passed.' : `\n${failures} test(s) failed.`);
 })().catch((e) => { console.error('TEST ERROR', e); process.exitCode = 1; });

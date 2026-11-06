@@ -81,16 +81,10 @@
 // server still owns, and what moves on-device — is documented in the
 // README section "Final native calendar sync (EventKit) — design".
 
-// The label that marks the Apple CalDAV / app-specific-password path
-// as a temporary preview stand-in. It appears on the stand-in box
-// itself and in every alert the stand-in path shows, so the password
-// flow is never mistaken for the designed flow.
-const LIVE_SYNC_STANDIN_LABEL = 'Preview stand-in — the finished app uses EventKit, no password needed';
 
 let liveSyncConfig = { state: 'loading', google: false, outlook: false, apple: false, encryption: false };
 let liveSyncConnections = {}; // provider -> {status, autoDelete, lastSyncedAt}
 let liveSyncLog = [];
-let liveSyncWizard = false;
 let liveSyncError = '';
 let liveSyncBusy = '';
 // Pending Apple pick-a-work-calendar flow (preview stand-in only):
@@ -532,12 +526,10 @@ function liveSyncRecordTombstone(shiftId) {
 }
 
 async function liveSyncConnect(provider) {
-  if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) { alert('Supabase is not configured yet — sign-in is unavailable, so live calendar sync cannot start. See the Account tab.'); return; }
+  if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) { alert('Sign in on the Account tab first — live calendar sync needs your signed-in account.'); return; }
   if (typeof cloudSession === 'undefined' || !cloudSession) { alert('Sign in on the Account tab first — live calendar sync is per-user, so it needs your signed-in account.'); if (typeof setTab === 'function') setTab('Account'); return; }
   if (provider !== 'apple' && liveSyncConfig.state === 'ready' && !liveSyncConfig[provider]) {
-    liveSyncWizard = true;
-    render();
-    alert('Live sync setup is not finished by the app owner yet for ' + liveSyncLabel(provider) + '. The owner-setup wizard below shows exactly what is still missing.');
+    alert(liveSyncLabel(provider) + ' isn’t available yet — use the .ics import/export below for now.');
     return;
   }
   try {
@@ -594,7 +586,7 @@ async function liveSyncAppleConnect() {
     await liveSyncFetchAppleCalendars();
     await liveSyncFetchLog();
     render();
-    alert('Apple Calendar connected (' + LIVE_SYNC_STANDIN_LABEL + '). Now pick your work calendar below — for example “Caleb Work Schedule” — and sync: shifts are pulled from that calendar only. The app keeps its own calendar behind the scenes for shifts you add here.');
+    alert('Apple Calendar connected. Now pick your work calendar below and tap Sync now — shifts are pulled from that calendar only.');
   } catch (e) {
     // iCloud refused to create the app-owned calendar through CalDAV:
     // offer the user's existing calendars instead of failing the whole
@@ -617,7 +609,7 @@ async function liveSyncAppleConnect() {
     if (e.message && e.message.startsWith('apple_') && e.message !== 'apple_auth_failed') {
       alert('Apple Calendar connection failed at: ' + e.message + '. That names the failing discovery step and its HTTP status — it is not a password error unless the code says apple_auth_failed. Nothing was stored.');
     } else {
-      alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored. (' + LIVE_SYNC_STANDIN_LABEL + ')');
+      alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored.');
     }
   }
 }
@@ -726,7 +718,6 @@ function liveSyncAction(action, entry) {
   if (action === 'live-apple-calendars') { liveSyncFetchAppleCalendars().then(() => render()); return; }
   if (action === 'live-apple-source-save') return liveSyncAppleSourceSave();
   if (action === 'live-apple-repair-import') return liveSyncRepairImport();
-  if (action === 'live-wizard') { liveSyncWizard = !liveSyncWizard; return render(); }
   if (action === 'live-refresh') {
     liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchAppleCalendars()).then(() => liveSyncFetchLog()).then(() => render());
     return;
@@ -740,19 +731,19 @@ function liveSyncProviderCard(provider) {
   const conn = liveSyncConnections[provider];
   const configured = provider === 'apple' ? (liveSyncConfig.state === 'ready') : !!liveSyncConfig[provider];
   if (liveSyncConfig.state === 'unreachable') {
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Live sync could not be reached from this browser</span></div><div class="muted">The sync service did not answer from this browser — check your connection and tap “Refresh status &amp; log” below. No connection is faked.</div></div>';
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Couldn’t reach sync</span></div><div class="muted">Check your connection and tap “Refresh status &amp; log” below.</div></div>';
   }
   if (liveSyncConfig.state === 'loading') {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Checking setup…</span></div></div>';
   }
   if (!configured) {
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Live sync setup not finished by the app owner yet</span></div><div class="muted">The app owner has not registered this provider yet (see the owner-setup wizard below). Until then, use the manual .ics import/export below.</div><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-wizard">Show owner-setup wizard</button></div></div>';
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not available yet</span></div><div class="muted">Use the .ics import/export below for now.</div></div>';
   }
   if (conn && conn.status === 'needs_reauth') {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Needs reconnecting</span></div><div class="muted">Access expired or was revoked. Reconnect to restore sync. Nothing was deleted.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Reconnect</button></div></div>';
   }
   if (conn && conn.status === 'connected') {
-    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the app’s own calendar, kept behind the scenes — your work calendar is never written to. Each shift shows its calendar state on Dashboard → Saved shifts.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
+    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON' : 'OFF') + '</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
     if (provider === 'apple') {
       // Work calendar (final model): the user picks the ONE existing
       // calendar their shifts already live in — e.g. "Caleb Work
@@ -771,18 +762,18 @@ function liveSyncProviderCard(provider) {
       if (!liveSyncAppleCalendars.length) {
         picker = '<p class="muted">Your iCloud calendars could not be listed yet.</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-calendars">Load my calendars</button></div>';
       } else if (!importable.length) {
-        picker = '<p class="muted">No other iCloud calendar was found — only the app’s own calendar exists. Your shifts need to live in one of your own calendars for the app to pull them in.</p>';
+        picker = '<p class="muted">No other iCloud calendar was found.</p>';
       } else {
         const opts = '<option value="">No work calendar — app calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
         picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Your work calendar</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save work calendar &amp; sync now</button></div>';
       }
-      card += '<div style="margin-top:10px"><div class="item-title">Your work calendar</div><div class="muted">Pick the calendar your shifts already live in — for example “Caleb Work Schedule” — and each sync pulls from that calendar only. The app recognises events from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other shift-like titles (e.g. “CAMC 8”) import too, but only for hospitals already on your Facilities tab. Shifts at a hospital that is not listed yet are held, not imported: the sync suggests the hospital, and once you add it with its pay rule, the next sync pulls those shifts in and prices them. Events that are not work shifts are skipped. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
+      card += '<div style="margin-top:10px"><div class="item-title">Your work calendar</div><div class="muted">Pick the calendar your shifts live in — we’ll pull from that one only.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
         const skipBits = [];
         if (li.skippedNotShift) skipBits.push(li.skippedNotShift + ' not shifts');
         if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
-        if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' skipped until migration 005 runs');
+        if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' waiting to be re-imported');
         if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
         if (li.unpriced) skipBits.push(li.unpriced + ' unpriced — set the pay rule on the Facilities tab');
         if (li.skippedSuggested) skipBits.push(li.skippedSuggested + ' held — new hospital suggestion, see Facilities tab');
@@ -794,7 +785,7 @@ function liveSyncProviderCard(provider) {
         // only when nothing was created — a partial import like 12
         // created / 219 skipped still needs it).
         if (!li.error && ((li.skippedDeleted || 0) > 0 || (li.skippedLegacy || 0) > 0 || (li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0))) {
-          card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Use this if shifts you expect are still missing: it clears the stale records from the earlier interrupted sync and pulls them in again. Shifts you deleted on purpose stay deleted.</p>';
+          card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Missing shifts? This pulls them in again — shifts you deleted on purpose stay deleted.</p>';
         }
       } else if (current) {
         card += '<p class="muted">Work calendar: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
@@ -805,55 +796,32 @@ function liveSyncProviderCard(provider) {
   if (provider === 'apple') {
     if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
       const opts = liveSyncApplePick.calendars.map((c) => '<option value="' + escapeHTML(c.url) + '">' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
-      return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Pick your work calendar</span></div><div class="muted">In the finished app this picker is the whole connection: grant calendar access, pick the calendar your shifts already live in, and the app pulls from that calendar only. The app keeps its own calendar behind the scenes — you never create or label one. (In this preview your sign-in already worked, but iCloud would not let the preview create its own calendar, so pick one of your existing calendars below. CRNA Hub only writes its own shifts there — it will not read, move, or delete your other events.)</div><div class="form-grid"><div class="field"><label for="f_liveApplePick">Your work calendar</label><select id="f_liveApplePick">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-pick">Connect to this calendar</button><button type="button" class="tiny secondary" data-action="live-apple-pick-cancel">Cancel</button></div></div>';
+      return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Pick your work calendar</span></div><div class="muted">Pick the calendar your shifts live in — we’ll pull from that one only.</div><div class="form-grid"><div class="field"><label for="f_liveApplePick">Your work calendar</label><select id="f_liveApplePick">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-pick">Connect to this calendar</button><button type="button" class="tiny secondary" data-action="live-apple-pick-cancel">Cancel</button></div></div>';
     }
     // Final flow, stated first: one tap, grant access, pick the work
     // calendar. The password form below it is fenced off as a
     // PREVIEW STAND-IN — a web page cannot use EventKit, so this
     // preview connects through CalDAV with a one-time app-specific
     // password instead. It is never presented as the designed path.
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">In the finished app this is one tap: grant calendar access, pick the calendar your shifts already live in, and the app pulls from that calendar only. The app keeps its own calendar behind the scenes — you never create or label one, and your work calendar is never written to.</div><div class="preview-standin"><div class="item-title"><span class="pill warn">' + LIVE_SYNC_STANDIN_LABEL + '</span></div><div class="muted">This web preview cannot use EventKit, so Apple connects here through a one-time <strong>app-specific password</strong> instead: create one in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It goes straight to the server-side sync function, is stored encrypted there, and is never stored on this device or shown again. Revoking it disconnects sync at once. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div><div class="muted">Connect with a one-time <strong>app-specific password</strong>: create one in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It is stored encrypted and never shown again. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
   }
-  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">One click to the provider consent screen, then back here — pick the calendar your shifts already live in and the app pulls from that calendar only. No files to upload, no passwords typed into this app. The app keeps its own calendar behind the scenes — you never create or label one.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
-}
-
-function liveSyncWizardHTML() {
-  const base = liveSyncProjectUrl();
-  const googleUri = base + '/functions/v1/google-auth';
-  const outlookUri = base + '/functions/v1/outlook-auth';
-  return '<div class="panel" style="margin-top:14px"><h3>Owner-setup wizard — what is still missing, and nothing else</h3>'
-    + '<p class="muted">Live sync turns on the moment the owner finishes these steps — no app change is needed. End users never see this wizard unless setup is unfinished.</p>'
-    + '<ol>'
-    + '<li><strong>Run migration 003</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-003.sql</code> (tables for connections, sync map, OAuth state, pending deletions, sync log).</li>'
-    + '<li><strong>Run migration 004</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-004.sql</code> (Apple work-calendar choice + import pairing table). Without it, sync still works, but the Apple work-calendar picker cannot save a choice.</li>'
-    + '<li><strong>Run migration 005</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-005.sql</code> (delivery flags on the import pairing table, so a shift lost to an interrupted sync is repaired instead of skipped forever as if deleted). Without it, sync still works, but the Apple card offers a manual “Re-import missing shifts” button instead of repairing automatically.</li>'
-    + '<li><strong>Deploy the functions:</strong> <code>supabase link --project-ref xgoghgihfhtnyevgapyp</code>, then <code>supabase functions deploy google-auth outlook-auth sync-calendar</code> (or <code>sh supabase/deploy-calendar-sync.sh</code>).</li>'
-    + '<li><strong>Set function secrets</strong> (server side only, never in this repo): <code>APP_URL</code> = the URL users open, <code>CALENDAR_ENCRYPTION_KEY</code> = output of <code>openssl rand -hex 32</code>, plus the provider IDs/secrets below.</li>'
-    + '<li><strong>Google Cloud (once):</strong> enable the Google Calendar API; create a Web OAuth client; authorized redirect URI (exact): <code>' + escapeHTML(googleUri) + '</code>; scope: <code>https://www.googleapis.com/auth/calendar</code>. Copy the client ID + secret into function secrets as <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>. Add test users if Google requires verification.</li>'
-    + '<li><strong>Microsoft Entra (once):</strong> new app registration, Web redirect URI (exact): <code>' + escapeHTML(outlookUri) + '</code>; delegated Graph permissions <code>Calendars.ReadWrite</code>, <code>offline_access</code>, <code>openid</code>, <code>profile</code>. Copy the client ID + secret into function secrets as <code>OUTLOOK_CLIENT_ID</code> / <code>OUTLOOK_CLIENT_SECRET</code>.</li>'
-    + '<li><strong>Apple: nothing for the owner to register — and in the finished native app, nothing for the user to type either.</strong> The finished app uses EventKit on the device (no password, no CalDAV, no owner setup). In this web preview only, each user creates their own app-specific password once — see the “Preview stand-in” box on the Apple card — because a web page cannot use EventKit. That password path is a preview stand-in, not the designed flow.</li>'
-    + '</ol>'
-    + '<p class="muted">Providers only show here once the app owner has finished their setup.</p>'
-    + '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Recheck setup now</button><button type="button" class="secondary tiny" data-action="live-wizard">Hide wizard</button></div></div>';
+  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
 }
 
 function liveSyncPanelHTML() {
   let html = '<h2>Live calendar sync</h2>';
   if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) {
-    html += '<p><strong>Sign-in is not configured yet, so live sync cannot start.</strong> It needs a signed-in account (see the Account tab). The manual .ics import/export below works without sign-in.</p>';
-    html += '<p class="muted">Conflict rule, once connected: newest edit wins; deletions never happen silently — they wait below in Pending deletions unless auto-delete was explicitly turned on (default off).</p>';
+    html += '<p><strong>Live sync needs a signed-in account.</strong> The .ics import/export below works without one.</p>';
   } else if (typeof cloudSession === 'undefined' || !cloudSession) {
     html += '<p><strong>Sign in on the Account tab first.</strong> Live calendar sync is per-user — your provider connection and tokens belong to your signed-in account, so there is nothing to connect until then.</p>';
-    html += '<div class="toolbar"><button type="button" class="secondary" data-action="goto-account">Go to Account tab</button><button type="button" class="secondary" data-action="live-wizard">Owner-setup wizard</button></div>';
-    if (liveSyncWizard) html += liveSyncWizardHTML();
-    html += '<p class="muted">Manual fallback (works today, no sign-in): .ics import/export below.</p>';
+    html += '<div class="toolbar"><button type="button" class="secondary" data-action="goto-account">Go to Account tab</button></div>';
+    html += '<p class="muted">The .ics import/export below works without sign-in.</p>';
   } else {
-    html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in. (Apple here is a “Preview stand-in” — the finished app uses EventKit, no password needed.)</p>';
+    html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
-    html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button>' + (liveSyncConfig.state === 'ready' ? '' : '<button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button>') + '</div>';
-    if (liveSyncWizard && liveSyncConfig.state !== 'ready') html += liveSyncWizardHTML();
+    html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button></div>';
     if (liveSyncState.pending.length) {
       html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">Gone from your calendar — nothing is deleted here until you say so.</p>';
       liveSyncState.pending.forEach((p) => {
