@@ -10,8 +10,10 @@
 //     (never $0); W-2 salary days (Off / PTO) excluded from all three
 //     even with a pay value stored, and counted.
 //   * Missing/unknown status defaults to proposed, never confirmed.
-//   * Imported (CSV / calendar / contract) and manually added shifts
-//     arrive as proposed; submitEntry normalizes status.
+//   * Imported shifts arrive confirmed when dated before today and
+//     proposed when dated today or later (Bug 1, Nov 6, 2026);
+//     manually added shifts still arrive as proposed; submitEntry
+//     normalizes status.
 //   * Status change (setShiftStatus) re-prices the three totals at once.
 //   * Year scoping preserved: other-year shifts never enter the totals.
 //   * Monthly Income Goal: stored per user (step 1 profile only -
@@ -172,13 +174,13 @@ t('invalid status change normalizes back to proposed',
   sandbox.__split3.c.predicted === 6250 && sandbox.__split3.p.predicted === 17250);
 run(`setShiftStatus('s7', 'proposed');`); // restore fixture
 
-// ---------- Creation paths default to proposed (static + submitEntry) ----------
-t('CSV import defaults new shifts to proposed',
-  appSrc.includes("status:'proposed',note:'CSV import'"));
-t('calendar (.ics) import defaults new shifts to proposed',
-  appSrc.includes("status:'proposed',source:r.source") || appSrc.includes("status:'proposed'"));
-t('contract import defaults new shifts to proposed',
-  appSrc.includes("status:'proposed',source:r.source||'extracted-from-contract'"));
+// ---------- Creation paths stamp the import status (static + submitEntry) ----------
+t('CSV import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+  appSrc.includes("status:importStatusForDate(r[0]),note:'CSV import'"));
+t('calendar (.ics) import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+  appSrc.includes("status:importStatusForDate(r.date),source:r.source"));
+t('contract import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+  appSrc.includes("status:importStatusForDate(r.date),source:r.source||'extracted-from-contract'"));
 t('submitEntry normalizes shift status on save',
   appSrc.includes("if(kind==='shifts')record.status=normalizeShiftStatus(record.status);"));
 t('stored shifts without a status are normalized to proposed on load',
@@ -290,16 +292,17 @@ t('step 3 checks off with a facility rate, or with a contract and no rate',
   sandbox.__stepsRate[2].done === true && sandbox.__stepsContract[2].done === true);
 t('"N of 5" count works in the guide',
   sandbox.__onboardHtml.includes(' of 5 done'));
-t('step 3 description covers sync suggestion, contract upload, and manual entry',
-  steps0[2].desc.includes('sync suggestion') &&
-  steps0[2].desc.includes('Upload the contract') &&
-  steps0[2].desc.includes('by hand is the backup'));
-t('step 3 still carries the paystub disclaimer',
-  steps0[2].desc.includes('Income figures are estimates from your own rates and shifts'));
-t('step 1 asks for the name as it appears on the schedule; not done while signed out',
-  steps0[0].desc.includes('name as it appears on your schedule') && steps0[0].done === false);
-t('step 2 covers calendars, schedule upload, and QGenda; not done with none of them',
-  steps0[1].desc.includes('upload a schedule file') && steps0[1].desc.includes('QGenda') && steps0[1].done === false);
+t('step 3 direction is one short line: contract upload or manual entry, pay stub optional',
+  steps0[2].direction.includes('Upload your contract') &&
+  steps0[2].direction.includes('enter a facility by hand') &&
+  steps0[2].direction.includes('pay stub is optional'));
+t('step 3 direction no longer carries the paystub disclaimer paragraph (it stays on the Facilities tab and Dashboard)',
+  !steps0[2].direction.includes('Income figures are estimates') &&
+  !sandbox.__onboardHtml.includes('Income figures are estimates'));
+t('step 1 direction asks for the name as it appears on the schedule; not done while signed out',
+  steps0[0].direction.includes('name as it appears on your schedule') && steps0[0].done === false);
+t('step 2 direction covers calendars and schedule upload; not done with none of them',
+  steps0[1].direction.includes('Connect a calendar once') && steps0[1].direction.includes('upload a schedule') && steps0[1].done === false);
 run(`
   db.settings.scheduleImported = true;
   globalThis.__stepsSched = onboardingSteps();

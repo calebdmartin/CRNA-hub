@@ -253,8 +253,8 @@ run(`
   const reloaded = load();
   globalThis.__persistedStubs = (reloaded.payStubs || []).length;
 `);
-t('onboarding step 3 mentions pay stubs but still checks off on facilities alone',
-  sandbox.__steps[2].desc.includes('pay stub') &&
+t('onboarding step 3 direction mentions pay stubs but still checks off on facilities alone',
+  sandbox.__steps[2].direction.includes('pay stub') &&
   sandbox.__steps[2].done === true);
 t('pay stubs persist across load()',
   sandbox.__persistedStubs === run(`db.payStubs.length`) && sandbox.__persistedStubs >= 3);

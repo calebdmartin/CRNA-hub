@@ -10,16 +10,23 @@
 //   * Yes (and each of the three path buttons) opens the facility form
 //     pre-filled with the hospital name and address;
 //   * adding the facility clears its suggestion, so the next sync
-//     re-scans the held events and imports them (proposed, unpriced
-//     when no rate covers the type — never $0);
+//     re-scans the held events and imports them (past confirmed /
+//     future proposed — Bug 1, Nov 6, 2026 — unpriced when no rate
+//     covers the type, never $0);
 //   * personal events are never suggested, and a known facility is
 //     never suggested; no facility is ever created silently by a sync;
-//   * the income disclaimer shows on the Dashboard (near the totals),
-//     on the Facilities/contract preview, and in the onboarding
-//     guide's facilities (income) step.
+//   * the income disclaimer shows on the Dashboard (near the totals)
+//     and on the Facilities/contract preview — the condensed guide
+//     no longer carries it as a step paragraph.
 const fs = require('fs');
+const path = require('path');
 const vm = require('vm');
-const R = '/home/hatch/workspace/crna-hub-hospital-work/';
+// Run against this checkout (a `repo/` subdir when present, else here) —
+// never a stale absolute work-dir path: the Nov 5 snapshot path this file
+// used to carry tested code from before the C/S/P and pay-stub work.
+const R = fs.existsSync(path.join(__dirname, 'repo', 'app.js'))
+  ? path.join(__dirname, 'repo') + path.sep
+  : __dirname + path.sep;
 const store = new Map();
 function el() {
   return {
@@ -152,9 +159,9 @@ t('facility form shows the three-paths chooser after Yes',
 t('contract-upload option and manual entry both available on the form',
   sandbox.__facPageYes.includes('id="facility-contract-panel"') &&
   sandbox.__facPageYes.includes('id="facility-manual-panel"'));
-t('manual panel states it is the fallback for rates the other paths did not provide',
-  sandbox.__facPageYes.includes('Manual entry is the fallback') &&
-  sandbox.__facPageYes.includes('rates the calendar sync or a contract did not provide'));
+t('manual path states it is the fallback for rates the other paths did not provide',
+  sandbox.__facPageYes.includes('Manually enter the facility') &&
+  sandbox.__facPageYes.includes('the fallback when sync or a contract did not provide them'));
 // Path button: contract path pre-fills and lands on the contract panel.
 run(`
   facilitySuggestionPrefill = null;
@@ -173,11 +180,14 @@ run(`
     ['callBonus',''], ['distance',''], ['distanceSource',''], ['notes',''],
   ]}});
   globalThis.__afterSave = { facilities: db.facilities.map(f=>f.name), suggestions: db.facilitySuggestions.length };
+  // Far-future dates on purpose: the Bug 1 past-shift rule marks a
+  // past-dated import confirmed, so these must stay future-dated to pin
+  // "future imports arrive proposed".
   globalThis.__applied3 = liveSyncApplyChanges('apple', { providerChanges: [{ action: 'create', shift: {
-    id: 'shift-camc-1', date: '2026-11-06', facility: 'CAMC', type: '8-hour day', pay: '2000',
+    id: 'shift-camc-1', date: '2027-06-03', facility: 'CAMC', type: '8-hour day', pay: '2000',
     note: 'Imported from Caleb Work Schedule', source: 'apple-import', updatedAt: null,
   }}, { action: 'create', shift: {
-    id: 'shift-camc-2', date: '2026-11-09', facility: 'CAMC', type: 'Second call', pay: '',
+    id: 'shift-camc-2', date: '2027-06-06', facility: 'CAMC', type: 'Second call', pay: '',
     note: 'Imported from Caleb Work Schedule', source: 'apple-import', updatedAt: null,
   }}], pendingDeletions: [], imported: {
     sourceCalendarName: 'Caleb Work Schedule', created: 2, updated: 0, skipped: 0, duplicates: 0, seen: 2, parsed: 2,
@@ -188,8 +198,8 @@ run(`
 t('adding the facility clears its suggestion', sandbox.__afterSave.suggestions === 0 && sandbox.__afterSave.facilities.includes('CAMC'));
 t('next sync imports the held shifts once the facility exists',
   sandbox.__camcShifts.length === 2);
-t('imported shifts are proposed, never auto-confirmed',
-  sandbox.__camcShifts.every((x) => x.status === 'proposed'));
+t('imported shifts arrive confirmed when past, proposed when future (Bug 1)',
+  run(`db.shifts.filter(x=>x.facility==='CAMC').every(x => x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`));
 t('priced shift carries its pay; unpriced shift stays incomplete, never $0',
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-1').pay === '2000' &&
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-2').pay === '' &&
@@ -226,20 +236,24 @@ t('old-server newFacilities becomes a suggestion, not a silent facility',
   sandbox.__oldServer.facilities.length === 1 &&
   JSON.stringify(sandbox.__oldServer.suggestions) === JSON.stringify(['Mystery General']));
 
-// --- 7. Income disclaimer: Dashboard, Facilities/contract preview, onboarding step 2.
+// --- 7. Income disclaimer: Dashboard, Facilities/contract preview.
+// The condensed guide no longer carries it as a step paragraph.
 run(`
   globalThis.__dash = dashboard();
   globalThis.__facPage = facilitiesPage();
-  globalThis.__onboard2 = onboardingSteps()[1];
+  globalThis.__onboard3 = onboardingSteps()[2];
+  globalThis.__onboardHtml = onboardingHTML();
   globalThis.__buildStamp = BUILD_STAMP;
 `);
 t('disclaimer shows on the Dashboard near the income totals',
   sandbox.__dash.includes(DISCLAIMER));
 t('disclaimer shows on the Facilities tab (contract preview + manual panel)',
   (sandbox.__facPage.match(new RegExp(DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 2);
-t('disclaimer is in the onboarding guide’s facilities (income) step',
-  sandbox.__onboard2.title === 'Add facilities' && sandbox.__onboard2.desc.includes(DISCLAIMER));
-t('build stamp bumped (cache v23)', sandbox.__buildStamp.includes('cache v23'));
+t('guide no longer carries the disclaimer as a step paragraph (it stays on Dashboard + Facilities)',
+  sandbox.__onboard3.title === 'Add facilities & contracts' &&
+  !sandbox.__onboard3.direction.includes('Income figures are estimates') &&
+  !sandbox.__onboardHtml.includes('Income figures are estimates'));
+t('build stamp bumped (cache v32)', sandbox.__buildStamp.includes('cache v32'));
 t('no key-like secrets in app.js',
   !/(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/.test(fs.readFileSync(R + 'app.js', 'utf8')));
 console.log('hospital-suggestion test done');

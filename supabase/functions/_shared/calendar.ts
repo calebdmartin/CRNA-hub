@@ -616,25 +616,49 @@ function facilityLikeName(s: string): boolean {
   return true;
 }
 
+// Import status (Bug 1, Nov 6, 2026): a shift dated before today that
+// arrives from a calendar/schedule import already happened, so it
+// arrives as 'confirmed', not 'proposed' — otherwise a user whose whole
+// history imported as proposed sees $0 in Confirmed (C) and Submitted
+// (S) year-to-date while Proposed (P) holds everything. Future shifts,
+// and today's shift (not over yet), stay 'proposed'. An invalid or
+// missing date stays 'proposed': never silently confirm a shift with
+// no date. `today` is an ISO 'YYYY-MM-DD' date; when omitted it
+// defaults to the server's current UTC date — the browser re-derives
+// the same rule from the user's local date when it stores the shift,
+// so the local date wins on the device.
+export function importStatusForDate(date: string, today = ""): "confirmed" | "proposed" {
+  const d = String(date || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return "proposed";
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(today)
+    ? today
+    : new Date().toISOString().slice(0, 10);
+  return d < t ? "confirmed" : "proposed";
+}
+
 export function parseWorkShiftEvent(
   title: string,
   location: string,
   date: string,
   facilities: FacilityPayRule[] = [],
-): { facility: string; type: string; pay: string; facilityKnown: boolean } | null {
+  today = "",
+): { facility: string; type: string; pay: string; facilityKnown: boolean; status: "confirmed" | "proposed" } | null {
   const t = String(title || "").trim();
   const loc = String(location || "").trim();
   if (!t && !loc) return null;
+  // Import status (Bug 1, Nov 6, 2026): a shift dated before today
+  // already happened, so it arrives confirmed, not proposed.
+  const status = importStatusForDate(date, today);
 
   // 1. Holzer — the confirmed rules win over everything else.
   const holzerTitle = parseWorkShiftTitle(t, date);
-  if (holzerTitle) return { ...holzerTitle, facilityKnown: true };
+  if (holzerTitle) return { ...holzerTitle, facilityKnown: true, status };
   if (/\bholzer\b/i.test(loc)) {
     const h = parseWorkShiftTitle(`Holzer ${t}`, date);
-    if (h) return { ...h, facilityKnown: true };
+    if (h) return { ...h, facilityKnown: true, status };
   }
   if (/^holzer$/i.test(t)) {
-    return { facility: "Holzer", type: "Shift", pay: "", facilityKnown: true };
+    return { facility: "Holzer", type: "Shift", pay: "", facilityKnown: true, status };
   }
 
   // 2. The user's Facilities list — longest name/alias first, so
@@ -672,6 +696,7 @@ export function parseWorkShiftEvent(
       type,
       pay: priceShiftWithFacility(type, rule, date),
       facilityKnown: true,
+      status,
     };
   }
 
@@ -686,9 +711,27 @@ export function parseWorkShiftEvent(
   // the held events and imports them, priced. A title with no shift
   // pattern and no listed facility ("Team lunch", "Lunch at CAMC",
   // "Dentist appointment") is not a shift, however facility-like it
-  // looks.
-  const type = shiftTypeFromPattern(t) ?? bareNumberShiftType(t);
-  if (!type) return null;
+  // looks — EXCEPT a bare facility-like title on its own ("CAMC"):
+  // that is an unclassified shift for the facility, held and
+  // suggested exactly like the listed-facility branch above treats
+  // it. Bug 2 (Nov 6, 2026): the old code returned null here, so
+  // past CAMC shifts titled just "CAMC" never even became a
+  // suggestion and the hospital stayed invisible.
+  let type = shiftTypeFromPattern(t) ?? bareNumberShiftType(t);
+  if (!type) {
+    const bare = cleanFacilityRaw(t);
+    // Acronym ("CAMC") or multi-word name ("Charleston Area Medical
+    // Center") only: a single ordinary word ("Ashley") is a person's
+    // name, not a hospital, and stays unparsed.
+    const bareName = bare.replace(/[^A-Za-z]/g, "");
+    if (
+      facilityLikeName(bare) &&
+      (/\s/.test(bare) || /^[A-Z]{2,}$/.test(bareName))
+    ) {
+      return { facility: bare, type: "Shift", pay: "", facilityKnown: false, status };
+    }
+    return null;
+  }
   let facilityRaw = "";
   const bare = /^(.+?)\s+(8|10|12|24)\s*$/.exec(t);
   if (bare) {
@@ -711,7 +754,7 @@ export function parseWorkShiftEvent(
   facilityRaw = cleanFacilityRaw(facilityRaw);
   if (!facilityRaw && loc) facilityRaw = cleanFacilityRaw(loc);
   if (!facilityLikeName(facilityRaw)) return null;
-  return { facility: facilityRaw, type, pay: "", facilityKnown: false };
+  return { facility: facilityRaw, type, pay: "", facilityKnown: false, status };
 }
 
 // Two facility spellings are the same facility when they match
@@ -885,6 +928,35 @@ export function decideImportEvent(opts: {
   }
   if (opts.keyExistsLocally) return "duplicate";
   return "create";
+}
+
+// Which bucket a held/skipped import event lands in, for the sync
+// summary and the suggestion pass (Bug 2, Nov 6, 2026). Pure, so the
+// import loop and the tests agree:
+//   "suggested" — the event is at a facility with no saved rule, so
+//     it is HELD for a facility suggestion, never silently dropped.
+//     This includes skip-legacy rows: a pairing left by an earlier
+//     interrupted sync is not proof the user deleted the shift, so
+//     the hospital must still be suggested — otherwise its shifts
+//     stay invisible forever and the facility can never be added
+//     from the suggestion.
+//   "legacy" — a skip-legacy row at a facility that IS saved: the
+//     shift cannot be told from a deletion without migration 005, so
+//     it stays skipped (the "Re-import missing shifts" button is the
+//     explicit way out).
+//   "deleted" — an explicit deletion (tombstone / deleted_locally):
+//     never suggested, never re-imported.
+//   null — the event is on the normal import path, not a hold.
+export type HeldEventBucket = "suggested" | "legacy" | "deleted";
+
+export function heldEventBucket(
+  decision: ImportEventDecision,
+  facilityKnown: boolean,
+): HeldEventBucket | null {
+  if (decision === "skip-deleted") return "deleted";
+  if (decision === "skip-legacy") return facilityKnown ? "legacy" : "suggested";
+  if (!facilityKnown) return "suggested";
+  return null;
 }
 
 // Per-shift calendar state for the sync response (`shiftSync`), so the

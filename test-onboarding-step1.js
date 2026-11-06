@@ -128,11 +128,11 @@ t('step 1 done when signed in even with no name, type, or goal yet',
   sandbox.__stepsInBare[0].done === true);
 t('step 1 stays done with the full profile filled in',
   sandbox.__stepsInFull[0].done === true);
-t('step 1 description covers name (both uses), employment type, and the goal skip',
-  sandbox.__stepsInFull[0].desc.includes('name as it appears on your schedule and licenses') &&
-  sandbox.__stepsInFull[0].desc.includes('W-2') &&
-  sandbox.__stepsInFull[0].desc.includes('1099') &&
-  sandbox.__stepsInFull[0].desc.includes('Skip'));
+t('step 1 direction (shown on the Account tab, not the guide) covers name (both uses), employment type, and the goal skip',
+  sandbox.__stepsInFull[0].direction.includes('name as it appears on your schedule and licenses') &&
+  sandbox.__stepsInFull[0].direction.includes('W-2') &&
+  sandbox.__stepsInFull[0].direction.includes('1099') &&
+  sandbox.__stepsInFull[0].direction.includes('skip it'));
 
 // ---------- Employment type drives the income engine ----------
 run(`

@@ -3,19 +3,22 @@
 // (from ~/workspace/crna-hub-final-work/calendar-sync/)
 //
 // Covers, without any live API call (fetch is stubbed; no network):
-//   * FINAL-MODEL COPY: the sync panel, the onboarding step, and the
-//     legacy connect alert describe one connection + pick your existing
-//     work calendar + pull only that calendar + the app keeps its own
-//     calendar behind the scenes. No user-facing instruction to create
-//     or label a "CRNA Hub" calendar anywhere in the panel.
+//   * FINAL-MODEL COPY: the sync panel describes one connection +
+//     pick your existing work calendar + pull only that calendar +
+//     the app keeps its own calendar behind the scenes. The
+//     onboarding step carries only its one-line direction; the long
+//     final-model copy lives on the sync panel, not in the guide.
+//     No user-facing instruction to create or label a "CRNA Hub"
+//     calendar anywhere in the panel.
 //   * PREVIEW STAND-IN LABELLING: the Apple CalDAV / app-specific-
 //     password path appears ONLY inside a visually distinct
 //     .preview-standin box carrying LIVE_SYNC_STANDIN_LABEL
 //     ("Preview stand-in — the finished app uses EventKit, no password
 //     needed"), and the password field sits inside that box.
 //   * FINAL REUSABLE PIECES (client side): facilities-driven import,
-//     dedupe (same date+facility+type never doubled), imported shifts
-//     arrive proposed, unpriced stays incomplete and never $0,
+//     dedupe (same date+facility+type never doubled), past imports
+//     arrive confirmed and future imports proposed (Bug 1, Nov 6,
+//     2026), unpriced stays incomplete and never $0,
 //     unknown-hospital suggestions merge without creating a facility,
 //     pending deletions are recorded for confirmation and never applied
 //     silently, tombstones are sent with the sync so a deleted shift is
@@ -151,7 +154,7 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     liveSyncState.tombstones = [];
     globalThis.__panel = liveSyncPanelHTML();
     globalThis.__appleCard = liveSyncProviderCard('apple');
-    globalThis.__onboard2 = onboardingSteps()[1].desc;
+    globalThis.__onboard2 = onboardingSteps()[1];
   `);
 
   // --- 1. Final-model copy in the panel. ---
@@ -176,13 +179,14 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   t('connected card says shifts go to the app-owned calendar, work calendar never written to',
     sandbox.__appleCard.includes('your work calendar is never written to'));
 
-  // --- 2. Onboarding step 2 describes the final model. ---
-  t('onboarding step 2: pick your existing work calendar, app calendar behind the scenes',
-    sandbox.__onboard2.includes('pick the calendar your shifts already live in') &&
-    sandbox.__onboard2.includes('keeps its own calendar behind the scenes'));
-  t('onboarding step 2 does not present the app-specific password as the designed path',
-    !sandbox.__onboard2.includes('Apple needs a one-time app-specific password') &&
-    sandbox.__onboard2.includes('Preview stand-in'));
+  // --- 2. Onboarding step 2 is a one-line direction; the final-model
+  // copy lives on the sync panel (section 1), not in the guide. ---
+  t('onboarding step 2 direction is one short line: connect once, or upload a schedule',
+    sandbox.__onboard2.direction === 'Connect a calendar once, or upload a schedule — the app picks out only your shifts.');
+  t('onboarding step 2 direction carries no long final-model copy and no stand-in label',
+    !sandbox.__onboard2.direction.includes('keeps its own calendar behind the scenes') &&
+    !sandbox.__onboard2.direction.includes('Preview stand-in') &&
+    !sandbox.__onboard2.direction.includes('app-specific password'));
 
   // --- 3. Apple disconnected card: stand-in box only. ---
   run(`
@@ -227,18 +231,19 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     sandbox.__wizard.includes('Preview stand-in') &&
     sandbox.__wizard.includes('work-calendar picker'));
 
-  // --- 6. Apply changes: dedupe, proposed, unpriced-never-$0, suggestions, pending deletions. ---
+  // --- 6. Apply changes: dedupe, past-confirmed / future-proposed (Bug 1), unpriced-never-$0, suggestions, pending deletions. ---
   run(`
     db.shifts = [{ id: 'shift-old-1', date: '2026-11-03', facility: 'Holzer', type: '8-hour day', pay: '2125', note: '', source: 'apple-import', status: 'proposed', incomplete: false, updatedAt: null }];
     db.facilitySuggestions = [];
     liveSyncState.pending = [];
     const batch = { providerChanges: [
+      { action: 'create', shift: { id: 's0', date: '2026-11-04', facility: 'Holzer', type: '8-hour day', pay: '2125', note: 'Imported from Caleb Work Schedule', source: 'apple-import', updatedAt: null } },
       { action: 'create', shift: { id: 's1', date: '2026-11-07', facility: 'Holzer', type: '8-hour day', pay: '2125', note: 'Imported from Caleb Work Schedule', source: 'apple-import', updatedAt: null } },
       { action: 'create', shift: { id: 's2', date: '2026-11-08', facility: 'Holzer', type: 'Second call', pay: '', note: 'Imported from Caleb Work Schedule', source: 'apple-import', updatedAt: null } },
     ], pendingDeletions: [
       { provider: 'apple', shiftId: 'shift-old-1', date: '2026-11-03', facility: 'Holzer', type: '8-hour day', localMissing: false },
     ], imported: {
-      sourceCalendarName: 'Caleb Work Schedule', created: 2, updated: 0, skipped: 1, duplicates: 0, seen: 3, parsed: 3,
+      sourceCalendarName: 'Caleb Work Schedule', created: 3, updated: 0, skipped: 1, duplicates: 0, seen: 4, parsed: 4,
       skippedSuggested: 1, unpriced: 1,
       suggestions: [{ name: 'CAMC', address: '', count: 1, firstDate: '2026-11-09', lastDate: '2026-11-09', sampleTitles: ['CAMC 8'] }],
       newFacilities: ['CAMC'],
@@ -250,9 +255,11 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     globalThis.__sugg = db.facilitySuggestions;
   `);
   t('imported shifts created once (dedupe: second identical apply adds nothing)',
-    sandbox.__a1.created === 2 && sandbox.__a2.created === 0 && sandbox.__shifts.length === 3);
-  t('imported shifts arrive proposed, never auto-confirmed',
-    sandbox.__shifts.filter((x) => x.id === 's1' || x.id === 's2').every((x) => x.status === 'proposed'));
+    sandbox.__a1.created === 3 && sandbox.__a2.created === 0 && sandbox.__shifts.length === 4);
+  t('imported shifts arrive confirmed when past, proposed when future (Bug 1)',
+    run(`db.shifts.filter(x => ['s0','s1','s2'].includes(x.id)).every(x => x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
+    run(`db.shifts.find(x => x.id === 's0').status`) === 'confirmed' &&
+    run(`db.shifts.find(x => x.id === 's1').status`) === 'proposed');
   t('priced shift carries pay; unpriced shift stays incomplete with blank pay — never $0',
     sandbox.__shifts.find((x) => x.id === 's1').pay === '2125' &&
     sandbox.__shifts.find((x) => x.id === 's2').pay === '' &&
@@ -295,8 +302,8 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     !!syncCall && syncCall.body.body.facilities.some((f) => f.name === 'Holzer'));
   t('after the sync, the repair flag is consumed (a normal sync never re-imports a deleted shift)',
     run(`liveSyncState.repairImport`) === false);
-  t('stubbed sync applied the canned import: proposed shifts in, pending deletion flagged',
-    run(`db.shifts.some(x => x.id === 'shift-new-1' && x.status === 'proposed')`) &&
+  t('stubbed sync applied the canned import: past/future status rule holds, pending deletion flagged',
+    run(`db.shifts.some(x => x.id === 'shift-new-1' && x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
     run(`liveSyncState.pending.some(p => p.shiftId === 'shift-old-1')`));
 
   // --- 9. Two-way push: confirmed shift on the calendar, edit updates,

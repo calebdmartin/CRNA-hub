@@ -41,7 +41,16 @@ select[data-shift-status]{width:auto;display:inline-block;padding:6px 8px;font-s
 @media(max-width:650px){
 .panel p{margin:7px 0}
 .onboard-step{padding:11px 0}
-.csp-table th,.csp-table td{padding:7px 5px}
-.csp-table strong{font-size:14px}
+/* C/S/P table (Bug 1, Nov 6, 2026): all three columns must be visible
+   on a phone without scrolling sideways — the 520px min-width above
+   pushed P off-screen, so a user saw only the $0 C and S columns.
+   On mobile the table shrinks to the panel width instead: smaller
+   type and padding, headers wrap, and the values still fit. The
+   horizontal scroll stays as a fallback for very narrow screens. */
+.table-scroll .csp-table{min-width:0}
+.csp-table{font-size:12px}
+.csp-table th,.csp-table td{padding:6px 4px}
+.csp-table th{white-space:normal}
+.csp-table strong{font-size:13px}
 .contract-table th,.contract-table td{padding:7px 5px}
 }

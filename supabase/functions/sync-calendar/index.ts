@@ -71,6 +71,18 @@
 //   upload a contract, or manually enter the facility's hourly rate.
 //   Once the user adds the facility, the next sync re-scans the held
 //   events (they leave no import-map row) and imports them, priced.
+//   Bug 2 (Nov 6, 2026): the hold also covers a bare facility title
+//   ("CAMC" with no shift pattern — an unclassified shift, held and
+//   suggested, not dropped as "not a shift"), and a skip-legacy row
+//   at an unsaved facility (a pairing from an earlier interrupted
+//   sync is not proof of deletion, so it is suggested and counted as
+//   held, never buried as legacy). A never-delivered pairing is
+//   likewise held, not re-created, while its facility is unsaved.
+//   Past events are re-evaluated on every sync exactly like future
+//   ones: the fetch is the full calendar history and the parser is
+//   date-window-free, so a held past shift is suggested and, once
+//   its facility is added, imported — arriving confirmed (date
+//   before today), never proposed.
 //   Imported shifts are returned as providerChange creates/updates with
 //   source "apple-import" and note "Imported from <calendar name>", and
 //   the sync response carries an `imported` summary
@@ -209,6 +221,7 @@ import {
   decideImportEvent,
   FacilitySuggestion,
   groupFacilitySuggestions,
+  heldEventBucket,
   decryptSecret,
   encryptSecret,
   encryptionConfigured,
@@ -1201,13 +1214,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         // the suggestion (name, count, date range, address). This runs
         // for every live decision — create, duplicate, already-here,
         // repair — so a hospital is suggested once however its shifts
-        // arrived; skip-deleted / skip-legacy shifts are genuinely
-        // deleted, so suggesting them would nag the user to re-add
-        // shifts they removed on purpose.
-        if (
-          parsed && !parsed.facilityKnown &&
-          decision !== "skip-deleted" && decision !== "skip-legacy"
-        ) {
+        // arrived. Skip-legacy is INCLUDED (Bug 2, Nov 6, 2026): a
+        // pairing left by an earlier interrupted sync is not proof of
+        // deletion, so the hospital must still be suggested — excluding
+        // it left CAMC's shifts invisible forever. Only skip-deleted
+        // (an explicit tombstone / deleted_locally flag) is never
+        // suggested: those shifts were removed on purpose.
+        if (parsed && heldEventBucket(decision, parsed.facilityKnown) === "suggested") {
           suggestedEvents.push({
             facility: parsed.facility,
             date: ev.date,
@@ -1277,9 +1290,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           // vs legacy (migration 005 not run, so "never delivered"
           // cannot be told from "deleted"): counted apart, so "you
           // deleted" never again covers shifts that were only never
-          // delivered.
+          // delivered. One split inside legacy (Bug 2, Nov 6, 2026):
+          // a legacy row at a facility with no saved rule is HELD for
+          // its suggestion, not buried as legacy — the suggestion
+          // above already carries it, and the summary says so too.
           imported.skipped++;
           if (decision === "skip-deleted") imported.skippedDeleted++;
+          else if (parsed && !parsed.facilityKnown) imported.skippedSuggested++;
           else imported.skippedLegacy++;
           continue;
         }
@@ -1303,6 +1320,16 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           continue;
         }
         if (decision === "repair-create" && importRow) {
+          // Ask-first (Bug 2, Nov 6, 2026): a never-delivered pairing
+          // at a hospital with no saved rule is HELD for a suggestion
+          // (grouped above), not imported — the same hold as a fresh
+          // event. Without this, a stale row from before the ask-first
+          // flow would import an unknown-facility shift outright.
+          if (!parsed.facilityKnown) {
+            imported.skipped++;
+            imported.skippedSuggested++;
+            continue;
+          }
           // The shift was paired but never reached the device (an
           // earlier sync's response was lost). Re-create it with the
           // SAME id so the pairing stays valid; the next sync will
@@ -1317,6 +1344,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
               pay,
               note: `Imported from ${imported.sourceCalendarName}`,
               source: "apple-import",
+              // Past import arrives confirmed (Bug 1, Nov 6, 2026);
+              // the browser re-derives the same rule from local date.
+              status: parsed.status,
               updatedAt: ev.updatedAt,
             },
           });
@@ -1398,6 +1428,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             pay,
             note: `Imported from ${imported.sourceCalendarName}`,
             source: "apple-import",
+            // Past import arrives confirmed (Bug 1, Nov 6, 2026);
+            // the browser re-derives the same rule from local date.
+            status: parsed.status,
             updatedAt: ev.updatedAt,
           },
         });

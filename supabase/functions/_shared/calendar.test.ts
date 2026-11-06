@@ -29,6 +29,8 @@ import {
   decideImportEvent,
   decideStaleImportRow,
   groupFacilitySuggestions,
+  heldEventBucket,
+  importStatusForDate,
   normalizeFacilityRules,
   parseWorkShiftEvent,
   parseWorkShiftTitle,
@@ -230,41 +232,47 @@ Deno.test("CAMC titles parse as shifts with facility CAMC, pay blank (unknown fa
   // The Nov 5, 2026 request: past CAMC dates must come over. The parser
   // is date-window-free — even a 2024 date parses; the import range is
   // the full source-calendar history, not a window.
-  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2024-06-03"), {
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2024-06-03", [], "2026-11-06"), {
     facility: "CAMC",
     type: "8-hour day",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
-  assertEquals(parseWorkShiftEvent("CAMC 1st call", "", "2026-03-04"), {
+  assertEquals(parseWorkShiftEvent("CAMC 1st call", "", "2026-03-04", [], "2026-11-06"), {
     facility: "CAMC",
     type: "24-hour call",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
-  assertEquals(parseWorkShiftEvent("CAMC 24", "", "2026-03-04"), {
+  assertEquals(parseWorkShiftEvent("CAMC 24", "", "2026-03-04", [], "2026-11-06"), {
     facility: "CAMC",
     type: "24-hour call",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
-  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-04"), {
+  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-04", [], "2026-11-06"), {
     facility: "CAMC",
     type: "Second call",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
-  assertEquals(parseWorkShiftEvent("CAMC 12", "", "2026-03-04"), {
+  assertEquals(parseWorkShiftEvent("CAMC 12", "", "2026-03-04", [], "2026-11-06"), {
     facility: "CAMC",
     type: "12-hour shift",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
-  assertEquals(parseWorkShiftEvent("CAMC 10", "", "2026-03-04"), {
+  assertEquals(parseWorkShiftEvent("CAMC 10", "", "2026-03-04", [], "2026-11-06"), {
     facility: "CAMC",
     type: "10-hour shift",
     pay: "",
     facilityKnown: false,
+    status: "confirmed",
   });
   // A trailing date must never reclassify the shift: "CAMC 8 Nov 24"
   // is not a 24-hour call, and with a date fragment in the facility
@@ -279,11 +287,12 @@ Deno.test("Facilities list drives recognition and pricing (name + aliases)", () 
     { name: "Thomas Memorial", aliases: "Thomas", rate8: 1800, callBonus: 1000 },
   ]);
   // Alias in the title, canonical name on the shift, pay from the rule.
-  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-06", rules), {
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-06", rules, "2026-11-06"), {
     facility: "Charleston Area Medical Center",
     type: "8-hour day",
     pay: "2000",
     facilityKnown: true,
+    status: "proposed",
   });
   assertEquals(parseWorkShiftEvent("CAMC 24", "", "2026-11-06", rules)?.pay, "4500");
   assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-11-06", rules)?.pay, "2800");
@@ -294,15 +303,26 @@ Deno.test("Facilities list drives recognition and pricing (name + aliases)", () 
   assertEquals(parseWorkShiftEvent("Thomas 2nd call", "", "2026-11-06", rules)?.pay, "2800");
   // A title that is just the facility name is a shift for that facility
   // — unclassified and unpriced, for the user to confirm, never skipped.
-  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", rules), {
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", rules, "2026-11-06"), {
     facility: "Charleston Area Medical Center",
     type: "Shift",
     pay: "",
     facilityKnown: true,
+    status: "proposed",
   });
-  // The same bare name with no facility saved is not a shift: there is
-  // nothing to attribute it to.
-  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", []), null);
+  // Bug 2 (Nov 6, 2026): the same bare name with no facility saved is
+  // ALSO a shift — held for a suggestion, not dropped. The old code
+  // returned null here, so past CAMC shifts titled just "CAMC" never
+  // even became a suggestion and the hospital stayed invisible. Once
+  // the facility is added, the next sync imports it as an unclassified
+  // shift, priced when a rule covers it, unpriced otherwise.
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-11-06", []), {
+    facility: "CAMC",
+    type: "Shift",
+    pay: "",
+    facilityKnown: false,
+    status: "proposed",
+  });
   // Alias spellings dedupe to the same facility, never a second shift.
   assert(sameFacility("CAMC", "Charleston Area Medical Center", rules));
   assert(!sameFacility("CAMC", "Holzer", rules));
@@ -310,18 +330,20 @@ Deno.test("Facilities list drives recognition and pricing (name + aliases)", () 
 });
 
 Deno.test("location names the facility for a bare shift pattern", () => {
-  assertEquals(parseWorkShiftEvent("8", "CAMC", "2026-11-06"), {
+  assertEquals(parseWorkShiftEvent("8", "CAMC", "2026-11-06", [], "2026-11-06"), {
     facility: "CAMC",
     type: "8-hour day",
     pay: "",
     facilityKnown: false,
+    status: "proposed",
   });
   // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
-  assertEquals(parseWorkShiftEvent("2nd call", "Holzer Memorial Hospital", "2026-11-06"), {
+  assertEquals(parseWorkShiftEvent("2nd call", "Holzer Memorial Hospital", "2026-11-06", [], "2026-11-06"), {
     facility: "Holzer",
     type: "Second call",
     pay: "3000",
     facilityKnown: true,
+    status: "proposed",
   });
   assertEquals(parseWorkShiftEvent("8", "Holzer", "2026-11-07")?.pay, "2125");
 });
@@ -340,11 +362,12 @@ Deno.test("non-shift events are still skipped, even when they name a facility", 
 
 Deno.test("Holzer rules are unchanged through the generic parser", () => {
   // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
-  assertEquals(parseWorkShiftEvent("Holzer 8", "", "2026-11-06"), {
+  assertEquals(parseWorkShiftEvent("Holzer 8", "", "2026-11-06", [], "2026-11-06"), {
     facility: "Holzer",
     type: "8-hour day",
     pay: "2125",
     facilityKnown: true,
+    status: "proposed",
   });
   assertEquals(parseWorkShiftEvent("Holzer 8/2nd call", "", "2026-11-07")?.pay, "2000");
   assertEquals(parseWorkShiftEvent("Holzer 24/1st call", "", "2026-11-06")?.pay, "4800");
@@ -503,4 +526,139 @@ Deno.test("facility rules carry weekend and 1st-call hourly rates; server prices
   ]);
   assertEquals(parseWorkShiftEvent("CAMC Second call", "", "2026-11-07", evRules)?.pay, "2000");
   assertEquals(parseWorkShiftEvent("CAMC Second call", "", "2026-11-06", evRules)?.pay, "3000");
+});
+
+// --- Bug 1 (Nov 6, 2026): past imports arrive confirmed, not proposed ---
+//
+// Caleb's 139 shifts in 2026 all arrived as proposed, so Confirmed (C)
+// and Submitted (S) year-to-date read $0 while Proposed (P) held
+// everything. A shift dated before today already happened: it arrives
+// confirmed. Today and future shifts stay proposed; a missing or
+// invalid date stays proposed (never silently confirmed).
+Deno.test("importStatusForDate: past -> confirmed, today/future -> proposed, bad date -> proposed", () => {
+  assertEquals(importStatusForDate("2026-11-05", "2026-11-06"), "confirmed");
+  assertEquals(importStatusForDate("2024-06-03", "2026-11-06"), "confirmed");
+  assertEquals(importStatusForDate("2026-11-06", "2026-11-06"), "proposed");
+  assertEquals(importStatusForDate("2026-11-07", "2026-11-06"), "proposed");
+  assertEquals(importStatusForDate("2027-01-15", "2026-11-06"), "proposed");
+  assertEquals(importStatusForDate("", "2026-11-06"), "proposed");
+  assertEquals(importStatusForDate("not-a-date", "2026-11-06"), "proposed");
+});
+
+Deno.test("parseWorkShiftEvent carries the import status: past Holzer confirmed, future proposed", () => {
+  const past = parseWorkShiftEvent("Holzer 8", "", "2026-11-05", [], "2026-11-06");
+  assertEquals(past?.status, "confirmed");
+  assertEquals(past?.pay, "2125");
+  const today = parseWorkShiftEvent("Holzer 8", "", "2026-11-06", [], "2026-11-06");
+  assertEquals(today?.status, "proposed");
+  const future = parseWorkShiftEvent("Holzer 8", "", "2026-11-20", [], "2026-11-06");
+  assertEquals(future?.status, "proposed");
+  // Same rule for a facilities-list shift and for the generic fallback
+  // (an unknown facility is still held for a suggestion — its status
+  // rides along for when the facility is added and the shift imports).
+  const rules = normalizeFacilityRules([{ name: "CAMC", rate8: 2000 }]);
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-05", rules, "2026-11-06")?.status, "confirmed");
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-11-20", rules, "2026-11-06")?.status, "proposed");
+  assertEquals(parseWorkShiftEvent("Riverside 8", "", "2026-11-05", [], "2026-11-06")?.status, "confirmed");
+});
+
+Deno.test("Bug 2: bare facility title is held for a suggestion, not dropped", () => {
+  // Nov 6, 2026: past CAMC shifts titled just "CAMC" never became a
+  // suggestion — the generic fallback returned null for a title with
+  // no shift pattern. A bare facility-like title is now an
+  // unclassified shift for that facility (facilityKnown false), so
+  // the sync loop holds it and suggests the hospital.
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2026-03-04", []), {
+    facility: "CAMC",
+    type: "Shift",
+    pay: "",
+    facilityKnown: false,
+    status: "confirmed",
+  });
+  // Past dates parse exactly like future ones.
+  assertEquals(parseWorkShiftEvent("CAMC", "", "2024-06-03", []), {
+    facility: "CAMC",
+    type: "Shift",
+    pay: "",
+    facilityKnown: false,
+    status: "confirmed",
+  });
+  // A multi-word bare facility name, and trailing punctuation.
+  assertEquals(parseWorkShiftEvent("Charleston Area Medical Center", "", "2026-03-04", [])?.facility, "Charleston Area Medical Center");
+  assertEquals(parseWorkShiftEvent("CAMC:", "", "2026-03-04", [])?.facility, "CAMC");
+  // Location still rides along for the suggestion address.
+  assertEquals(parseWorkShiftEvent("CAMC", "3200 MacCorkle Ave, Charleston, WV 25304", "2026-03-04", [])?.facilityKnown, false);
+  // Guards: a single ordinary word is a person's name, not a hospital.
+  assertEquals(parseWorkShiftEvent("Ashley", "", "2026-03-04", []), null);
+  assertEquals(parseWorkShiftEvent("Jordan", "", "2026-03-04", []), null);
+  // And the old non-shift guards still hold.
+  assertEquals(parseWorkShiftEvent("Lunch at CAMC", "", "2026-03-04", []), null);
+  assertEquals(parseWorkShiftEvent("CAMC meeting", "", "2026-03-04", []), null);
+  assertEquals(parseWorkShiftEvent("CAMC 8 Nov 24", "", "2026-03-04", []), null);
+});
+
+Deno.test("Bug 2: past CAMC events group into a suggestion with count + date range", () => {
+  // The exact Nov 6 report: past CAMC shifts must surface as one
+  // suggestion — "We noticed shifts at CAMC in your calendar. Add it
+  // as a facility?" — with a shift count and a date range, not only
+  // future ones.
+  const grouped = groupFacilitySuggestions([
+    { facility: "CAMC", date: "2026-03-04", title: "CAMC", location: "" },
+    { facility: "CAMC", date: "2026-03-06", title: "CAMC 8", location: "3200 MacCorkle Ave, Charleston, WV 25304" },
+    { facility: "CAMC", date: "2026-03-10", title: "CAMC 2nd call", location: "" },
+    { facility: "camc", date: "2026-03-05", title: "CAMC 10", location: "" },
+  ]);
+  assertEquals(grouped.length, 1);
+  assertEquals(grouped[0].name, "CAMC");
+  assertEquals(grouped[0].count, 4);
+  assertEquals(grouped[0].firstDate, "2026-03-04");
+  assertEquals(grouped[0].lastDate, "2026-03-10");
+  assertEquals(grouped[0].address, "3200 MacCorkle Ave, Charleston, WV 25304");
+});
+
+Deno.test("Bug 2: heldEventBucket — legacy rows at an unsaved facility are suggested, deletions never are", () => {
+  // Fresh / duplicate / already-here / repair at an unsaved facility:
+  // held for a suggestion.
+  assertEquals(heldEventBucket("create", false), "suggested");
+  assertEquals(heldEventBucket("duplicate", false), "suggested");
+  assertEquals(heldEventBucket("already-here", false), "suggested");
+  assertEquals(heldEventBucket("repair-create", false), "suggested");
+  assertEquals(heldEventBucket("repair-pair", false), "suggested");
+  // Skip-legacy at an unsaved facility: a pairing from an earlier
+  // interrupted sync is not proof of deletion, so it is suggested too
+  // — the old code excluded it and the hospital stayed invisible.
+  assertEquals(heldEventBucket("skip-legacy", false), "suggested");
+  // Skip-legacy at a saved facility: stays legacy (migration 005 or
+  // the repair button is the way out), never silently re-imported.
+  assertEquals(heldEventBucket("skip-legacy", true), "legacy");
+  // An explicit deletion is never suggested, saved or not.
+  assertEquals(heldEventBucket("skip-deleted", false), "deleted");
+  assertEquals(heldEventBucket("skip-deleted", true), "deleted");
+  // A known facility on the normal path is not a hold at all.
+  assertEquals(heldEventBucket("create", true), null);
+  assertEquals(heldEventBucket("already-here", true), null);
+  assertEquals(heldEventBucket("repair-create", true), null);
+});
+
+Deno.test("Bug 2: CAMC screenshot rates price day shifts, call stays unpriced (never $0)", () => {
+  // Test-only rates from Caleb's CAMC screenshot (Nov 6, 2026):
+  // $250/hr; 8h $2,000; 10h $2,500; 12h $3,000; no call taken. These
+  // live only in this test — no CAMC rate is hard-coded in the app.
+  const rules = normalizeFacilityRules([
+    { name: "Charleston Area Medical Center", aliases: "CAMC", hourlyRate: 250, rate8: 2000, rate10: 2500, rate12: 3000 },
+  ]);
+  const rule = rules[0];
+  assertEquals(priceShiftWithFacility("8-hour day", rule, "2026-03-04"), "2000");
+  assertEquals(priceShiftWithFacility("10-hour shift", rule, "2026-03-05"), "2500");
+  assertEquals(priceShiftWithFacility("12-hour shift", rule, "2026-03-06"), "3000");
+  // No call taken at CAMC: no rate at all — blank, never $0.
+  assertEquals(priceShiftWithFacility("Second call", rule, "2026-03-07"), "");
+  assertEquals(priceShiftWithFacility("24-hour call", rule, "2026-03-08"), "");
+  // End to end through the parser once the facility is saved: past
+  // CAMC shifts price from the rule.
+  assertEquals(parseWorkShiftEvent("CAMC 8", "", "2026-03-04", rules)?.pay, "2000");
+  assertEquals(parseWorkShiftEvent("CAMC 10", "", "2026-03-05", rules)?.pay, "2500");
+  assertEquals(parseWorkShiftEvent("CAMC 12", "", "2026-03-06", rules)?.pay, "3000");
+  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-07", rules)?.pay, "");
+  assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-07", rules)?.facilityKnown, true);
 });

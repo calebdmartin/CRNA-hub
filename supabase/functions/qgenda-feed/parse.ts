@@ -21,6 +21,11 @@ export interface QgendaShift {
   type: string;
   pay: string;
   facilityKnown: boolean;
+  // Import status from the shared parser (Bug 1, Nov 6, 2026): a shift
+  // dated before today already happened, so it arrives 'confirmed';
+  // future shifts arrive 'proposed'. The client applies the same rule
+  // from the local date when it saves the shift.
+  status: "confirmed" | "proposed";
   uid: string;
 }
 
@@ -105,6 +110,7 @@ export function parseQgendaICS(
       type: parsed.type,
       pay: parsed.pay,
       facilityKnown: parsed.facilityKnown,
+      status: parsed.status,
       uid,
     });
     if (!parsed.facilityKnown) {

@@ -163,12 +163,16 @@ t('assistant answer describes the sheet first and labels the new tab as the stan
   sandbox.__answer.includes('never store a portal password') &&
   sandbox.__answer.includes('never claim a record is verified unless I actually read it'));
 
-// --- 5. Onboarding step 4: final model first, stand-in labelled.
-run(`globalThis.__step4 = onboardingSteps()[3].desc;`);
-t('onboarding step 4 leads with the sheet and labels the new-tab preview as the stand-in',
-  sandbox.__step4.includes('system sign-in sheet') &&
-  sandbox.__step4.includes(STANDIN) &&
-  sandbox.__step4.indexOf('system sign-in sheet') < sandbox.__step4.indexOf(STANDIN));
+// --- 5. Onboarding step 4: one-line direction; the final model +
+// stand-in labelling live on the Credentials page (the destination).
+run(`globalThis.__step4 = onboardingSteps()[3]; globalThis.__credPage = credentialsPage();`);
+t('onboarding step 4 direction is one short line: connect, sign in on the portal page, no password here',
+  sandbox.__step4.direction.includes('Connect NBCRNA, AANA, and your state licenses') &&
+  sandbox.__step4.direction.includes('never a password here'));
+t('Credentials page (step 4 destination) still leads with the sheet and labels the new-tab preview as the stand-in',
+  sandbox.__credPage.includes('system sign-in sheet') &&
+  sandbox.__credPage.includes(STANDIN) &&
+  sandbox.__credPage.indexOf('system sign-in sheet') < sandbox.__credPage.indexOf(STANDIN));
 
 // --- 6. Deterministic portal-page parsing: reads what is there, invents nothing.
 run(`

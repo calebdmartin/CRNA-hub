@@ -16,7 +16,8 @@
 //     never saved, uncertain rows stay unchecked; a file with no names
 //     is treated as the user's own schedule and says so.
 //   * Preview-before-save: parsing saves nothing; approve adds only
-//     included rows as proposed shifts and checks step 2 off.
+//     included rows as schedule-import shifts (past rows confirmed,
+//     future rows proposed — Bug 1, Nov 6, 2026) and checks step 2 off.
 //   * AI schedule preview: server rows are classified the same way.
 //   * QGenda: feed-URL validation, masking (never the full URL), the
 //     QGenda panel copy (secret handling + sign-in fallback), and step
@@ -141,9 +142,9 @@ run(`
   globalThis.__before = db.shifts.length;
   approveScheduleImport();
 `);
-t('approve adds only the 2 matched rows as proposed schedule-import shifts',
+t('approve adds only the 2 matched rows as schedule-import shifts, past confirmed / future proposed (Bug 1)',
   run(`db.shifts.length`) === 2 &&
-  run(`db.shifts.every(x => x.status === 'proposed' && x.source === 'schedule-import')`) &&
+  run(`db.shifts.every(x => x.source === 'schedule-import' && x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
   run(`db.shifts.map(x => x.date).join(',')`) === '2026-11-10,2026-11-12');
 t('approve checks step 2 off and records the imported file',
   run(`db.settings.scheduleImported`) === true &&

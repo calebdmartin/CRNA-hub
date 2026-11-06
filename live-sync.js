@@ -25,7 +25,9 @@
 //      and the shared parser in supabase/functions/_shared/calendar.ts):
 //      facilities drive recognition and pricing; dedupe via
 //      calendar_import_map; a shift the user deleted is never
-//      re-imported; imported shifts arrive as "proposed"; a shift
+//      re-imported; imported shifts arrive as "confirmed" when dated
+//      before today (they already happened) and "proposed" when dated
+//      today or later (Bug 1, Nov 6, 2026); a shift
 //      with no pay rule stays unpriced (pay blank, incomplete) —
 //      never $0; an unknown hospital is held and suggested once
 //      ("We noticed shifts at <Hospital> — add it as a facility?"),
@@ -317,10 +319,31 @@ function liveSyncFacilityKnown(name) {
   return (db.facilities || []).some((g) => String(g.name || '').trim().toLowerCase() === String(name || '').trim().toLowerCase());
 }
 
+// Import status (Bug 1, Nov 6, 2026): a shift dated before today
+// (local date) already happened, so it arrives 'confirmed'; today and
+// future shifts stay 'proposed'; a missing/invalid date stays
+// 'proposed'. The server stamps the same rule into the shift it sends
+// (see importStatusForDate in supabase/functions/_shared/calendar.ts),
+// but the browser re-derives it from the local date when storing, so
+// the local date wins on the device — matching the year-to-date split,
+// which is also local-date based. A stored status is never rewritten
+// by an update: only creates are stamped.
+function liveSyncLocalDate(d) { const x = d || new Date(); return [x.getFullYear(), String(x.getMonth() + 1).padStart(2, '0'), String(x.getDate()).padStart(2, '0')].join('-'); }
+function liveSyncImportStatusForDate(date) {
+  const d = String(date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return 'proposed';
+  return d < liveSyncLocalDate(new Date()) ? 'confirmed' : 'proposed';
+}
+
 function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
   let created = 0, updated = 0, deleted = 0;
   const suggestions = [];
+  // Past-shift rule (Bug 1, shared with Bug 2): a shift dated before
+  // today already happened, so it arrives confirmed, not proposed.
+  // Today and future shifts stay proposed until the user moves them
+  // along. liveSyncImportStatusForDate (above) derives it from the
+  // local date — one implementation, not two.
   changes.forEach((ch) => {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
@@ -328,7 +351,10 @@ function liveSyncApplyChanges(provider, data) {
       // Imported shifts arrive with source 'apple-import' (and a note
       // naming the calendar they came from); shifts from the app-owned
       // calendar carry no source and default to 'calendar-<provider>'.
-      db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
+      // Status: past imports arrive confirmed (Bug 1, Nov 6, 2026) —
+      // re-derived from the local date here (see above); the server
+      // stamps the same rule into the payload.
+      db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: liveSyncImportStatusForDate(s.date), incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
       // Not on the app-owned calendar yet: an imported shift reaches
       // it only on the next sync, once the browser sends it back as a
       // local shift. The shiftSync application below overrides this

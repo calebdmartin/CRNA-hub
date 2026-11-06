@@ -99,6 +99,14 @@ Deno.test("parseQgendaICS: Holzer shifts priced, unknown facility flagged, lunch
   assertEquals(shifts[2].facilityKnown, false);
   assertEquals(shifts[2].pay, "");
   assertEquals(unknownFacilities, ["St. Mary"]);
+  // Bug 1 (Nov 6, 2026): each QGenda shift carries the import status —
+  // past dates arrive confirmed, today/future arrive proposed. The
+  // expectation is computed from today's UTC date, so it stays true
+  // whenever the test runs.
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  for (const sh of shifts) {
+    assertEquals(sh.status, sh.date < todayUtc ? "confirmed" : "proposed");
+  }
 });
 
 Deno.test("parseQgendaICS: non-ICS text yields no shifts", () => {
