@@ -886,7 +886,11 @@ function liveSyncCardsHTML() {
 }
 
 function liveSyncPanelHTML() {
-  let html = '<h2>Live calendar sync</h2>';
+  // Body of the "Live calendar sync" panel only (Nov 6, 2026): Live
+  // calendar sync, QGenda, and Upload a schedule are now three separate
+  // sibling panels on the Account page, so the panel's own summary
+  // header carries this title — no <h2> in the body.
+  let html = '';
   if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) {
     html += '<p><strong>Live sync needs a signed-in account.</strong> The .ics import/export below works without one.</p>';
   } else if (typeof cloudSession === 'undefined' || !cloudSession) {
@@ -924,6 +928,19 @@ function liveSyncPanelHTML() {
     html += '<p class="muted">Conflict rule: newest edit wins. Deletions wait above unless auto-delete is on for that provider.</p>';
   }
   return html;
+}
+
+// Default open state for the Live calendar sync panel (Nov 6, 2026):
+// open while the user still needs to act in it — onboarding step 2 in
+// progress, nothing connected yet, a provider needs reconnecting, or
+// deletions are waiting for confirmation. Once a provider is connected
+// and nothing is waiting, the panel rests collapsed on its header and
+// the connected provider's summary card inside carries the status.
+function liveSyncPanelOpen() {
+  if (typeof onboardStep !== 'undefined' && onboardStep === 2) return true;
+  if (liveSyncState.pending.length) return true;
+  if (liveSyncChosenProviders().some((p) => liveSyncConnections[p] && liveSyncConnections[p].status === 'needs_reauth')) return true;
+  return liveSyncConnectedProviders().length === 0;
 }
 
 async function liveSyncInit() {

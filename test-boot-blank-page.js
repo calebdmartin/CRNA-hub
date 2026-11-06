@@ -57,7 +57,7 @@ const t = (name, cond) => {
 
 // ---------- 1+2: static shell checks ----------
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-t('sw: cache bumped to v51', swSrc.includes("crna-hub-shell-v51"));
+t('sw: cache bumped to v52', swSrc.includes("crna-hub-shell-v52"));
 t('sw: index.html fallback is navigation-only', swSrc.includes("e.request.mode==='navigate'"));
 t('sw: no unconditional index.html fallback for subresources', !swSrc.includes("r||caches.match('./index.html')"));
 t('sw: uncached subresource gets a real error response', swSrc.includes('status:504'));

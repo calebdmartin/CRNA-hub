@@ -257,7 +257,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     globalThis.__schedFresh = scheduleImportHTML();
   `);
   t('upload a schedule: fresh user (no calendar, nothing imported) starts expanded',
-    sandbox.__schedFresh.startsWith('<details class="collapse-sub" id="schedule-import-panel" open>') &&
+    sandbox.__schedFresh.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>') &&
     sandbox.__schedFresh.includes('f_scheduleFile') &&
     sandbox.__schedFresh.includes('Read schedule — preview only'));
 
@@ -266,7 +266,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     globalThis.__schedConnected = scheduleImportHTML();
   `);
   t('upload a schedule: collapsed once a calendar is connected, controls intact inside',
-    sandbox.__schedConnected.startsWith('<details class="collapse-sub" id="schedule-import-panel">') &&
+    sandbox.__schedConnected.startsWith('<details class="panel collapse-panel" id="schedule-import-panel">') &&
     sandbox.__schedConnected.includes('Upload a schedule') &&
     sandbox.__schedConnected.includes('f_scheduleFile') &&
     sandbox.__schedConnected.includes('id="scheduleForm"'));
@@ -278,7 +278,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     db.settings.scheduleImported = false;
   `);
   t('upload a schedule: also collapsed after a schedule was already imported',
-    sandbox.__schedImported.startsWith('<details class="collapse-sub" id="schedule-import-panel">'));
+    sandbox.__schedImported.startsWith('<details class="panel collapse-panel" id="schedule-import-panel">'));
 
   run(`
     schedulePreview = { rows: [] };
@@ -286,10 +286,10 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     schedulePreview = null;
   `);
   t('upload a schedule: an in-flight preview keeps it open',
-    sandbox.__schedBusy.startsWith('<details class="collapse-sub" id="schedule-import-panel" open>'));
+    sandbox.__schedBusy.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>'));
 
-  t('service worker cache bumped to v51',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v51'));
+  t('service worker cache bumped to v52',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v52'));
 
   console.log(failures === 0 ? 'account-collapse test done: all passed' : 'account-collapse test done: FAILURES=' + failures);
 })();
