@@ -286,8 +286,8 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     sandbox.__blockedLabel === 'Blocked — automation not allowed');
   t('a never-checked monitor is due now',
     sandbox.__dueNew === true);
-  t('monitoring panel is one clean line: weekly, faster near renewal, no password stored; no preview-limit scaffolding',
-    sandbox.__monHtml.includes('weekly — faster near renewal') &&
+  t('monitoring panel is one clean line: checks run on their own every 7 days, faster near renewal, no password stored; no preview-limit scaffolding',
+    sandbox.__monHtml.includes('every 7 days — faster near renewal') &&
     sandbox.__monHtml.includes('never store a portal password') &&
     !sandbox.__monHtml.includes('Web-preview limit') &&
     !sandbox.__monHtml.includes('finished app'));

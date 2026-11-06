@@ -302,7 +302,7 @@ function answerQuestion(raw){
   if(/this year|year.*(income|gross|earn|pay)|income.*year|annual (income|gross|pay)|how much.*year/.test(l)){const y=currentYear(),cur=shiftsForYear(y);if(!cur.length)return `No shifts are recorded for ${y} yet, so I can't project this year's income. Add shifts or import a CSV, and this answer will use them.`;const split=yearIncomeSplit(y);return `Income for ${y}, from recorded shifts only — three totals, same split as the Dashboard: C (confirmed only) ${currency(split.c.ytd)} year to date and ${currency(split.c.predicted)} predicted annual; S (submitted-inclusive — confirmed plus submitted, if every submitted date is approved) ${currency(split.s.ytd)} year to date and ${currency(split.s.predicted)} predicted annual; P (proposed-inclusive — S plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date and ${currency(split.p.predicted)} predicted annual. None of these is paid income — they are estimates from scheduled shifts. Shifts from other years are not included.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in any of the three totals.`:''}${split.w2Salary?` ${split.w2Salary} W-2 salary day(s) are excluded — paid through W-2 salary, never double-counted.`:''}`}
   if(/income|projected|earn|gross|pay.*month|this month/.test(l)){const cur=assistantMonthShifts();if(!cur.length)return 'No shifts are recorded for this month, so I can\'t project income yet. Add shifts or import a CSV, and this answer will use them.';const m=monthIncomeSplit(localDate(new Date()).slice(0,7));const by={};cur.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).forEach(x=>{by[x.facility||'Unknown']=(by[x.facility||'Unknown']||0)+num(x.pay)});return `Projected income this month, from recorded shifts only — three totals, same split as the Dashboard: C (confirmed only) ${currency(m.c)}; S (submitted-inclusive) ${currency(m.s)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). By facility (confirmed only): ${Object.keys(by).length?Object.entries(by).map(([f,v])=>`${f} ${currency(v)}`).join('; '):'no confirmed shifts yet'}. None of these is paid income.${m.unpriced?` ${m.unpriced} shift(s) this month are unpriced and are not included in any total.`:''}`}
   if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: tap “I signed in — check it” on the portal’s Connect card (or a Check button below), then show me the page that lists your record — I read it and show you the report, and nothing is saved until you approve it.';
-  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — open the Assistant tab and tap Run check.`:''} Public checks run automatically where the source allows it; private portals run when you sign in yourself, and the assistant prompts you when a sign-in is due.`;}
+  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — sign in from the prompt on the Credentials tab and the guided check runs.`:''} Public checks run automatically where the source allows it; private portals run when you sign in yourself, and the assistant prompts you when a sign-in is due.`;}
   if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, and state license dates are entered.';return `Credentials needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records a portal pull brought back are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
   if(/mileage|miles|trip/.test(l)){if(!db.mileage.length)return 'No mileage trips are logged yet. Log one from the Mileage tab, or generate schedule-based drafts there and confirm each trip.';const total=verifiedMileageTotal(),verified=verifiedMileageTrips().length,draft=db.mileage.filter(x=>x.status==='draft').length;return `Mileage on this device: ${total.toFixed(1)} verified miles across ${verified} confirmed trip(s), including ${draft} draft(s) still needing confirmation (drafts are not counted until the weekly review confirms them). Mileage defaults to ${tripTypeLabel(mileageTripType())}, and each trip shows whether it is round trip or one way — a round-trip trip is counted once, never doubled. Drafts are not verified trips — confirm the trip occurred and the actual miles before using them.`}
   if(/facilit|hospital/.test(l)){if(!db.facilities.length)return 'No facilities are saved yet. Add one from the Facilities tab with its rates, and shifts can then use those rates.';return `You have ${db.facilities.length} facilit(ies) saved: ${db.facilities.map(f=>`${f.name} (8h ${currency(f.rate8)}, 24h ${currency(f.rate24)}, 2nd call ${currency(f.rateSecond)})`).join('; ')}. I don't quote facility notes here, since they may hold authorized facility codes.`}
@@ -625,10 +625,12 @@ const PORTAL_VERIFIED_SOURCES=['public_verification','nbcrna_portal','aana_porta
 //     was read. A check that finds nothing records "checked, no change"
 //     with the date. A source that blocks automation is recorded honestly
 //     as blocked — never faked.
-//   * Web-preview limit, stated in the UI: this preview cannot run checks
-//     in the background while it is closed. Checks run when the app is open
-//     (due checks are flagged and one tap runs them). Background execution
-//     on schedule is a finished-native-app capability.
+//   * There is no "run check now": the cadence is the only trigger.
+//     When a check comes due, public-route sources are attempted
+//     automatically (monitorBackgroundSweep — on app open / sign-in here,
+//     a background task in the finished native app); sources that need a
+//     signed-in session surface ONE prompt per due cycle, which launches
+//     the guided check. Dismissing snoozes the prompt to the next cycle.
 // Monitoring state lives on this device (db.portalMonitoring, included in
 // JSON backups); the check log reuses db.portalChecks (last 20).
 const MONITOR_SOURCES={
@@ -656,8 +658,29 @@ function monitorCadence(mon){
 function addDaysStr(iso,n){const d=new Date(iso+'T12:00:00');d.setDate(d.getDate()+n);return localDate(d)}
 function monitorNextDue(mon,todayStr){
   const today=todayStr||localDate(new Date());
-  if(!mon.lastChecked)return today;
-  return addDaysStr(String(mon.lastChecked).slice(0,10),monitorCadence(mon));
+  let due;
+  if(!mon.lastChecked)due=today;
+  else due=addDaysStr(String(mon.lastChecked).slice(0,10),monitorCadence(mon));
+  if(mon.snoozeUntil&&mon.snoozeUntil>due)due=mon.snoozeUntil;
+  return due;
+}
+function monitorMethod(mon){return (MONITOR_SOURCES[mon.source]||{}).method||'signed_in'}
+// Names for the public check come from the monitor (asked once) or the
+// step-1 profile name; with a signed-in app session the public check can
+// run on its own. Without them it falls back to the due prompt.
+function monitorPublicReady(mon){
+  if(mon.source!=='nbcrna')return monitorMethod(mon)==='public';
+  if(typeof cloudSession==='undefined'||!cloudSession)return false;
+  const named=((mon.firstName||'')+' '+(mon.lastName||'')).trim();
+  return !!(named||String(profileName()||'').trim().split(/\s+/).filter(Boolean).length>=2);
+}
+// One prompt per due cycle for checks that need the user: visible while
+// the check is due and this cycle has not been dismissed. Dismissing
+// snoozes to the next cadence (a new due date = a new cycle).
+function monitorPromptVisible(mon,todayStr){
+  if(!monitorIsDue(mon,todayStr))return false;
+  if(monitorMethod(mon)==='public'&&monitorPublicReady(mon))return false;
+  return mon.promptDismissedCycle!==monitorNextDue(mon,todayStr);
 }
 function monitorIsDue(mon,todayStr){if(mon.enabled===false)return false;return monitorNextDue(mon,todayStr)<=(todayStr||localDate(new Date()))}
 function ensurePortalMonitoring(){
@@ -689,41 +712,48 @@ function recordMonitorCheck(key,outcome,summary,method){
   const mon=mons.find(m=>m.key===key);if(!mon)return null;
   const when=cloudNow();
   mon.lastChecked=when;mon.lastOutcome=outcome;mon.lastSummary=summary||'';mon.lastMethod=method||'';
+  mon.snoozeUntil='';mon.promptDismissedCycle='';mon.autoAttemptCycle='';
   if(outcome==='changed')mon.changeFlag=true;
   db.portalChecks=[{source:mon.source,state:mon.state||'',retrievedAt:when,status:outcome,summary:summary||''},...(db.portalChecks||[])].slice(0,20);
   persist();
   return mon;
 }
 function monitorOutcomeLabel(o){return {'no_change':'Checked — no change','changed':'Changed','needs_signin':'Needs sign-in','blocked':'Blocked — automation not allowed','failed':'Check failed','not_checked':'Not checked yet'}[o]||o||'Not checked yet'}
+function monitorDuePromptHTML(mon){
+  return `<div class="item"><strong>${escapeHTML(mon.label)} check due — sign in to run it.</strong><div class="toolbar"><button type="button" data-action="monitor-assistant" data-id="${escapeHTML(mon.key)}">Run my check</button><button type="button" class="secondary" data-action="monitor-prompt-dismiss" data-id="${escapeHTML(mon.key)}">Not now</button></div></div>`;
+}
+// The reminder surface: due-check prompts at the top of the Credentials
+// tab — one per due cycle, next to the credential deadline notices.
+function monitorDuePromptsHTML(){
+  const mons=ensurePortalMonitoring(),today=localDate(new Date());
+  const due=mons.filter(m=>monitorPromptVisible(m,today));
+  if(!due.length)return '';
+  return `<section class="panel"><h2>Checks due</h2>${due.map(m=>monitorDuePromptHTML(m)).join('')}</section>`;
+}
 function portalMonitoringHTML(){
   const mons=ensurePortalMonitoring(),today=localDate(new Date());
-  const due=mons.filter(m=>monitorIsDue(m,today));
   const log=(db.portalChecks||[]).slice(0,8);
-  return `<section class="panel"><h2>Portal monitoring — the assistant watches for you</h2><p class="muted">The assistant checks NBCRNA, AANA, and your state licenses weekly — faster near renewal. Sign in when a check needs it; we never store a portal password.</p>${due.length?`<p><strong>${due.length} check(s) due now:</strong> ${due.map(m=>escapeHTML(m.label)).join(', ')} — tap Run check below.</p>`:'<p class="muted">No checks are due right now.</p>'}${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (escalated — renewal is near)':' (weekly)'}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Method: ${m.source==='nbcrna'?'public check (no login)':'signed-in session — prompts you to sign in when due'} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div><div class="muted">${escapeHTML((MONITOR_SOURCES[m.source]||{}).blocked||'')}</div><div class="toolbar"><button type="button" data-action="monitor-run" data-id="${escapeHTML(m.key)}">Run check now</button><button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button><button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No monitoring checks logged yet — run a check above and it will appear here.</p>'}</section>`;
+  return `<section class="panel"><h2>Portal monitoring — the assistant watches for you</h2><p class="muted">Checks run on their own every 7 days — faster near renewal. If a check needs your sign-in, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue&&monitorMethod(m)!=='public'?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}</section>`;
 }
 // Dashboard portal-monitoring card removed (Nov 6, 2026): monitoring
 // lives on the Credentials tab; the Dashboard no longer repeats it.
 // The monitoring engine, Credentials panel, and Assistant checks
 // are untouched.
-// Run one due check now. NBCRNA: public verification, attempted with the
-// name stored on the monitor (asked once, never a password). AANA and state
-// licenses: signed-in check through the assistant flow — the user signs in
-// themselves. Outcomes (including blocked / failed) are recorded in the
-// monitoring log; nothing is ever faked.
-async function monitorRunCheck(key){
-  const mon=(db.portalMonitoring||[]).find(x=>x.key===key);if(!mon)return;
-  if(mon.source!=='nbcrna')return monitorAssistantCheck(mon);
-  if(!SUPABASE_CONFIGURED){alert('Supabase is not configured yet — sign in on the Account tab first.');return setTab('Account')}
-  if(!cloudSession){alert('Sign in on the Account tab first. The public check runs for your signed-in account.');return setTab('Account')}
-  const before=monitorSnapshot('nbcrna');
+// Automatic public check — the background path. When a check comes due,
+// a source with a working public route (NBCRNA public verification) is
+// attempted on its own: no prompt, no alert. Names come from the monitor
+// (asked once in the guided flow) or the step-1 profile name. Outcomes —
+// including blocked / failed — are recorded in the monitoring log, and
+// lastChecked only moves when a check actually ran. Nothing is faked.
+async function monitorAttemptPublic(mon){
+  if(!SUPABASE_CONFIGURED||!cloudSession)return false;
   let first=mon.firstName||'',last=mon.lastName||'';
   if(!first||!last){
-    const f=prompt('NBCRNA public verification — first name (as certified):','');
-    if(f===null||!String(f).trim())return;
-    const l=prompt('Last name (as certified):','');
-    if(l===null||!String(l).trim())return;
-    first=String(f).trim();last=String(l).trim();mon.firstName=first;mon.lastName=last;
+    const parts=String(profileName()||'').trim().split(/\s+/).filter(Boolean);
+    if(parts.length>=2){first=parts[0];last=parts.slice(1).join(' ');mon.firstName=first;mon.lastName=last;persist();}
   }
+  if(!first||!last)return false;
+  const before=monitorSnapshot('nbcrna');
   try{
     const data=await portalCall({action:'verify-nbcrna',firstName:first,lastName:last,certNumber:((db.nbcrna||{}).number||''),state:''});
     const r=data.record||{};
@@ -732,15 +762,36 @@ async function monitorRunCheck(key){
     delete portalAttemptFailed['nbcrna'];delete portalHealed['nbcrna'];
     persist();cloudSaveKind('nbcrna');await portalRefreshStatus();
     const changed=monitorSnapshotChanged(before,monitorSnapshot('nbcrna'));
-    recordMonitorCheck(key,changed?'changed':'no_change',changed?('NBCRNA record changed on public check — '+(r.certification_number||'certification')+' expires '+(r.period_end||'unknown')):'NBCRNA public check: no change','public');
-    render();
-    alert(changed?'NBCRNA changed — see the monitoring log on the Assistant tab.':'NBCRNA checked — no change.');
+    recordMonitorCheck(mon.key,changed?'changed':'no_change',changed?('NBCRNA record changed on public check — '+(r.certification_number||'certification')+' expires '+(r.period_end||'unknown')):'NBCRNA public check: no change','public');
+    return true;
   }catch(e){
     const msg=portalErrMsg(e);portalNoteFailed('nbcrna',msg);
-    recordMonitorCheck(key,/404|did not answer|unavailable|not answer/i.test(msg)?'blocked':'failed','NBCRNA public check could not run: '+msg,'public');
-    await portalRefreshStatus();render();
-    alert('NBCRNA monitoring check could not run: '+msg+'\n\nThis is recorded in the monitoring log — nothing was faked.');
+    recordMonitorCheck(mon.key,/404|did not answer|unavailable|not answer/i.test(msg)?'blocked':'failed','NBCRNA public check could not run: '+msg,'public');
+    await portalRefreshStatus();
+    return true;
   }
+}
+// The background cadence sweep: the only way monitoring checks start.
+// Runs when the app opens and after sign-in (in the finished native app
+// this is a background task on the same schedule). Public-route sources
+// are attempted automatically, once per due cycle; sources that need a
+// signed-in session are left due — the one prompt per cycle (panel +
+// Credentials reminder surface) is how they run, via the guided flow.
+let monitorSweepRunning=false;
+async function monitorBackgroundSweep(){
+  if(monitorSweepRunning)return;monitorSweepRunning=true;
+  try{
+    const today=localDate(new Date());let attempted=false;
+    for(const mon of ensurePortalMonitoring()){
+      if(!monitorIsDue(mon,today))continue;
+      if(monitorMethod(mon)!=='public')continue;
+      const cycle=monitorNextDue(mon,today);
+      if(mon.autoAttemptCycle===cycle)continue;
+      mon.autoAttemptCycle=cycle;persist();
+      if(await monitorAttemptPublic(mon))attempted=true;
+    }
+    if(attempted)render();
+  }catch(e){}finally{monitorSweepRunning=false;}
 }
 function monitorAssistantCheck(mon){
   const src=mon.source;
@@ -1629,6 +1680,7 @@ function credentialsPage(){
     manualList=`<p class="muted">Generic credentials from earlier versions are preserved here, unchanged.</p>`+list('credentials',db.credentials.slice().sort((a,b)=>a.expiry.localeCompare(b.expiry)),x=>`<strong>${escapeHTML(x.name)}</strong> · ${fmt(x.expiry)} <span class="${x.expiry<localDate(new Date())?'expired':x.expiry<=localDate(new Date(Date.now()+30*864e5))?'warning':'success'}">${x.expiry<localDate(new Date())?'EXPIRED':x.expiry<=localDate(new Date(Date.now()+30*864e5))?'Due within 30 days':'Current'}</span><div class="muted">${escapeHTML(x.issuer||'')} ${escapeHTML(x.note||'')}</div>`);
   }
   return `${onboardDirectionHTML(4)}<p class="hint">Tap Connect and sign in on the portal’s own page — we never see your password.${profileName()?` Portal records are matched to the name from step 1 — “${escapeHTML(profileName())}”.`:``} Records a check brings back are labelled with their source; the rest is user-entered, not verified.</p>
+  ${monitorDuePromptsHTML()}
   ${connCard('NBCRNA','National Board of Certification and Recertification for Nurse Anesthetists — your certification record.','certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status.',nbcrnaManual,'portal.nbcrna.com','https://portal.nbcrna.com/','nbcrna')}
   ${connCard('AANA','American Association of Nurse Anesthesiology — your membership and CE transcript. Kept separate from NBCRNA certification.','membership status, membership expiration, and CE transcript totals (Class A / Class B).',aanaManual,'aana.com/login','https://www.aana.com/login','aana')}
   ${portalMonitoringHTML()}
@@ -2497,7 +2549,8 @@ function setShiftStatus(shiftId,status){const x=(db.shifts||[]).find(s=>s.id===s
 // the totals move only because past priced work is now confirmed.
 function pastProposedShifts(year){const y=+year||currentYear();const today=localDate(new Date());return (db.shifts||[]).filter(x=>String(x.date||'').startsWith(String(y)+'-')&&String(x.date||'')<today&&normalizeShiftStatus(x.status)==='proposed')}
 function confirmPastProposedShifts(year){const y=+year||currentYear();const list=pastProposedShifts(y);if(!list.length){alert('No past proposed shifts to confirm in '+y+'.');return 0}list.forEach(x=>{x.status='confirmed'});persist();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();render();alert('Marked '+list.length+' past shift(s) in '+y+' as confirmed. They now count in Confirmed (C) year to date.');return list.length}
-function actions(action,entry,date){if(action.startsWith('live-')){if(typeof liveSyncAction==='function')return liveSyncAction(action,entry);}if(action==='onboard-dismiss'){onboardStep=0;db.settings.onboardingDismissed=true;persist();return render();}if(action==='onboard-goto'){setTab(entry);const st=onboardingSteps().find(x=>x.tab===entry&&(x.panel||'')===(date||''));onboardStep=st?st.n:0;render();if(date){const el=document.getElementById(date);if(el)el.scrollIntoView({block:'start'});}return;}if(action==='prev')return moveMonth(-1);if(action==='next')return moveMonth(1);if(action==='today'){month=new Date();month.setDate(1);selected=localDate(new Date());return render()}if(action==='day')return selectDay(date);if(action==='add-shift'){tab='Dashboard';editId=null;showShiftForm=true;render();window.scrollTo(0,0);return;}if(action==='ask-assistant')return setTab('Assistant');if(action==='connect-portal'){const key=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return portalOpenSignIn(key);}if(action==='monitor-run')return monitorRunCheck(entry);
+function actions(action,entry,date){if(action.startsWith('live-')){if(typeof liveSyncAction==='function')return liveSyncAction(action,entry);}if(action==='onboard-dismiss'){onboardStep=0;db.settings.onboardingDismissed=true;persist();return render();}if(action==='onboard-goto'){setTab(entry);const st=onboardingSteps().find(x=>x.tab===entry&&(x.panel||'')===(date||''));onboardStep=st?st.n:0;render();if(date){const el=document.getElementById(date);if(el)el.scrollIntoView({block:'start'});}return;}if(action==='prev')return moveMonth(-1);if(action==='next')return moveMonth(1);if(action==='today'){month=new Date();month.setDate(1);selected=localDate(new Date());return render()}if(action==='day')return selectDay(date);if(action==='add-shift'){tab='Dashboard';editId=null;showShiftForm=true;render();window.scrollTo(0,0);return;}if(action==='ask-assistant')return setTab('Assistant');if(action==='connect-portal'){const key=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return portalOpenSignIn(key);}
+if(action==='monitor-prompt-dismiss'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){const t=localDate(new Date());m.promptDismissedCycle=monitorNextDue(m,t);m.snoozeUntil=addDaysStr(t,monitorCadence(m));persist();}return render();}
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
@@ -3740,7 +3793,7 @@ function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasC
 function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
-async function cloudAfterSignIn() { await cloudAutoMerge(); render(); setTab('Account'); }
+async function cloudAfterSignIn() { await cloudAutoMerge(); render(); setTab('Account'); monitorBackgroundSweep(); }
 async function submitCloudAuth(e) { e.preventDefault(); const fd = new FormData(e.currentTarget); const email = String(fd.get('email') || '').trim(), password = String(fd.get('password') || ''); const sn = String(fd.get('scheduleName') || '').trim(); const et = String(fd.get('employmentType') || '').trim(); const goalRaw = String(fd.get('incomeGoalStep1') || '').trim(); // Profile fields on the sign-in form save locally when provided —
   // a blank field never wipes a saved value.
   applyProfileValues({ name: sn, employmentType: et, monthlyIncomeGoal: goalRaw === '' ? undefined : num(goalRaw) }); if (!email || !password) { cloudAuthStatus = 'Enter an email and password.'; render(); return alert('Enter an email and password.'); } cloudAuthStatus = 'Signing in\u2026'; render(); try { const data = await sbAuthReq('/auth/v1/token?grant_type=password', { email: email, password: password }); if (!cloudStoreSession(data)) throw new Error('Sign-in succeeded but no session was returned. If email confirmation is required, confirm from your inbox, then sign in again.'); cloudAuthStatus = ''; await cloudAfterSignIn(); } catch (err) { let msg = err.message || ''; if (/email not confirmed/i.test(msg)) msg = 'Email not confirmed yet \u2014 check your inbox for the confirmation email, open its link, then sign in again.'; cloudAuthStatus = 'Sign-in failed: ' + msg; render(); alert('Sign-in failed: ' + msg); } }
@@ -3901,7 +3954,7 @@ function accountPage() {
   const profileSection = `<section class="panel"><h2>Profile — step 1</h2><p class="muted">Your profile — change anything, any time.</p><div class="form-grid">${field('profileName', 'Name as it appears on your schedule and licenses', 'text', profileName(), 'placeholder="e.g. C. Martin" autocomplete="off"')}${selectLabeled('profileEmploymentType','Employment type',[['','Select employment type'],['w2','W-2 — employed'],['1099','1099 — independent contractor'],['both','Both W-2 and 1099']],employmentType())}${field('profileIncomeGoal', 'Monthly income goal ($) — blank unsets it', 'number', monthlyIncomeGoal()>0?monthlyIncomeGoal():'', 'min="0" step="1" placeholder="e.g. 40000"')}</div><div class="toolbar"><button type="button" data-action="save-profile">Save profile</button></div><p class="muted">Employment type: ${escapeHTML(employmentTypeLabel())} — W-2 salary days are never double-counted; 1099 shifts price from contracts and facilities. Monthly goal: ${monthlyIncomeGoal()>0?currency(monthlyIncomeGoal()):'not set'}.</p></section>`;
   return onboardDirectionHTML(1) + profileSection + `<section class="panel"><h2>Account</h2><p><strong>Signed in as ${escapeHTML(cloudSession.email || '')}.</strong></p>${cloudLastSync ? `<p class="muted">Last sync: ${escapeHTML(cloudFmtWhen(cloudLastSync))}</p>` : ''}${cloudError ? `<p class="muted">Last sync problem: ${escapeHTML(cloudError)}</p>` : ''}<p class="muted">Credential records sync with your account automatically — newest edit wins, and nothing one-sided is ever overwritten or deleted. Shifts, facilities, and mileage stay on this device.</p><div class="toolbar"><button class="secondary" data-action="cloud-signout">Sign out</button></div></section>` + home + syncSectionHTML() + backupHTML();
 }
-async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; try { await cloudEnsureToken(); } catch (e) { cloudSession = null; cloudActive = false; cloudPersistSession(); render(); return; } await cloudAutoMerge(); render(); }
+async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; try { await cloudEnsureToken(); } catch (e) { cloudSession = null; cloudActive = false; cloudPersistSession(); render(); return; } await cloudAutoMerge(); render(); monitorBackgroundSweep(); }
 
 // Boot (Nov 6, 2026): the first render is hardened — if anything in the
 // first paint throws, the user still gets the tab bar and a visible error
