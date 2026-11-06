@@ -411,6 +411,9 @@ export interface FacilityPayRule {
   rate12?: number | null;
   rate24?: number | null;
   rateSecond?: number | null;
+  weekendRateSecond?: number | null;
+  hourlyCall1st?: number | null;
+  weekendRate24?: number | null;
   hourlyRate?: number | null;
   paidHours8?: number | null;
   callBonus?: number | null;
@@ -451,6 +454,9 @@ export function normalizeFacilityRules(input: unknown): FacilityPayRule[] {
       rate12: ruleNum(r.rate12),
       rate24: ruleNum(r.rate24),
       rateSecond: ruleNum(r.rateSecond),
+      weekendRateSecond: ruleNum(r.weekendRateSecond),
+      hourlyCall1st: ruleNum(r.hourlyCall1st),
+      weekendRate24: ruleNum(r.weekendRate24),
       hourlyRate: ruleNum(r.hourlyRate),
       callBonus: ruleNum(r.callBonus),
       paidHours8: ruleNum(r.paidHours8),
@@ -460,14 +466,21 @@ export function normalizeFacilityRules(input: unknown): FacilityPayRule[] {
 }
 
 // Price one shift type from a facility's own pay rule. Returns "" when
-// the rule does not cover that type — never a guessed amount. Only
-// Holzer has weekday/weekend-specific rates (in parseWorkShiftTitle);
-// every other facility's flat rates apply as entered, any day.
-export function priceShiftWithFacility(type: string, rule: FacilityPayRule): string {
+// the rule does not cover that type — never a guessed amount. Weekend
+// rates come from the facility's own weekend fields when set
+// (weekendRateSecond / weekendRate24, picked by the shift date); Holzer
+// keeps its confirmed weekday/weekend rules in parseWorkShiftTitle.
+// The optional date is an ISO 'YYYY-MM-DD' string: without it there is
+// no weekend rate, so the weeknight rule applies (existing callers that
+// pass no date keep today's behaviour).
+export function priceShiftWithFacility(type: string, rule: FacilityPayRule, date = ""): string {
   const money = (v: number | null | undefined): string =>
     v === null || v === undefined ? "" : String(Math.round(v * 100) / 100);
   const hourly = rule.hourlyRate ?? null;
   const hours8 = rule.paidHours8 ?? 8;
+  const weekend = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? [0, 6].includes(new Date(date + "T12:00:00").getDay())
+    : false;
   if (type === "8-hour day") {
     return money(rule.rate8 ?? (hourly !== null ? hourly * hours8 : null));
   }
@@ -477,8 +490,25 @@ export function priceShiftWithFacility(type: string, rule: FacilityPayRule): str
   if (type === "12-hour shift") {
     return money(rule.rate12 ?? (hourly !== null ? hourly * 12 : null));
   }
-  if (type === "24-hour call") return money(rule.rate24 ?? null);
+  if (type === "24-hour call") {
+    // Weekend flat first, then the weekday flat, then the 1st-call
+    // hourly formula (weekend: hourly x 24; weekday: premium hourly x 8
+    // + 1st-call hourly x 16) — the same precedence as the client's
+    // contractResolvePay / facilityPayFor. No rate at all stays blank.
+    if (weekend && rule.weekendRate24 !== null && rule.weekendRate24 !== undefined) {
+      return money(rule.weekendRate24);
+    }
+    if (rule.rate24 !== null && rule.rate24 !== undefined) return money(rule.rate24);
+    const h = rule.hourlyCall1st ?? null;
+    if (h === null) return "";
+    if (weekend) return money(h * 24);
+    if (hourly !== null) return money(hourly * 8 + h * 16);
+    return money(h * 24);
+  }
   if (type === "Second call") {
+    if (weekend && rule.weekendRateSecond !== null && rule.weekendRateSecond !== undefined) {
+      return money(rule.weekendRateSecond);
+    }
     if (rule.rateSecond !== null && rule.rateSecond !== undefined) {
       return money(rule.rateSecond);
     }
@@ -640,7 +670,7 @@ export function parseWorkShiftEvent(
     return {
       facility: rule.name,
       type,
-      pay: priceShiftWithFacility(type, rule),
+      pay: priceShiftWithFacility(type, rule, date),
       facilityKnown: true,
     };
   }

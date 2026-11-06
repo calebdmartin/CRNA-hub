@@ -126,6 +126,7 @@ vm.runInContext(fs.readFileSync(R + 'live-sync.js', 'utf8'), sandbox);
 // Keep the submit test offline: never let a live-sync push run.
 sandbox.liveSyncSchedulePush = undefined;
 const run = (code) => vm.runInContext(code, sandbox);
+const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 let failures = 0;
 const t = (name, cond) => {
   console.log((cond ? 'PASS ' : 'FAIL ') + name);
@@ -213,16 +214,11 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     sandbox.__applePick.includes('Pick your work calendar') &&
     sandbox.__applePick.includes('In the finished app this picker is the whole connection'));
 
-  // --- 4. Legacy connect alert describes the final model. ---
-  alerts.length = 0;
-  run(`calSyncAlert('Apple Calendar'); globalThis.__calAlert = __alerts[0];`);
-  t('connect alert describes the final flow first (EventKit, pick work calendar, behind the scenes)',
-    sandbox.__calAlert.includes('pick the calendar your shifts already live in') &&
-    sandbox.__calAlert.includes('EventKit') &&
-    sandbox.__calAlert.includes('behind the scenes'));
-  t('connect alert labels the password path as the preview stand-in only',
-    sandbox.__calAlert.includes('Preview stand-in') &&
-    !sandbox.__calAlert.includes('For Apple Calendar: CalDAV'));
+  // --- 4. Legacy connect alert is gone by design (Nov 5 polish): the
+  // connect-calendar action now just opens the Account tab, where the
+  // live-sync panel describes the final model. ---
+  t('connect-calendar action no longer shows a stale "not built yet" alert',
+    !appSrc.includes('calSyncAlert') && appSrc.includes("if(action==='connect-calendar'){setTab('Account');return}"));
 
   // --- 5. Wizard names EventKit + the stand-in for Apple. ---
   run(`globalThis.__wizard = liveSyncWizardHTML();`);

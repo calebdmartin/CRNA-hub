@@ -28,3 +28,20 @@
 .csp-table th:first-child,.csp-table td:first-child{color:#385b72}
 .csp-table strong{font-size:15px}
 select[data-shift-status]{width:auto;display:inline-block;padding:6px 8px;font-size:13px}
+
+/* --- Visual polish: consistent panel rhythm + mobile tables --- */
+.panel p{margin:8px 0}
+.panel h2{margin-bottom:10px}
+.panel ol{margin:8px 0;padding-left:22px}
+.panel ol li{margin-bottom:12px}
+.panel ol li .toolbar{margin:6px 0 0}
+.table-scroll{overflow-x:auto;margin:6px 0;-webkit-overflow-scrolling:touch}
+.table-scroll .csp-table{min-width:520px}
+.table-scroll .contract-table{min-width:640px}
+@media(max-width:650px){
+.panel p{margin:7px 0}
+.onboard-step{padding:11px 0}
+.csp-table th,.csp-table td{padding:7px 5px}
+.csp-table strong{font-size:14px}
+.contract-table th,.contract-table td{padding:7px 5px}
+}

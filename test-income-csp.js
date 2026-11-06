@@ -90,7 +90,9 @@ run(`
     {id:'s11', date:'2026-11-23', facility:'Holzer', type:'24-hour call', pay:'', incomplete:true, status:'confirmed'},
     {id:'s12', date:'2026-11-06', facility:'Holzer', type:'Off / PTO', pay:'5000', status:'confirmed'},
     {id:'s13', date:'2026-11-07', facility:'Holzer', type:'8-hour day', pay:'1000'},
-    {id:'s14', date:'2027-01-05', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'}
+    {id:'s14', date:'2027-01-05', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
+    {id:'s15', date:'2026-11-24', facility:'Holzer', type:'Off / PTO', pay:'', status:'confirmed'},
+    {id:'s16', date:'2026-11-25', facility:'Holzer', type:'8-hour day', pay:'0', status:'confirmed'}
   ];
   db.facilities = [{id:'f1', name:'Holzer', rate8:'2125'}];
   globalThis.__split = yearIncomeSplit(2026, '2026-11-05');
@@ -108,14 +110,50 @@ t('P = proposed-inclusive: YTD 9125, predicted 17250 (status-less shift counts a
   sp.p.ytd === 9125 && sp.p.predicted === 17250);
 t('rejected/canceled ($5000 each) count in no total',
   sp.p.predicted === 17250 && sp.c.predicted === 6250);
-t('unpriced shifts excluded from all three totals and counted (2)',
-  sp.unpriced === 2 && sp.unpricedFuture === 2);
-t('W-2 salary day with a stored $5000 pay excluded from all three, counted',
-  sp.w2Salary === 1 && sp.w2SalaryPriced === 1 && sp.c.ytd === 4125);
+t('unpriced shifts excluded from all three totals and counted (3: two blank-pay + one $0-pay)',
+  sp.unpriced === 3 && sp.unpricedFuture === 3);
+t('W-2 salary days with a stored $5000 pay, and with no pay, excluded from all three, counted separately',
+  sp.w2Salary === 2 && sp.w2SalaryPriced === 1 && sp.c.ytd === 4125);
+t('$0 pay is unpriced, never a priced $0 shift: C and P unchanged by the $0 confirmed shift',
+  sp.c.predicted === 6250 && sp.p.predicted === 17250);
 t('legacy ytd/predicted fields stay mapped to P',
   sp.ytd === sp.p.ytd && sp.predicted === sp.p.predicted && sp.futureGross === sp.p.future);
 t('year scoping: 2027 confirmed shift not in 2026 totals; 2027 C predicted is 2125',
   sp27.c.predicted === 2125 && sp27.c.ytd === 0);
+
+// ---------- Month split (explicit 2026-11 prefix, deterministic) ----------
+// November 2026 priced billable: C = 2125 (Nov 10 confirmed; the $0
+// confirmed shift and the unpriced confirmed shift add nothing), S =
+// 2125 + 3000 submitted, P = S + 2000 + 2000 + 1000 proposed.
+run(`globalThis.__monthNov = monthIncomeSplit('2026-11');`);
+const mn = sandbox.__monthNov;
+t('month split 2026-11: C 2125, S 5125, P 10125',
+  mn.c === 2125 && mn.s === 5125 && mn.p === 10125);
+t('month split 2026-11: unpriced 3 (W-2 day with no pay excluded), W-2 days 2',
+  mn.unpriced === 3 && mn.w2Salary === 2);
+
+// ---------- facilityPayFor: weekend 24-hour flat (client side) ----------
+// Same precedence as the contract preview: weekend flat first, then the
+// weekday flat, then the 1st-call hourly formula.
+run(`globalThis.__fac24 = {id:'f1', name:'Holzer', rate24:'4800', weekendRate24:'4200', hourlyRate:'250', hourlyCall1st:'175'};`);
+t('facilityPayFor: weekend 24h uses the weekend flat first (Sat 2026-11-07 -> 4200)',
+  run(`facilityPayFor(globalThis.__fac24,'24-hour call','2026-11-07')`) === 4200);
+t('facilityPayFor: weekday 24h uses the weekday flat (Fri 2026-11-06 -> 4800)',
+  run(`facilityPayFor(globalThis.__fac24,'24-hour call','2026-11-06')`) === 4800);
+t('facilityPayFor: 24h with only the 1st-call hourly rate prices from it (175 x 24 = 4200)',
+  run(`facilityPayFor({hourlyCall1st:'175'},'24-hour call','2026-11-06')`) === 4200);
+
+// ---------- RATE_FIELDS: stored 0 blanks out on load for every rate ----------
+// hourlyCall1st and weekendRate24 were missing from RATE_FIELDS, so a
+// stored 0 for them survived load/save instead of blanking like the
+// other rates. Reads were still safe (rateOrNull drops 0), this is
+// stored-value hygiene: blank-never-$0 everywhere.
+run(`globalThis.__normFac = normalizeStoredRates({facilities:[{id:'f9',name:'X',hourlyCall1st:'0',weekendRate24:'0',weekendRateSecond:'0',rate8:'2000'}],shifts:[],payStubs:[],mileage:[],settings:{}});`);
+t('stored 0 rates blank out on load, including hourlyCall1st and weekendRate24',
+  sandbox.__normFac.facilities[0].hourlyCall1st === '' &&
+  sandbox.__normFac.facilities[0].weekendRate24 === '' &&
+  sandbox.__normFac.facilities[0].weekendRateSecond === '' &&
+  sandbox.__normFac.facilities[0].rate8 === '2000');
 
 // ---------- Status normalization ----------
 t('normalizeShiftStatus: case-insensitive, unknown/missing -> proposed',

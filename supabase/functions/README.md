@@ -11,16 +11,18 @@ function secrets (server side) and in the provider consoles below.
 - `outlook-auth/` — Microsoft Entra OAuth start + callback (PKCE).
 - `sync-calendar/` — the sync engine: per-provider sync with sync tokens
   (Google), delta links (Outlook), and CalDAV sync-collection (Apple);
-  Apple connect with an app-specific password; sync status, sync log,
+  Apple connect with an app-specific password (preview stand-in only —
+  the finished app uses EventKit, no password); sync status, sync log,
   disconnect, auto-delete toggle, and deletion resolution.
 - `portal-sync/` — live credential-portal connections for the Credentials
   tab: NBCRNA public verification by name (no password; Oracle APEX
   submit — implemented but UNPROVEN as of Nov 5, 2026, its submit
   endpoint 404s server-side), state-board verification attempts (WV and
   Ohio block automation and return the manual route instead of a fake
-  pull), and AANA one-time member sign-in (credentials used in-memory
-  for one attempt only, never stored or logged; SSO is bot-gated, so it
-  usually reports that sign-in could not be completed). Every pulled
+  pull). There is no AANA sign-in here at all — the former server-side
+  one-time sign-in was deleted Nov 5, 2026 (audit F9); AANA is checked
+  the same way as the rest, by the user signing in themselves.
+  Every pulled
   record is labelled with its source and retrieval date in
   `portal_connections` / `nbcrna_profiles` / `aana_memberships` /
   `licenses` (migration 001 tables).
@@ -65,23 +67,28 @@ function secrets (server side) and in the provider consoles below.
 - `../supabase-schema-004.sql` — Apple import source: `source_calendar_url`
   / `source_calendar_name` on `calendar_connections` plus the
   `calendar_import_map` pairing table (RLS, own-rows only).
+- `../supabase-schema-005.sql` — delivery flags on `calendar_import_map`
+  (`seen_locally` / `deleted_locally`), so a shift lost to an interrupted
+  sync is repaired instead of skipped forever as if deleted.
+- `../supabase-schema-006.sql` — QGenda provider check (adds 'qgenda'
+  as a provider).
 
 ## Owner step 1 — run the migrations (once)
 
 In the Supabase dashboard for project `xgoghgihfhtnyevgapyp`, open the
-SQL Editor and run `supabase/supabase-schema-003.sql`, then
-`supabase/supabase-schema-004.sql` (after 001/002). Migration 004 is
-what lets a user pick an Apple calendar to import shifts from; without
-it, sync still works against the dedicated "CRNA Hub" calendar, but the
-import-source picker reports `migration_004_required` instead of
-saving a source.
+SQL Editor and run `supabase/supabase-schema-003.sql`, then `004`, `005`,
+and `006` (after 001/002 — note 001/002 are not in this repo yet, see the
+main README). Migration 004 is what lets a user pick an Apple calendar
+to import shifts from; without it, sync still works against the
+dedicated "CRNA Hub" calendar, but the import-source picker reports
+`migration_004_required` instead of saving a source.
 
 ## Owner step 2 — deploy the functions (once)
 
 ```sh
 supabase link --project-ref xgoghgihfhtnyevgapyp
 supabase functions deploy google-auth outlook-auth sync-calendar
-supabase functions deploy extract-contract assistant-chat
+supabase functions deploy extract-contract assistant-chat qgenda-feed
 ```
 
 Or run the script in this repo (it takes no secrets as arguments):
@@ -153,8 +160,10 @@ supabase secrets set \
 
 ## Apple — no owner app to register (by design)
 
-Apple offers no OAuth for third-party calendar apps, so there is nothing
-for the owner to register and no client ID/secret. Each user, once, in
+Preview stand-in: in the finished app Apple uses EventKit and no
+password is typed at all. Apple offers no OAuth for third-party calendar
+apps, so there is nothing for the owner to register and no client
+ID/secret. Each user, once, in
 their own Apple account settings (appleid.apple.com → Sign-In and
 Security → App-Specific Passwords), creates an app-specific password
 named e.g. "CRNA Hub", then enters their Apple ID and that password once
@@ -260,7 +269,7 @@ tombstone and applied to the provider. Every run writes a `sync_log`
 row (provider, direction, created/updated/flagged/deleted counts,
 timestamp, error) shown in the app's sync log.
 
-## What sync cannot do yet (honest limits)
+## What sync cannot do yet (honest limits — preview-only, not the final design)
 
 - Sync runs when the app is open (on load for connected providers, on
   "Sync now", and shortly after a shift change). Shifts live in browser

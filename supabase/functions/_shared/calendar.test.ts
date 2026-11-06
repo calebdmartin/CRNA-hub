@@ -367,7 +367,7 @@ Deno.test("facility rules normalise, and unpriced types stay blank, never $0", (
   assertEquals(rules[0].rate8, 2000);
   assertEquals(rules[0].rate24, null); // a 0 rate is "no rate", not $0 pay
   assertEquals(priceShiftWithFacility("12-hour shift", rules[0]), "3000"); // hourly fallback
-  assertEquals(priceShiftWithFacility("24-hour call", rules[0]), ""); // no rate24, no hourly path for 24h
+  assertEquals(priceShiftWithFacility("24-hour call", rules[0]), ""); // no rate24 and no hourlyCall1st, so no hourly path for 24h
   assertEquals(priceShiftWithFacility("Second call", { name: "X", rate8: 1800, callBonus: 1000 }), "2800");
   assertEquals(priceShiftWithFacility("Second call", { name: "X", rate8: 1800 }), "");
   assertEquals(priceShiftWithFacility("Shift", rules[0]), "");
@@ -473,4 +473,34 @@ Deno.test("shiftSyncStateFor: pending deletion wins, paired is synced, the rest 
   // to the dedicated calendar): not synced yet.
   assertEquals(shiftSyncStateFor("s-fresh", synced, pending), "not-synced");
   assertEquals(shiftSyncStateFor("s-fresh", new Set(), new Set()), "not-synced");
+});
+
+Deno.test("facility rules carry weekend and 1st-call hourly rates; server prices them by date", () => {
+  // 2026-11-06 is a Friday; 2026-11-07 is a Saturday.
+  const rules = normalizeFacilityRules([
+    { name: "CAMC", rateSecond: 3000, weekendRateSecond: 2000, weekendRate24: 4200, hourlyCall1st: 175, hourlyRate: 250, rate24: 0 },
+  ]);
+  assertEquals(rules[0].weekendRateSecond, 2000);
+  assertEquals(rules[0].hourlyCall1st, 175);
+  assertEquals(rules[0].weekendRate24, 4200);
+  assertEquals(rules[0].rate24, null); // a 0 rate is "no rate", not $0 pay
+  assertEquals(priceShiftWithFacility("Second call", rules[0], "2026-11-07"), "2000");
+  assertEquals(priceShiftWithFacility("Second call", rules[0], "2026-11-06"), "3000");
+  assertEquals(priceShiftWithFacility("24-hour call", rules[0], "2026-11-07"), "4200");
+  assertEquals(priceShiftWithFacility("24-hour call", rules[0], "2026-11-06"), "4800"); // 250x8 + 175x16
+  // No date: weeknight behaviour, unchanged from before.
+  assertEquals(priceShiftWithFacility("Second call", rules[0]), "3000");
+  assertEquals(priceShiftWithFacility("24-hour call", rules[0]), "4800");
+  // 1st-call hourly alone, no flats: weekend is hourly x 24, weekday
+  // with no premium hourly is hourly x 24 too.
+  const hourlyOnly = normalizeFacilityRules([{ name: "X", hourlyCall1st: 175 }])[0];
+  assertEquals(priceShiftWithFacility("24-hour call", hourlyOnly, "2026-11-07"), "4200");
+  assertEquals(priceShiftWithFacility("24-hour call", hourlyOnly, "2026-11-06"), "4200");
+  // parseWorkShiftEvent passes the date through, so a QGenda / calendar
+  // weekend second call prices at the weekend rate.
+  const evRules = normalizeFacilityRules([
+    { name: "CAMC", aliases: "CAMC", rateSecond: 3000, weekendRateSecond: 2000 },
+  ]);
+  assertEquals(parseWorkShiftEvent("CAMC Second call", "", "2026-11-07", evRules)?.pay, "2000");
+  assertEquals(parseWorkShiftEvent("CAMC Second call", "", "2026-11-06", evRules)?.pay, "3000");
 });
