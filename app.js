@@ -62,8 +62,14 @@ function normalizeMileageTripTypes(obj){
   return obj;
 }
 function load(){let obj;try{obj=JSON.parse(localStorage.getItem(KEY)||localStorage.getItem(OLD)||'null')}catch{}const result=empty();if(obj&&typeof obj==='object')for(const k of Object.keys(result))if((k==='settings'||k==='nbcrna'||k==='aana')?obj[k]&&typeof obj[k]==='object':Array.isArray(obj[k]))result[k]=obj[k];return normalizeStoredRates(result)}
-let db=load(),tab='Dashboard',showShiftForm=false,dayViewOpen=false,manualType='NBCRNA',month=new Date(),selected=localDate(new Date()),editId=null,savedShiftsYear=null,facilitySuggestionPrefill=null;month.setDate(1);
+const SHIFT_STATUSES=['proposed','submitted','confirmed','rejected','canceled','completed'];
+// Helpers MUST be declared before load() runs below: load() ->
+// normalizeStoredRates() calls num() on any stored shift/pay stub, so
+// declaring these consts after `let db=load()` was a temporal-dead-zone
+// crash ("Cannot access 'num' before initialization") for every user
+// with saved data — the app only booted on empty storage (Nov 6, 2026).
 const $=id=>document.getElementById(id),escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])),currency=n=>Number(n||0).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}),num=n=>Number(n||0),id=()=>crypto.randomUUID(),fmt=d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+let db=load(),tab='Dashboard',showShiftForm=false,dayViewOpen=false,manualType='NBCRNA',month=new Date(),selected=localDate(new Date()),editId=null,savedShiftsYear=null,facilitySuggestionPrefill=null;month.setDate(1);
 function localDate(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 // Income totals are scoped to one calendar year at a time (default: the
 // current calendar year). Shifts from other years stay in the list and
@@ -82,7 +88,6 @@ function shiftsForYear(y){const p=String(y)+'-';return (db.shifts||[]).filter(x=
 // already done, so it counts with confirmed. A missing or unknown
 // status (older data) defaults to 'proposed' — never silently treated
 // as confirmed income.
-const SHIFT_STATUSES=['proposed','submitted','confirmed','rejected','canceled','completed'];
 const SHIFT_STATUS_LABELS={proposed:'Proposed',submitted:'Submitted',confirmed:'Confirmed',rejected:'Rejected',canceled:'Canceled',completed:'Completed'};
 function normalizeShiftStatus(s){const v=String(s||'').trim().toLowerCase();return SHIFT_STATUSES.includes(v)?v:'proposed'}
 // Status a shift arrives with at import time (Bug 1, Nov 6, 2026):
@@ -2341,7 +2346,7 @@ let facilityContractPreview=null,facilityContractError='',facilityContractOcrSta
 // every preview build — a static file cannot know its own commit hash,
 // so the hash lives in the deploy report, not here.
 // Import & Backup tab removed Nov 5, 2026 — its pieces moved to the Account tab (sync, backup) and Facilities (contract import).
-const BUILD_STAMP='2026-11-06 · Blank-page fix: boot watchdog + hardened first render, service worker never serves the page in place of a script · Dashboard cleanup (tap-a-day view) · AI rule chat · no Import & Backup tab · cache v36';
+const BUILD_STAMP='2026-11-06 · TDZ fix: helpers + SHIFT_STATUSES declared before load() runs, so saved data no longer crashes boot · Blank-page fix: boot watchdog + hardened first render, service worker never serves the page in place of a script · Dashboard cleanup (tap-a-day view) · AI rule chat · no Import & Backup tab · cache v37';
 // Income disclaimer (Nov 5, 2026): income figures are estimates from the
 // user's own rates and shifts. Short, visible but not blocking, and not
 // legal advice — shown wherever income totals or the rates behind them
