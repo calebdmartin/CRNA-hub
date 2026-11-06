@@ -14,8 +14,9 @@
 //     arrive as proposed; submitEntry normalizes status.
 //   * Status change (setShiftStatus) re-prices the three totals at once.
 //   * Year scoping preserved: other-year shifts never enter the totals.
-//   * Monthly Income Goal: stored per user, progress vs CONFIRMED
-//     total this month, shown as $ and %.
+//   * Monthly Income Goal: stored per user (step 1 profile only -
+//     removed from the Dashboard Nov 5, 2026); still carried in the
+//     Assistant summary context; monthIncomeSplit still feeds it.
 //   * Dashboard + Saved shifts show the C/S/P table with the paystub
 //     disclaimer; Saved shifts has a per-shift status changer.
 //   * Assistant income answers quote the same C/S/P split.
@@ -145,26 +146,32 @@ t('submitEntry normalizes shift status on save',
 t('stored shifts without a status are normalized to proposed on load',
   appSrc.includes('x.status=normalizeShiftStatus(x.status);'));
 
-// ---------- Monthly income goal ----------
+// ---------- Monthly income goal (step 1 profile only) ----------
+// Removed from the Dashboard Nov 5, 2026: the goal lives on the Account
+// tab (Profile - step 1). The value is still stored per user and still
+// rides in the Assistant summary context.
 run(`
   db.settings.monthlyIncomeGoal = 10000;
   globalThis.__prefix = localDate(new Date()).slice(0,7);
   globalThis.__month = monthIncomeSplit(globalThis.__prefix);
-  globalThis.__goalHtml = incomeGoalHTML();
+  globalThis.__summaryGoal = buildAssistantSummary();
+  globalThis.__dashGoal = dashboard();
 `);
 // November 2026 fixture: confirmed = 2125 (Nov 10) + 5000 W-2 excluded = 2125
-// (s7 is proposed, s5 submitted, s13 proposed) — compute from the engine, not by hand:
+// (s7 is proposed, s5 submitted, s13 proposed) - compute from the engine, not by hand:
 const mc = sandbox.__month.c;
-const expectPct = Math.round(mc / 10000 * 100);
-t('goal progress is measured against the CONFIRMED month total ($ and %)',
-  sandbox.__goalHtml.includes('$' + mc.toLocaleString('en-US')) &&
-  sandbox.__goalHtml.includes(expectPct + '%') &&
-  sandbox.__goalHtml.includes('$10,000'));
-t('goal panel shows submitted/proposed month totals as context, confirmed only counts',
-  sandbox.__goalHtml.includes('Only confirmed counts toward the goal'));
-run(`db.settings.monthlyIncomeGoal = 0; globalThis.__goalHtml0 = incomeGoalHTML();`);
-t('no goal set: panel invites setting one instead of showing a %',
-  sandbox.__goalHtml0.includes('Set a monthly goal') && !sandbox.__goalHtml0.includes('% of your'));
+t('goal value is stored and still reaches the Assistant summary context',
+  sandbox.__summaryGoal.month.monthlyIncomeGoal === 10000 &&
+  typeof sandbox.__summaryGoal.month.confirmed === 'number');
+t('Dashboard carries no income-goal panel, input, or save action',
+  !sandbox.__dashGoal.includes('Monthly income goal') &&
+  !sandbox.__dashGoal.includes('f_incomeGoal') &&
+  !sandbox.__dashGoal.includes('save-income-goal'));
+t('no Dashboard goal widget function remains in the app source',
+  !appSrc.includes('function incomeGoalHTML'));
+run(`db.settings.monthlyIncomeGoal = 0; globalThis.__summaryGoal0 = buildAssistantSummary();`);
+t('goal unset (0) still reads through the Assistant summary context',
+  sandbox.__summaryGoal0.month.monthlyIncomeGoal === 0);
 
 // ---------- Dashboard + Saved shifts render C/S/P ----------
 run(`
@@ -177,9 +184,10 @@ t('Dashboard shows C/S/P table with YTD + predicted-annual labels',
   sandbox.__dash.includes('S — Submitted-inclusive') &&
   sandbox.__dash.includes('P — Proposed-inclusive') &&
   sandbox.__dash.includes('Year to date') && sandbox.__dash.includes('Predicted 2026 annual'));
-t('Dashboard keeps the paystub disclaimer and the goal panel',
+t('Dashboard keeps the paystub disclaimer and has no income-goal panel',
   sandbox.__dash.includes('Income figures are estimates from your own rates and shifts') &&
-  sandbox.__dash.includes('Monthly income goal'));
+  !sandbox.__dash.includes('Monthly income goal') &&
+  !sandbox.__dash.includes('f_incomeGoal'));
 t('Dashboard month gross is labelled as all statuses (no silent single total)',
   sandbox.__dash.includes('Expected gross · this month (all statuses)'));
 t('Saved shifts shows C/S/P for the selected year + per-shift status changer + W-2 label',

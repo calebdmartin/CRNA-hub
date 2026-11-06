@@ -13,9 +13,9 @@
 //     makes no shift billable (salary, never double-counted); 1099,
 //     both, and unset (legacy) price shifts from contracts/facilities;
 //     W-2 salary days (Off / PTO) are excluded under every type.
-//   * Income goal: settable (Dashboard shows progress vs CONFIRMED),
-//     skippable (0 = unset; Dashboard shows it unset with a
-//     "Set income goal" affordance, and the goal can be set later).
+//   * Income goal: settable on the Account tab (Profile - step 1),
+//     skippable (0 = unset); removed from the Dashboard Nov 5, 2026 -
+//     no goal panel or set-goal affordance there any more.
 //   * Profile sync: signup carries schedule_name, employment_type and
 //     monthly_income_goal in Auth user_metadata; a signed-in profile
 //     save PUTs the same metadata via the auth proxy (update-user);
@@ -174,27 +174,29 @@ t('assistant answers the employment-type question from settings',
   run(`db.settings.employmentType = 'both'; answerQuestion('Am I W-2 or 1099?')`).includes('W-2 + 1099') &&
   run(`db.settings.employmentType = ''; answerQuestion('What is my employment type?')`).includes('No employment type is set yet'));
 
-// ---------- Income goal: settable, skippable, settable later ----------
+// ---------- Income goal: settable in step 1, never on the Dashboard ----------
 // November 2026 fixture: confirmed billable this month = 2125 + 3000.
+// The goal value itself is unchanged - only its Dashboard home is gone.
 run(`
   db.settings.employmentType = '1099';
   db.settings.monthlyIncomeGoal = 10000;
-  globalThis.__goalSet = incomeGoalHTML();
+  globalThis.__goalStored = monthlyIncomeGoal();
+  globalThis.__dashSet = dashboard();
   db.settings.monthlyIncomeGoal = 0;
-  globalThis.__goalUnset = incomeGoalHTML();
+  globalThis.__goalUnset = monthlyIncomeGoal();
   globalThis.__dashUnset = dashboard();
 `);
-t('goal set: Dashboard panel shows progress vs CONFIRMED ($ and %)',
-  sandbox.__goalSet.includes('$5,125') && sandbox.__goalSet.includes('51%') &&
-  sandbox.__goalSet.includes('$10,000') && sandbox.__goalSet.includes('Save goal'));
-t('goal skipped (0 = unset): panel says so, no %, "Set income goal" affordance',
-  sandbox.__goalUnset.includes('No monthly income goal set yet') &&
-  sandbox.__goalUnset.includes('Set a monthly goal') &&
-  sandbox.__goalUnset.includes('Set income goal') &&
-  !sandbox.__goalUnset.includes('% of your'));
-t('goal skipped: Dashboard still carries the set-later affordance',
-  sandbox.__dashUnset.includes('No monthly income goal set yet') &&
-  sandbox.__dashUnset.includes('Set income goal'));
+t('goal set: value is stored and readable; Dashboard carries no goal panel',
+  sandbox.__goalStored === 10000 &&
+  !sandbox.__dashSet.includes('Monthly income goal') &&
+  !sandbox.__dashSet.includes('f_incomeGoal') &&
+  !sandbox.__dashSet.includes('save-income-goal'));
+t('goal skipped (0 = unset): stored as 0; Dashboard has no set-goal affordance',
+  sandbox.__goalUnset === 0 &&
+  !sandbox.__dashUnset.includes('Monthly income goal') &&
+  !sandbox.__dashUnset.includes('Set income goal'));
+t('goal widget function is gone from the app source',
+  !appSrc.includes('function incomeGoalHTML'));
 run(`
   db.settings.monthlyIncomeGoal = 0;
   globalThis.__acctSignedIn = null;
@@ -218,7 +220,7 @@ run(`
 `);
 t('Skip clears the goal input and confirms it can be set later',
   sandbox.__skipValue === '' &&
-  sandbox.__skipStatus.includes('set it later from the Dashboard'));
+  sandbox.__skipStatus.includes('set it later on the Account tab'));
 
 // ---------- Name feeds schedule matching and credential matching ----------
 t('profileName is the same stored value the schedule import matches on',
