@@ -50,6 +50,7 @@ import {
   normalizeAiContract,
   normalizeAiPaystub,
   normalizeAiSchedule,
+  normalizeAiRule,
   extractAiContent,
   parseAiResponseText,
 } from "./normalize.ts";
@@ -117,6 +118,30 @@ function paystubPrompt(): string {
   );
 }
 
+// Plain-language rule mode (Nov 6, 2026, mode: "rule"): NO photos.
+// The user describes a pay rule in their own words in the contract
+// chat box; the model returns a STRUCTURED rule (see normalizeAiRule)
+// plus, when part of the description is ambiguous, ONE short
+// clarifying question instead of a guess. The model never computes
+// pay totals — the app's deterministic income engine does that from
+// the structured fields. The conversation so far (ruleHistory) is
+// included so a follow-up answer refines the same rule.
+function rulePrompt(): string {
+  return (
+    "A CRNA describes a pay rule for one shift type in their own words. " +
+    "Return ONLY a JSON object with these keys, using null where the description does not state a value: " +
+    "shift_type (one of: '24-hour call', 'Second call', '8-hour day', '10-hour shift', '12-hour shift', 'Other'), " +
+    "applies_to (one of: 'weekday', 'weekend', 'both' — which days this rule covers), " +
+    "hourly_rate, first_call_hourly_rate, flat_rate, weekend_flat_rate, second_call_rate, weekend_second_call_rate, call_bonus, " +
+    "segments (an array of {hours, rate, from, to, label} for time-based parts, e.g. first 8 hours at one rate then the rest at another; from/to are clock times like '15:00' and '07:00' when stated, else null), " +
+    "summary (one short plain-language sentence restating the rule, rates only — do NOT compute any total pay), " +
+    "clarifying_question (ONE short question when something important is ambiguous — e.g. whether the rule also applies on weekends, or which hours a rate covers — else null), " +
+    "missing (an array of short labels for important values the description does not state). " +
+    "For a segmented 24-hour / 1st call rule like 'first 8 hours $250/hr, then $175/hr from 3pm to 7am': shift_type '24-hour call', hourly_rate 250, first_call_hourly_rate 175, segments [{hours:8, rate:250}, {hours:16, rate:175, from:'15:00', to:'07:00'}], and if the description does not say whether weekends differ, applies_to null with a clarifying_question asking about weekends. " +
+    "Amounts are numbers without $ or commas. Do not invent any rate, hour count, or day applicability."
+  );
+}
+
 const KEY_MISSING_MESSAGE =
   "AI reading isn't set up yet — add the OpenAI key in Supabase (Edge Functions → Manage secrets → OPENAI_API_KEY)";
 
@@ -158,14 +183,30 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
-    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : "contract";
+    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rule" ? "rule" : "contract";
     const scheduleName = typeof body.scheduleName === "string"
       ? body.scheduleName.trim()
       : "";
     if (mode === "schedule" && !scheduleName) {
       return err("missing_schedule_name", 400);
     }
-    const parsed = imagesFromBody(body);
+    // Rule mode is text-only: the user's own words plus the short
+    // conversation so far. No images are accepted or required.
+    let ruleText = "";
+    let ruleHistory: { role: string; text: string }[] = [];
+    if (mode === "rule") {
+      ruleText = typeof body.ruleText === "string" ? body.ruleText.trim().slice(0, 2000) : "";
+      if (!ruleText) return err("missing_rule_text", 400);
+      if (Array.isArray(body.ruleHistory)) {
+        ruleHistory = body.ruleHistory.slice(-6).filter((h): h is Record<string, unknown> =>
+          !!h && typeof h === "object" && !Array.isArray(h) && typeof (h as Record<string, unknown>)["text"] === "string"
+        ).map((h) => ({
+          role: (h as Record<string, unknown>)["role"] === "assistant" ? "assistant" : "user",
+          text: String((h as Record<string, unknown>)["text"]).slice(0, 1000),
+        }));
+      }
+    }
+    const parsed = mode === "rule" ? { images: [] as string[] } : imagesFromBody(body);
     if ("error" in parsed) return err(parsed.error, parsed.status);
 
     // The key lives only in the function's own environment. It is read
@@ -178,10 +219,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
 
+    const ruleConversation = mode === "rule"
+      ? (ruleHistory.length
+        ? "\n\nConversation so far:\n" + ruleHistory.map((h) => (h.role === "assistant" ? "Assistant: " : "User: ") + h.text).join("\n") + "\n"
+        : "") +
+        "\nThe user's latest description: " + ruleText
+      : "";
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : PROMPT,
+        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -270,6 +317,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         raw_text: typeof rawText === "string" ? rawText : "",
         model: MODEL,
       });
+    }
+    if (mode === "rule") {
+      const rule = normalizeAiRule(raw);
+      return json({ ok: true, mode: "rule", rule, model: MODEL });
     }
     const rates = normalizeAiContract(raw);
     return json({ ok: true, rates, raw_text: rates.raw_text, model: MODEL });

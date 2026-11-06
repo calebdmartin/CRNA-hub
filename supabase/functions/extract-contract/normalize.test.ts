@@ -97,3 +97,37 @@ Deno.test("normalizeAiPaystub: non-object input yields all nulls; agency alias a
   assertEquals(normalizeAiPaystub({}).frequency, null);
   assertEquals(normalizeAiPaystub({ agency: "Acme Staffing" }).employer, "Acme Staffing");
 });
+
+// ---------- Plain-language rule mode (Nov 6, 2026) ----------
+import { normalizeAiRule } from "./normalize.ts";
+
+Deno.test("normalizeAiRule: Caleb's 24hr call example parses to the right fields", () => {
+  const out = normalizeAiRule({
+    shift_type: "24hr call",
+    applies_to: null,
+    hourly_rate: 250,
+    first_call_hourly_rate: 175,
+    segments: [
+      { hours: 8, rate: 250, from: null, to: null, label: "first 8 hours" },
+      { hours: 16, rate: 175, from: "15:00", to: "07:00", label: "after 3pm until 7am" },
+    ],
+    summary: "24-hour call: first 8 hours at $250/hr, then $175/hr from 3pm to 7am.",
+    clarifying_question: "Does this same pattern apply on weekends too, or is the weekend rate different?",
+    missing: ["weekend rate"],
+  });
+  assertEquals(out.shift_type, "24-hour call");
+  assertEquals(out.hourly_rate, 250);
+  assertEquals(out.first_call_hourly_rate, 175);
+  assertEquals(out.segments.length, 2);
+  assertEquals(out.segments[1].from, "15:00");
+  assertEquals(out.clarifying_question, "Does this same pattern apply on weekends too, or is the weekend rate different?");
+});
+
+Deno.test("normalizeAiRule: junk and zeroes become null, never $0", () => {
+  const out = normalizeAiRule({ shift_type: "nonsense", hourly_rate: 0, flat_rate: "abc", segments: "nope", missing: [1, null] });
+  assertEquals(out.shift_type, null);
+  assertEquals(out.hourly_rate, null);
+  assertEquals(out.flat_rate, null);
+  assertEquals(out.segments, []);
+  assertEquals(normalizeAiRule(null).clarifying_question, null);
+});

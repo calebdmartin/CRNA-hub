@@ -298,3 +298,110 @@ export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
   }
   return out;
 }
+
+// --- Plain-language rule mode (Nov 6, 2026) ---
+// The user describes a pay rule in their own words in the contract
+// chat box — e.g. "24hr call, first 8 hours $250/hr, then after 3pm
+// 175/hr until 7am" — and the model returns a STRUCTURED rule. The
+// model never does pay arithmetic: totals are computed by the app's
+// deterministic income engine from these fields. Same null rules as
+// contracts: a value the description does not state is null, never
+// invented, never 0. When part of the description is ambiguous (which
+// hours, weekday vs weekend), the model returns a clarifying_question
+// instead of guessing, and the app asks it in the chat.
+export interface AiRuleSegment {
+  hours: number | null;
+  rate: number | null;
+  from: string | null;
+  to: string | null;
+  label: string | null;
+}
+
+export interface AiRule {
+  shift_type: string | null;
+  applies_to: "weekday" | "weekend" | "both" | null;
+  hourly_rate: number | null;
+  first_call_hourly_rate: number | null;
+  flat_rate: number | null;
+  weekend_flat_rate: number | null;
+  second_call_rate: number | null;
+  weekend_second_call_rate: number | null;
+  call_bonus: number | null;
+  segments: AiRuleSegment[];
+  summary: string | null;
+  clarifying_question: string | null;
+  missing: string[];
+}
+
+const RULE_SHIFT_TYPES: Record<string, string> = {
+  "24-hour call": "24-hour call", "24 hour call": "24-hour call", "24hr call": "24-hour call",
+  "24h call": "24-hour call", "first call": "24-hour call", "1st call": "24-hour call",
+  "second call": "Second call", "2nd call": "Second call",
+  "8-hour day": "8-hour day", "8 hour day": "8-hour day", "8-hour shift": "8-hour day", "8h": "8-hour day",
+  "10-hour shift": "10-hour shift", "10 hour shift": "10-hour shift", "10h": "10-hour shift",
+  "12-hour shift": "12-hour shift", "12 hour shift": "12-hour shift", "12h": "12-hour shift",
+  "other": "Other",
+};
+
+export function coerceRuleShiftType(v: unknown): string | null {
+  const t = coerceAiText(v);
+  if (!t) return null;
+  return RULE_SHIFT_TYPES[t.toLowerCase().replace(/\s+/g, " ").trim()] ?? null;
+}
+
+export function coerceRuleAppliesTo(v: unknown): AiRule["applies_to"] {
+  const t = coerceAiText(v);
+  if (!t) return null;
+  const s = t.toLowerCase().trim();
+  if (s === "weekday" || s === "weekdays" || s === "weeknight" || s === "weeknights") return "weekday";
+  if (s === "weekend" || s === "weekends") return "weekend";
+  if (s === "both" || s === "all" || s === "every day" || s === "all days") return "both";
+  return null;
+}
+
+function coerceSegmentHours(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 && n <= 24 ? n : null;
+}
+
+export function normalizeAiRule(raw: unknown): AiRule {
+  const out: AiRule = {
+    shift_type: null, applies_to: null, hourly_rate: null,
+    first_call_hourly_rate: null, flat_rate: null, weekend_flat_rate: null,
+    second_call_rate: null, weekend_second_call_rate: null, call_bonus: null,
+    segments: [], summary: null, clarifying_question: null, missing: [],
+  };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  out.shift_type = coerceRuleShiftType(obj["shift_type"]);
+  out.applies_to = coerceRuleAppliesTo(obj["applies_to"]);
+  out.hourly_rate = coerceAiNumber(obj["hourly_rate"]);
+  out.first_call_hourly_rate = coerceAiNumber(obj["first_call_hourly_rate"]);
+  out.flat_rate = coerceAiNumber(obj["flat_rate"]);
+  out.weekend_flat_rate = coerceAiNumber(obj["weekend_flat_rate"]);
+  out.second_call_rate = coerceAiNumber(obj["second_call_rate"]);
+  out.weekend_second_call_rate = coerceAiNumber(obj["weekend_second_call_rate"]);
+  out.call_bonus = coerceAiNumber(obj["call_bonus"]);
+  const segs = obj["segments"];
+  if (Array.isArray(segs)) {
+    for (const item of segs.slice(0, 6)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const s = item as Record<string, unknown>;
+      const seg: AiRuleSegment = {
+        hours: coerceSegmentHours(s["hours"]),
+        rate: coerceAiNumber(s["rate"]),
+        from: coerceAiText(s["from"]),
+        to: coerceAiText(s["to"]),
+        label: coerceAiText(s["label"]),
+      };
+      if (seg.rate != null || seg.hours != null) out.segments.push(seg);
+    }
+  }
+  out.summary = coerceAiText(obj["summary"]);
+  out.clarifying_question = coerceAiText(obj["clarifying_question"]);
+  const missing = obj["missing"];
+  if (Array.isArray(missing)) {
+    out.missing = missing.map((m) => coerceAiText(m)).filter((m): m is string => !!m).slice(0, 6);
+  }
+  return out;
+}
