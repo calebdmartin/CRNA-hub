@@ -85,7 +85,7 @@ t('Dashboard has no Portal monitoring card',
 t('no dashboardMonitoringPanel function or call remains',
   !appSrc.includes('dashboardMonitoringPanel'));
 t('Credentials tab still carries the full portal monitoring panel',
-  sandbox.__cred.includes('Portal monitoring — the assistant watches for you'));
+  sandbox.__cred.includes('id="credentials-monitoring-panel"') && sandbox.__cred.includes('Portal monitoring'));
 t('Dashboard still renders its other sections',
   sandbox.__dash.includes('Overview') && sandbox.__dash.includes('Quick actions') && sandbox.__dash.includes('Upcoming shifts'));
 
