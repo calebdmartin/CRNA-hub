@@ -597,6 +597,7 @@ function portalGuideIngest(parsed,via,state){
   const where=portalGuideAdvance(pc);
   if(where==='preview'){ pc.step='preview'; }
   else { pc.notice='Got it — '+newKeys.length+' new detail'+(newKeys.length>1?'s':'')+' checked off.'; }
+  portalStatePersist();
   return where;
 }
 function portalGuideSkip(){
@@ -604,6 +605,7 @@ function portalGuideSkip(){
   pc.skippedPages=[...new Set([...(pc.skippedPages||[]),pc.page||0])];
   portalCheckError='';
   if(portalGuideAdvance(pc)==='preview'){ pc.step='preview'; }
+  portalStatePersist();
   render();
 }
 
@@ -801,6 +803,31 @@ function monitorAssistantCheck(mon){
 }
 
 let portalCheck=null, portalCheckError='', portalCheckOcrStatus='';
+// In-progress portal-check state is persisted on this device (Nov 6,
+// 2026): leaving for a portal — a new tab, Safari, or even the app tab
+// being replaced — must never lose his place. The guided check (and
+// which portals he has opened) is saved on every step and restored at
+// boot, so returning resumes the check at the same step. Cleared when
+// a check is approved, cancelled, or discarded. Holds only fields the
+// assistant read from pages he showed it — never a portal password.
+const PORTAL_CHECK_STORAGE='crna-hub-portal-check';
+function portalStatePersist(){
+  try{
+    if(portalCheck||Object.keys(portalOpened||{}).length) localStorage.setItem(PORTAL_CHECK_STORAGE,JSON.stringify({check:portalCheck||null,opened:portalOpened||{}}));
+    else localStorage.removeItem(PORTAL_CHECK_STORAGE);
+  }catch(e){}
+}
+function portalCheckRestore(){
+  try{
+    const raw=localStorage.getItem(PORTAL_CHECK_STORAGE); if(!raw) return;
+    const saved=JSON.parse(raw); if(!saved||typeof saved!=='object') return;
+    if(saved.opened&&typeof saved.opened==='object') portalOpened=saved.opened;
+    const pc=saved.check;
+    if(pc&&PORTAL_CHECK_SOURCES[pc.source]&&(pc.step==='collect'||pc.step==='preview')){
+      portalCheck={source:pc.source,state:pc.state||'West Virginia',step:pc.step,page:pc.page||0,pagesShown:pc.pagesShown||0,skippedPages:Array.isArray(pc.skippedPages)?pc.skippedPages:[],notice:'',fields:pc.fields||{},found:Array.isArray(pc.found)?pc.found:[],missing:Array.isArray(pc.missing)?pc.missing:[],retrievedAt:pc.retrievedAt||'',via:pc.via||''};
+    }
+  }catch(e){}
+}
 const PORTAL_DATE_PAT='(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+\\d{1,2},?\\s+\\d{4}|(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+\\d{4}|\\d{1,2}\\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|\\d{1,2}/\\d{4}';
 function portalCheckDateNear(t,labelRe){
   const m=t.match(new RegExp('(?:'+labelRe+')[^0-9]{0,40}('+PORTAL_DATE_PAT+')','i'));
@@ -872,7 +899,7 @@ function startPortalCheck(source){
   portalCheckError=''; portalCheckOcrStatus='';
   db.assistantChat=[...(db.assistantChat||[]),
     {role:'assistant',text:'Portal check — '+meta.title+'. Show me the page that lists your record below and I’ll read it and show you the report — nothing is saved until you approve it.'}].slice(-50);
-  persist(); tab='Assistant'; render();
+  portalStatePersist(); persist(); tab='Assistant'; render();
 }
 function portalCheckFieldRows(source,f){
   if(source==='nbcrna') return field('status','Certification status','text',f.status||'')+field('number','Certification number','text',f.number||'')+field('periodStart','Certification period start','date',f.periodStart||'')+field('periodEnd','Certification period end','date',f.periodEnd||'')+field('renewalDeadline','Renewal / recertification deadline','date',f.renewalDeadline||f.periodEnd||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"')+field('macEd','MAC Ed credits','number',f.macEd??'','min="0" step="1"')+field('macDev','MAC Dev credits','number',f.macDev??'','min="0" step="1"');
@@ -889,7 +916,7 @@ function portalCheckHTML(){
     const map=portalNavMap(portalCheck.source), page=portalGuidePage(portalCheck);
     const stepNo=(portalCheck.page||0)+1, stepCount=map.pages.length;
     const rows=(PORTAL_FIELD_LABELS[portalCheck.source]||[]).map(([k,l])=>{ const got=portalCheck.fields&&String(portalCheck.fields[k]||'').trim()!==''; return `<div>${got?'✓':'○'} ${escapeHTML(l)}${got?' — got it':''}</div>`; }).join('');
-    inner=`<h3>${m.title} — step ${stepNo} of ${stepCount}</h3><p><strong>${escapeHTML(page.direction)}</strong></p>${portalCheck.notice?`<p class="hint">${escapeHTML(portalCheck.notice)}</p>`:''}<div class="item"><strong>Your record so far</strong>${rows}</div><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of that page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste that page’s text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it</button>${stepCount>1?`<button type="button" class="secondary" data-action="portal-guide-skip">Skip this page</button>`:''}${(portalCheck.pagesShown||0)>0?`<button type="button" class="secondary" data-action="portal-guide-finish">That’s everything — show my report</button>`:''}<button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
+    inner=`<h3>${m.title} — step ${stepNo} of ${stepCount}</h3><p><strong>${escapeHTML(page.direction)}</strong></p><p class="muted">📸 On your phone: screenshot that page over there, come back to this tab, then upload it below.</p><p class="muted">No screenshot handy? Paste the page's text below instead.</p>${portalCheck.notice?`<p class="hint">${escapeHTML(portalCheck.notice)}</p>`:''}<div class="item"><strong>Your record so far</strong>${rows}</div><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of that page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste that page’s text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it</button>${stepCount>1?`<button type="button" class="secondary" data-action="portal-guide-skip">Skip this page</button>`:''}${(portalCheck.pagesShown||0)>0?`<button type="button" class="secondary" data-action="portal-guide-finish">That’s everything — show my report</button>`:''}<button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
   } else {
     const m=PORTAL_CHECK_SOURCES[portalCheck.source], f=portalCheck.fields||{};
     inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ai'?'read with AI from your screenshot':portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'} · ${(portalCheck.pagesShown||0)} page${(portalCheck.pagesShown||0)===1?'':'s'} shown). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
@@ -1026,7 +1053,7 @@ function approvePortalCheck(e){
   const summary=applyPortalCheckRecord(source,fields,when);
   const changed=monitorSnapshotChanged(beforeSnap,monitorSnapshot(source,fields.state||(portalCheck&&portalCheck.state)||'',fields.type||'APRN'));
   recordMonitorCheck(monKey,changed?'changed':'no_change',(changed?'Changed on assistant check — ':'Checked, no change — ')+summary,'signed_in');
-  portalCheck=null; portalCheckError=''; portalCheckOcrStatus=''; persist(); render();
+  portalCheck=null; portalCheckError=''; portalCheckOcrStatus=''; portalStatePersist(); persist(); render();
   alert('Saved from the assistant portal check ('+String(when).slice(0,10)+'): '+summary+'\n\nSource: assistant portal check — read from the portal page you showed the assistant. It is not a server portal pull, and nothing was stored from your sign-in.');
 }
 
@@ -1036,7 +1063,7 @@ function assistantPage(){
 }
 function submitAssistant(e){e.preventDefault();const input=$('assistantInput');if(!input)return;const q=input.value.trim();if(!q)return;input.value='';askAssistantLive(q)}
 
-function render(){ if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r[el.dataset.field]=el.value}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r[el.dataset.field]=el.value}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
+function render(){ if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r[el.dataset.field]=el.value}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r[el.dataset.field]=el.value}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
 function area(name,label,value='',placeholder=''){return `<div class="field wide"><label for="f_${name}">${label}</label><textarea id="f_${name}" name="${name}" placeholder="${escapeHTML(placeholder)}">${escapeHTML(value)}</textarea></div>`}
 function select(name,label,options,value){return `<div class="field"><label for="f_${name}">${label}</label><select name="${name}" id="f_${name}">${options.map(o=>`<option value="${escapeHTML(o)}" ${o===value?'selected':''}>${escapeHTML(o)}</option>`).join('')}</select></div>`}
@@ -1651,7 +1678,7 @@ function credentialsPage(){
   // Connect card: the FINAL model leads — system sign-in sheet, Face ID,
   // no passwords in the app. The new-tab sign-in below it is a
   // clearly-labelled preview stand-in (class "standin"), not the design.
-  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];return `<section class="panel"><h2>${title}</h2><p><strong>Status: ${escapeHTML(st.label)}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p><p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>Signed in over there?</strong> One tap brings you back and starts your check.</p>`:''}<div class="toolbar"><button type="button" data-action="connect-portal" data-id="${title}">Connect ${title} — open portal</button>${opened?`<button type="button" data-action="portal-return" data-id="${portalKey}">I’m back — run my check</button>`:''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div></section>`};
+  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];return `<section class="panel"><h2>${title}</h2><p><strong>Status: ${escapeHTML(st.label)}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p><p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>Signed in over there?</strong> One tap brings you back and starts your check.</p>`:''}<div class="toolbar"><a class="button" href="${siteUrl}" target="_blank" rel="noopener" data-portal-connect="${portalKey}">Connect ${title} — open portal</a>${opened?`<button type="button" data-action="portal-return" data-id="${portalKey}">I’m back — run my check</button>`:''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div>${portalLeaveSheet===portalKey?`<div class="item"><p><strong>One sec — the portal opens outside CRNA Hub.</strong></p><p class="muted">Over there: sign in, then screenshot the page that shows your record.</p><p class="muted">CRNA Hub stays right here — come back to this tab and your check picks up where you left off.</p><div class="toolbar"><button type="button" data-action="portal-leave-go" data-id="${portalKey}">Take me to ${title}</button><button type="button" class="secondary" data-action="portal-leave-cancel">Not now</button></div></div>`:''}</section>`};
   const nbcrnaManual=(n.status||n.number||n.renewalDeadline||n.periodEnd)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const aanaManual=(a.status||a.number||a.expiration)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const licManual=db.licenses.length?db.licenses.length+' license record(s) on file — entered by hand, not verified.':'No license records on file yet.';
@@ -2554,7 +2581,7 @@ if(action==='monitor-prompt-dismiss'){const m=(db.portalMonitoring||[]).find(x=>
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry);}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
 if(action==='mileage-autocalc')return calcMileageForForm();if(action==='facility-distance')return calcFacilityDistance();if(action==='edit-paystub'){editId=entry;tab='Facilities';paystubPreview=null;paystubError='';paystubStatus='';render();const el=document.getElementById('paystub-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return;}
 if(action==='delete-paystub'){if(!confirm("Delete this agency's pay schedule? Only this agency's estimated paychecks are removed — other agencies are untouched."))return;db.payStubs=(db.payStubs||[]).filter(x=>x.id!==entry);persist();return render()}
@@ -3883,37 +3910,89 @@ function portalSourceLabel(source, when) { const labels = { 'public_verification
 // (ASWebAuthenticationSession) — iPhone Passwords + Face ID fill the
 // login, the app never sees a portal password, and when sign-in
 // finishes the sheet RETURNS the user to the app automatically, where
-// returnToApp() hands straight into the check. The web build cannot
-// be redirected back by a third-party portal — the portal will never
-// send the user to our URL — so open() uses a new tab (the user's own
-// saved passwords / Face ID work there), the card shows a persistent
-// one-tap return prompt, and returnToApp() closes the portal tab when
-// this build opened it in a window it holds a handle to. Nothing here
-// fakes an automatic redirect the web cannot do.
+// returnToApp() hands straight into the check.
+//
+// Why Connect is a real link, not a script redirect (Caleb's report,
+// Nov 6, 2026): the old Connect was a button whose handler called
+// window.open. In the home-screen / standalone app (and in-app
+// webviews) there is no tab strip — iOS loads a script-opened window
+// INTO the app's only window, so tapping Connect navigated the app
+// itself away to the portal and the return prompt went with it. The
+// Connect control is now an <a href target="_blank"> the browser
+// itself opens as a new tab, and open() runs inside the tap:
+//   * Browser tab: window.open (synchronous, in the tap handler —
+//     async calls get popup-blocked on iOS) opens the tab and open()
+//     cancels the link's own navigation, so the app tab stays exactly
+//     where he left it, return prompt waiting. The handle is kept so
+//     returnToApp() can close the portal tab; its opener is severed
+//     at once, so the portal gets no handle back into this app.
+//   * Standalone / home-screen app: open() does NOT hijack the tap —
+//     the real link opens the portal outside the app window (Safari),
+//     opened-state is persisted, and the app is still here, check
+//     intact, when he comes back.
+//   * Popup genuinely blocked (window.open returns nothing): NEVER
+//     fall back to navigating this tab. open() shows a short
+//     pre-leaving sheet — he's leaving the app, the two things to do
+//     over there, the app will be right here — and the tab only
+//     navigates on his explicit tap on that sheet (portalLeaveGo).
+// Guided-check state is persisted on every step (portalStatePersist),
+// so even a full reload resumes the check where he left off.
 // Server-side pulls stay blocked — NBCRNA public verification submit
 // 404s, AANA SSO sign-in is bot-gated, WV/OH board lookups block
 // automation — so the check reads the record page the user brings
 // back (screenshot or pasted text) and previews it before saving.
 // (portalCall/portalRefreshStatus below still serve the monitoring log.)
-let portalOpened = {}; // portalKey -> true once Connect opened the portal this session
+let portalOpened = {}; // portalKey -> true once Connect opened the portal
+let portalLeaveSheet = ''; // portalKey whose pre-leaving sheet is showing ('' = none)
 const portalFlows = {}; // portalKey -> connect flow object
+// True when the app runs as a home-screen / standalone app or another
+// single-window webview, where a script window.open replaces the app
+// instead of opening a tab.
+function portalStandaloneMode() {
+  try { if (typeof navigator !== 'undefined' && navigator && navigator.standalone === true) return true; } catch (e) {}
+  try {
+    if (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function') {
+      if (window.matchMedia('(display-mode: standalone)').matches) return true;
+      if (window.matchMedia('(display-mode: fullscreen)').matches) return true;
+    }
+  } catch (e) {}
+  return false;
+}
 function portalConnectFlow(key) {
   const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return null;
   if (!portalFlows[key]) {
     portalFlows[key] = {
       key, meta, win: null, openedAt: '', returnedAt: '',
-      open() {
+      open(ev) {
         this.openedAt = new Date().toISOString();
         this.returnedAt = '';
+        if (portalStandaloneMode()) {
+          // Single-window app: let the real link take him to the
+          // portal — do not touch the tap, do not re-render mid-tap.
+          // State is persisted; the return prompt is waiting when he
+          // comes back (the focus/visibility hook re-renders).
+          portalOpened[key] = true;
+          portalStatePersist();
+          return 'link';
+        }
         let win = null;
         try { win = window.open(this.meta.url, '_blank'); } catch (e) {}
-        // Keep the handle so returnToApp() can close the tab — but
-        // sever the opener link at once, so the portal gets no handle
-        // back into this app.
-        if (win) { try { win.opener = null; } catch (e) {} }
-        this.win = win;
-        portalOpened[key] = true;
+        if (win) {
+          if (ev && ev.preventDefault) ev.preventDefault();
+          try { win.opener = null; } catch (e) {}
+          this.win = win;
+          portalOpened[key] = true;
+          portalLeaveSheet = '';
+          portalStatePersist();
+          render();
+          return 'tab';
+        }
+        // Blocked: never silently redirect this tab — pre-leaving
+        // sheet first, and leaving is its own explicit tap.
+        if (ev && ev.preventDefault) ev.preventDefault();
+        portalLeaveSheet = key;
         render();
+        return 'blocked';
       },
       returnToApp() {
         this.returnedAt = new Date().toISOString();
@@ -3924,7 +4003,23 @@ function portalConnectFlow(key) {
   }
   return portalFlows[key];
 }
+// The Connect anchor's tap: runs the flow inside the tap handler, so
+// the synchronous window.open keeps its user-activation on iOS.
+function portalConnectClick(key, ev) { const f = portalConnectFlow(key); if (f) f.open(ev); }
 function portalOpenSignIn(key) { const f = portalConnectFlow(key); if (f) f.open(); }
+// The pre-leaving sheet's explicit tap — the ONLY place a portal
+// connect navigates the current tab, and only after he has seen the
+// sheet and chosen to go. His place is persisted before leaving.
+function portalLeaveGo(key) {
+  const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return;
+  const f = portalConnectFlow(key);
+  if (f) { f.openedAt = new Date().toISOString(); f.returnedAt = ''; }
+  portalOpened[key] = true;
+  portalLeaveSheet = '';
+  portalStatePersist();
+  try { if (typeof location !== 'undefined' && location && typeof location.assign === 'function') { location.assign(meta.url); return; } } catch (e) {}
+  try { location.href = meta.url; } catch (e) {}
+}
 // The user coming back to this tab with a portal flow open: stamp the
 // return and re-render, so the card's return prompt is on screen.
 // (The web build cannot detect the moment sign-in completes inside
@@ -3961,4 +4056,4 @@ async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; 
 // panel with a reload button, never a silent blank page (the boot watchdog
 // in index.html is the second net, for failures before this file runs).
 function bootRender(){try{render()}catch(e){try{console.error(e)}catch(_){ } const navEl=$('nav');if(navEl&&!navEl.innerHTML){navEl.innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');try{navEl.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)))}catch(_){ }} const appEl=$('app');if(appEl)appEl.innerHTML=`<section class="panel"><h2>Something went wrong starting CRNA Hub</h2><p class="muted">${escapeHTML(String((e&&e.message)||e))}</p><p class="muted">Your saved data on this device is not affected. Tap a tab above to try that page, or reload.</p><p><button type="button" onclick="location.reload()">Reload</button></p></section>`}}
-bootRender();cloudInit();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').then(reg=>{const promptReload=()=>{if(confirm('A newer version of CRNA Hub is available. Reload now to use it?'))window.location.reload()};if(reg.waiting)promptReload();reg.addEventListener('updatefound',()=>{const sw=reg.installing;if(!sw)return;sw.addEventListener('statechange',()=>{if(sw.state==='installed'&&navigator.serviceWorker.controller)promptReload()})});try{const p=reg.update();if(p&&p.catch)p.catch(()=>{})}catch(e){}}).catch(()=>{});
+portalCheckRestore();bootRender();cloudInit();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').then(reg=>{const promptReload=()=>{if(confirm('A newer version of CRNA Hub is available. Reload now to use it?'))window.location.reload()};if(reg.waiting)promptReload();reg.addEventListener('updatefound',()=>{const sw=reg.installing;if(!sw)return;sw.addEventListener('statechange',()=>{if(sw.state==='installed'&&navigator.serviceWorker.controller)promptReload()})});try{const p=reg.update();if(p&&p.catch)p.catch(()=>{})}catch(e){}}).catch(()=>{});
