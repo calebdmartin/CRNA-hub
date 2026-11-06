@@ -271,7 +271,7 @@ run(`
 `);
 t('step 2 checks off when a schedule file was imported, or the QGenda feed is connected',
   sandbox.__stepsSched[1].done === true && sandbox.__stepsQg[1].done === true);
-t('step 1 checks off only when signed in AND the schedule name is set',
-  sandbox.__stepsNoName[0].done === false && sandbox.__stepsNamed[0].done === true);
+t('step 1 checks off when the account exists (signed in); name no longer gates it',
+  sandbox.__stepsNoName[0].done === true && sandbox.__stepsNamed[0].done === true);
 
 console.log(failures === 0 ? 'income-csp test done: all passed' : 'income-csp test done: FAILURES=' + failures);

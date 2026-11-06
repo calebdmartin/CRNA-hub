@@ -9,11 +9,14 @@
 // to its own origin, and this function talks to Supabase server-side.
 //
 // Security notes:
-// - This is NOT an open proxy. Only three allowlisted GoTrue endpoints
+// - This is NOT an open proxy. Only four allowlisted GoTrue endpoints
 //   are forwarded (signup, token with password/refresh_token grants,
-//   logout), and only with the project's PUBLISHABLE key — the same
-//   public client key already embedded in supabase-config.js. The
-//   secret/service-role key is never used here and never appears here.
+//   logout, and update-user — a PUT that writes the signed-in user's
+//   own user_metadata with their own access token, used for the step 1
+//   profile: name, employment type, monthly income goal), and only with
+//   the project's PUBLISHABLE key — the same public client key already
+//   embedded in supabase-config.js. The secret/service-role key is never
+//   used here and never appears here.
 // - Request bodies are forwarded as-is to GoTrue; this function does not
 //   log, store, or inspect passwords, tokens, or emails.
 // - The function returns GoTrue's status code and JSON body verbatim, so
@@ -26,6 +29,9 @@ const ALLOWED = {
   signup: { path: '/auth/v1/signup', grants: null },
   token: { path: '/auth/v1/token', grants: new Set(['password', 'refresh_token']) },
   logout: { path: '/auth/v1/logout', grants: null },
+  // Profile save only: the caller must pass its own access token, and
+  // GoTrue only ever updates the token owner's metadata.
+  'update-user': { path: '/auth/v1/user', method: 'PUT', grants: null },
 };
 
 module.exports = async (req, res) => {
@@ -68,7 +74,7 @@ module.exports = async (req, res) => {
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const upstreamRes = await fetch(upstream, {
-      method: 'POST',
+      method: spec.method || 'POST',
       headers,
       body: JSON.stringify(payload.body || {}),
       signal: controller.signal,
