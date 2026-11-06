@@ -30,6 +30,15 @@
 // overwrites a user correction, and the 1st-call hourly math lives in
 // the app (weekday 8h x premium + 16h x 1st-call; weekend 24h x
 // 1st-call), not here.
+//
+// Pay-stub mode (Nov 5, 2026, mode: "paystub"): photos of a pay stub
+// return { ok: true, mode: "paystub", paystub, raw_text, model } where
+// paystub is the normalised AiPaystub shape (employer, facility,
+// frequency, period_start, period_end, pay_date, gross_pay, net_pay —
+// null where the stub does not state a value). The client builds one
+// pay schedule per agency from the frequency + pay date and shows a
+// preview before saving anything; the stub photo itself is never
+// stored, server-side or client-side.
 
 import {
   CORS,
@@ -39,6 +48,7 @@ import {
 } from "../_shared/calendar.ts";
 import {
   normalizeAiContract,
+  normalizeAiPaystub,
   normalizeAiSchedule,
   extractAiContent,
   parseAiResponseText,
@@ -85,6 +95,28 @@ function schedulePrompt(scheduleName: string): string {
   );
 }
 
+// Pay-stub mode (Nov 5, 2026): photos of a PAY STUB, one stub per
+// agency. The model returns ONLY this check's facts — employer, pay
+// frequency, pay period, pay date, gross and net for this check — and
+// never invents a future payday: the client derives every future date
+// from the frequency + pay date. Dates are YYYY-MM-DD. Amounts are
+// numbers. Null where the stub does not state a value; never invent
+// an employer, a date, or an amount.
+function paystubPrompt(): string {
+  return (
+    "Read these photos of a pay stub. " +
+    "Return ONLY a JSON object with these keys, using null where a value is not stated: " +
+    "employer, facility, frequency, period_start, period_end, pay_date, gross_pay, net_pay, raw_text. " +
+    "employer is the employer / agency name printed on the stub. " +
+    "facility is the hospital / facility name only when the stub prints one, else null. " +
+    "frequency is one of: weekly, biweekly, semi-monthly, monthly — the pay frequency stated on the stub, or inferred from the pay period (7 days weekly, 14 days biweekly, about 15 days semi-monthly, about a month monthly); null when it cannot be told. " +
+    "period_start and period_end are the pay period dates (YYYY-MM-DD). " +
+    "pay_date is the pay date / check date of this check (YYYY-MM-DD). " +
+    "gross_pay is the gross pay for this check, net_pay the net pay for this check — current-period amounts, not year-to-date. " +
+    "Amounts are numbers without $ or commas. Do not invent any value."
+  );
+}
+
 const KEY_MISSING_MESSAGE =
   "AI reading isn't set up yet — add the OpenAI key in Supabase (Edge Functions → Manage secrets → OPENAI_API_KEY)";
 
@@ -126,7 +158,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
-    const mode = body.mode === "schedule" ? "schedule" : "contract";
+    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : "contract";
     const scheduleName = typeof body.scheduleName === "string"
       ? body.scheduleName.trim()
       : "";
@@ -149,7 +181,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? schedulePrompt(scheduleName) : PROMPT,
+        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -211,7 +243,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           error: "openai_bad_response",
           message:
             "OpenAI answered without readable " +
-            (mode === "schedule" ? "schedule" : "contract") +
+            (mode === "schedule" ? "schedule" : mode === "paystub" ? "pay stub" : "contract") +
             " data — try again, or use on-device OCR.",
         },
         502,
@@ -224,6 +256,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ok: true,
         mode: "schedule",
         shifts,
+        raw_text: typeof rawText === "string" ? rawText : "",
+        model: MODEL,
+      });
+    }
+    if (mode === "paystub") {
+      const paystub = normalizeAiPaystub(raw);
+      const rawText = (raw as Record<string, unknown>)["raw_text"];
+      return json({
+        ok: true,
+        mode: "paystub",
+        paystub,
         raw_text: typeof rawText === "string" ? rawText : "",
         model: MODEL,
       });

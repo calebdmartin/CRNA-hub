@@ -31,6 +31,13 @@ function secrets (server side) and in the provider consoles below.
   fallback only. Schedule mode (`mode: "schedule"` + `scheduleName`):
   photos of a staff schedule return only shifts for that person
   (date/facility/type/name), for the schedule upload's preview-before-save.
+  Pay-stub mode (`mode: "paystub"`, Nov 5, 2026): photos of a pay stub
+  return one check's facts only (employer, facility, frequency,
+  period_start, period_end, pay_date, gross_pay, net_pay) into the
+  Facilities pay-stub preview-before-save; the client derives every
+  future payday from the frequency + pay date, one schedule per agency.
+  The stub photo is never stored. Same `OPENAI_API_KEY` secret; redeploy
+  `extract-contract` after any change to this function (see step 2).
 - `qgenda-feed/` — QGenda subscription feed (Nov 5, 2026): stores the
   user's personal "Your Subscription URL" encrypted (AES-GCM, same as
   other provider credentials) and polls that ICS feed server-side,

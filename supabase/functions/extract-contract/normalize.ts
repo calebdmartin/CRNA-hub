@@ -161,6 +161,98 @@ export function parseAiResponseText(text: string): unknown | null {
   }
 }
 
+// --- Pay-stub mode (Nov 5, 2026) ---
+// Photos of a PAY STUB (one stub per agency). The model returns the
+// employer's name, the pay frequency, the pay period, the pay date of
+// this check, and the gross / net for this check — nothing else is
+// needed to build that agency's pay schedule, and the client derives
+// every future payday from the frequency + pay date, never from a
+// model-invented date. Same null rules as contracts: a field the stub
+// does not state is null, never invented, never 0.
+export interface AiPaystub {
+  employer: string | null;
+  facility: string | null;
+  frequency: "weekly" | "biweekly" | "semi-monthly" | "monthly" | null;
+  period_start: string | null;
+  period_end: string | null;
+  pay_date: string | null;
+  gross_pay: number | null;
+  net_pay: number | null;
+  raw_text: string | null;
+}
+
+export function coercePaystubFrequency(v: unknown): AiPaystub["frequency"] {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ");
+  if (t === "weekly") return "weekly";
+  if (
+    t === "biweekly" || t === "bi-weekly" || t === "bi weekly" ||
+    t === "every 2 weeks" || t === "every two weeks" || t === "fortnightly"
+  ) return "biweekly";
+  if (
+    t === "semi-monthly" || t === "semi monthly" || t === "semimonthly" ||
+    t === "twice a month" || t === "twice-monthly" || t === "twice monthly"
+  ) return "semi-monthly";
+  if (t === "monthly") return "monthly";
+  return null;
+}
+
+// A pay-stub date: YYYY-MM-DD passes through; MM/DD/YYYY and
+// "Nov 7, 2026" / "7 Nov 2026" normalise to it; anything else is null.
+// The client re-validates the result before it ever reaches a preview.
+export function coercePaystubDate(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    return `${slash[3]}-${slash[1].padStart(2, "0")}-${slash[2].padStart(2, "0")}`;
+  }
+  const months: Record<string, string> = {
+    january: "01", jan: "01", february: "02", feb: "02", march: "03",
+    mar: "03", april: "04", apr: "04", may: "05", june: "06", jun: "06",
+    july: "07", jul: "07", august: "08", aug: "08", september: "09",
+    sep: "09", sept: "09", october: "10", oct: "10", november: "11",
+    nov: "11", december: "12", dec: "12",
+  };
+  const named = t.match(
+    /^([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$|^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})$/,
+  );
+  if (named) {
+    const mon = months[(named[1] || named[5] || "").toLowerCase()];
+    const day = named[2] || named[4];
+    const year = named[3] || named[6];
+    if (mon && day && year) return `${year}-${mon}-${day.padStart(2, "0")}`;
+  }
+  return null;
+}
+
+export function normalizeAiPaystub(raw: unknown): AiPaystub {
+  const out: AiPaystub = {
+    employer: null,
+    facility: null,
+    frequency: null,
+    period_start: null,
+    period_end: null,
+    pay_date: null,
+    gross_pay: null,
+    net_pay: null,
+    raw_text: null,
+  };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  out.employer = coerceAiText(obj["employer"] ?? obj["agency"]);
+  out.facility = coerceAiText(obj["facility"]);
+  out.frequency = coercePaystubFrequency(obj["frequency"]);
+  out.period_start = coercePaystubDate(obj["period_start"]);
+  out.period_end = coercePaystubDate(obj["period_end"]);
+  out.pay_date = coercePaystubDate(obj["pay_date"]);
+  out.gross_pay = coerceAiNumber(obj["gross_pay"]);
+  out.net_pay = coerceAiNumber(obj["net_pay"]);
+  out.raw_text = coerceAiText(obj["raw_text"]);
+  return out;
+}
+
 // --- Schedule-photo mode (Nov 5, 2026) ---
 // The schedule upload sends photos of a staff schedule; the model
 // returns only shifts for the schedule name. A row is kept only when
