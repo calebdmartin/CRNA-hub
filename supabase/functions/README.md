@@ -24,6 +24,22 @@ function secrets (server side) and in the provider consoles below.
   record is labelled with its source and retrieval date in
   `portal_connections` / `nbcrna_profiles` / `aana_memberships` /
   `licenses` (migration 001 tables).
+- `extract-contract/` — AI contract reading ("Read with AI", the PRIMARY
+  path for contract photos): gpt-4o-mini vision read of the photos the
+  user selected, returning structured rates + transcribed text into the
+  same preview-before-save flow as OCR. On-device OCR is the labelled
+  fallback only.
+- `assistant-chat/` — live Assistant chat (Assistant tab): gpt-4o-mini
+  answers the user's question from a minimal structured summary of
+  their own records only (counts, totals, next shifts) — never facility
+  notes/codes, documents, or patient information (server-side denylist
+  backstop). Same `OPENAI_API_KEY` secret as `extract-contract`.
+  Best-effort per-user throttle (1 per 10s, 30 per rolling hour);
+  the durable per-user cap (`assistant_chat_log` table) is final-only
+  and not yet built. NOT YET DEPLOYED as of Nov 5, 2026 — deploy with
+  `supabase functions deploy assistant-chat` (see below); until then
+  the Assistant tab falls back to deterministic on-device answers,
+  labelled honestly.
 - `_shared/` — auth validation, AES-GCM token encryption, PostgREST
   helpers, shift/event mapping, and one provider module each
   (`google.ts`, `outlook.ts`, `caldav.ts`).
@@ -49,6 +65,7 @@ saving a source.
 ```sh
 supabase link --project-ref xgoghgihfhtnyevgapyp
 supabase functions deploy google-auth outlook-auth sync-calendar
+supabase functions deploy extract-contract assistant-chat
 ```
 
 Or run the script in this repo (it takes no secrets as arguments):
@@ -69,6 +86,12 @@ supabase secrets set \
   OUTLOOK_CLIENT_SECRET="<from Entra, step 5>"
 ```
 
+- `OPENAI_API_KEY` is the one AI secret, shared by `extract-contract`
+  and `assistant-chat` (set it once — both functions read it from their
+  own environment). Until it is set, both functions answer
+  `openai_key_missing` and the app says so plainly instead of failing
+  silently: contract photos fall back to the labelled on-device OCR
+  button, and the Assistant falls back to on-device answers.
 - `APP_URL` is the URL users actually open (the Vercel preview or
   production URL). After a provider consent screen, the callback returns
   the user to `APP_URL?calendar_connected=<provider>`. If it is unset,

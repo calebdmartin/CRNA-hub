@@ -110,6 +110,31 @@
 //   shifts even though the server had paired them — and the next sync
 //   repeated the same slow import. See flushImportMapWrites.
 //
+// FINAL NATIVE MODEL (agreed with Caleb, Nov 4–5, 2026) — what moves
+// on-device vs what this function still owns:
+//   * Apple transport moves on-device ENTIRELY: the finished native
+//     app reads the user's chosen work calendar via EventKit and
+//     creates its own calendar on-device. No CalDAV, no app-specific
+//     password, no server-held Apple credential. The connect-apple
+//     action, the CalDAV calendar creation, and the apple-calendars
+//     listing in this file are a WEB PREVIEW STAND-IN only — the
+//     client labels them as such (LIVE_SYNC_STANDIN_LABEL) and they
+//     must be deleted, not ported, when the native app ships.
+//   * The work-calendar picker itself is final, not a stand-in:
+//     set-apple-source-calendar (pick ONE existing calendar, pull
+//     from that calendar only, never write to it) is the flow the
+//     native picker must reproduce. Google/Outlook still need the
+//     equivalent picker built server-side (today only Apple has one).
+//   * This function KEEPS, for now: Google/Outlook OAuth + token
+//     storage, the sync engine (calendar_sync_map, calendar_import_map,
+//     sync log, pending deletions), the facilities-driven parser in
+//     ../_shared/calendar.ts, and the ask-first suggestion flow.
+//     Once shifts live in a cloud table, the parser/dedupe/suggestion
+//     flow can move on-device and this function shrinks to
+//     Google/Outlook transport — but no sync rule may change in that
+//     move (see the regression checklist in the README's "Final native
+//     calendar sync (EventKit) — design" section).
+//
 // Sync algorithm — newest edit wins, deletions never silent:
 //   * One dedicated provider calendar named "CRNA Hub" per provider.
 //     Other calendars are never read, written, or deleted — except the

@@ -11,15 +11,17 @@
 // reachable" on such devices even when the function is live.
 //
 // Security notes:
-// - This is NOT an open proxy. Only five allowlisted functions are
-//   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync), and only
-//   allowlisted actions: sync-calendar config/status/log/apple-calendars/
+// - This is NOT an open proxy. Only six allowlisted functions are
+//   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync,
+//   extract-contract, assistant-chat), and only allowlisted actions:
+//   sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
 //   set-auto-delete/resolve-deletion, the OAuth "start" action for
 //   google-auth/outlook-auth, and portal-sync config/status/
-//   verify-nbcrna/verify-license/connect-aana, and extract-contract
-//   extract-contract. Everything else is
-//   rejected with 400.
+//   verify-nbcrna/verify-license (the former connect-aana action was
+//   deleted Nov 5, 2026 — audit F9 — and is rejected here),
+//   extract-contract extract-contract, and assistant-chat chat.
+//   Everything else is rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client
 //   key already embedded in supabase-config.js), plus the user's own
 //   Authorization Bearer token, which the Edge Function verifies
@@ -42,13 +44,20 @@ const FUNCTIONS = {
   'google-auth': new Set(['start']),
   'outlook-auth': new Set(['start']),
   // Portal connections (Credentials tab): NBCRNA public verification,
-  // state-board verification attempts, AANA one-time sign-in, status.
+  // state-board verification attempts, status. (The former AANA
+  // one-time sign-in action 'connect-aana' was deleted Nov 5, 2026 —
+  // audit F9 — and is no longer allowlisted.)
   // Same token rule as sync-calendar: the public config check is
   // token-less, everything else requires the user's token.
-  'portal-sync': new Set(['config', 'status', 'verify-nbcrna', 'verify-license', 'connect-aana']),
+  'portal-sync': new Set(['config', 'status', 'verify-nbcrna', 'verify-license']),
   // AI contract reading (Facilities + Import & Backup "Read with AI"):
   // one action, POST only, requires the user's token like the rest.
   'extract-contract': new Set(['extract-contract']),
+  // Live Assistant chat (Assistant tab): one action, POST only, requires
+  // the user's token like the rest. The client sends only the question
+  // plus a minimal structured summary of the user's records — never
+  // facility notes/codes, documents, or patient information.
+  'assistant-chat': new Set(['chat']),
 };
 
 function bad(res, code, status) {
@@ -103,9 +112,10 @@ module.exports = async (req, res) => {
     headers['Content-Type'] = 'application/json';
   }
   const controller = new AbortController();
-  // Vision reads take longer than a sync status check: give the AI
-  // call 60s through the proxy (the Edge Function itself aborts at 60s).
-  const timer = setTimeout(() => controller.abort(), payload.function === 'extract-contract' ? 60000 : 25000);
+  // Vision reads and assistant answers take longer than a sync status
+  // check: give the AI calls 60s through the proxy (the Edge Function
+  // itself aborts at 60s).
+  const timer = setTimeout(() => controller.abort(), (payload.function === 'extract-contract' || payload.function === 'assistant-chat') ? 60000 : 25000);
   try {
     const upstreamRes = await fetch(upstream, {
       method,

@@ -31,12 +31,15 @@
 //   AANA: NO public verification, NO API. The CE transcript is
 //     Active-member-login only (Aptify e-Business, SSO at
 //     aptify.aana.com -> www.aana.com/sso-auth/login, behind Incapsula).
-//     connect-aana below attempts the real one-time sign-in flow with
-//     credentials passed once over HTTPS and never stored or logged;
-//     when the SSO/IdP challenge blocks it (the observed behaviour),
-//     it reports aana_signin_unavailable and falls back to transcript
-//     upload / manual entry. AANA CE is also shared AANA -> NBCRNA, so
-//     NBCRNA totals may cover the same credits.
+//     DELETED Nov 5, 2026 (audit F9): the former server-side
+//     connect-aana sign-in (username/password passed to this server
+//     for one login attempt) was removed entirely — the final product
+//     never hands the server a portal password, even transiently.
+//     AANA sign-in happens only in the native system sign-in sheet;
+//     in this preview the user signs in themselves in a new tab and
+//     the assistant reads the record page they show it. AANA CE is
+//     also shared AANA -> NBCRNA, so NBCRNA totals may cover the
+//     same credits.
 //
 // Endpoints (all under /functions/v1/portal-sync):
 //   GET  ?action=config   (public, booleans/labels only — no user data)
@@ -48,13 +51,26 @@
 //   POST { action: "verify-license", state, firstName, lastName, licenseNumber? } (auth)
 //        -> public state-board verification attempt; WV/OH report blocked
 //           with the manual route, other states report unsupported
-//   POST { action: "connect-aana", username, password } (auth)
-//        -> one-time AANA member sign-in, credentials used in-memory only
-//           for this request, never stored, never logged, never returned
 //
 // Every pulled record is labelled with its source and retrieval date.
 // Nothing here logs or returns passwords or full portal HTML — errors
 // carry a short code plus a short human message only.
+//
+// FINAL NATIVE DESIGN (agreed Nov 4-5, 2026 — see PORTAL_NATIVE_SPEC in
+// app.js): the finished iOS app signs the user in through Apple's system
+// sign-in sheet (ASWebAuthenticationSession); iPhone Passwords + Face ID
+// fill the login and the app never sees a portal password. What this
+// function still owns in that design:
+//   * the NBCRNA public verification pull (no login; implemented, UNPROVEN
+//     — its submit endpoint 404s server-side);
+//   * honest blocked/unsupported answers for WV / Ohio lookups, with the
+//     manual route + Nursys e-Notify pointer;
+//   * portal_connections status rows (connected / needs_reauth / failed).
+// What it does NOT own: sign-in. A former connect-aana endpoint
+// (server took a username/password for one AANA attempt) was DELETED
+// Nov 5, 2026 (audit F9) — the final product never hands the server
+// a portal password, even transiently. Sign-in happens only in the
+// native system sign-in sheet.
 
 import {
   CORS,
@@ -72,7 +88,6 @@ const UA =
 
 const NBCRNA_VERIFY_URL = "https://portal.nbcrna.com/credential-verification";
 const NBCRNA_ACCEPT_URL = "https://portal.nbcrna.com/nbcrnassa/wwv_flow.accept";
-const AANA_LOGIN_URL = "https://aptify.aana.com/aptify/default.aspx";
 
 const WV_LOOKUP_URL = "https://wvrn.boardsofnursing.org/licenselookup";
 const OH_LOOKUP_URL = "https://elicense.ohio.gov/oh_verifylicense";
@@ -461,151 +476,6 @@ async function handleVerifyLicense(
   }, 502);
 }
 
-// --- AANA member sign-in (one-time session, never stored) ---
-
-async function handleConnectAana(
-  userId: string,
-  body: Record<string, unknown>,
-): Promise<Response> {
-  const username = clean(body.username);
-  const password = String(body.password ?? "");
-  if (!username || !password) return err("missing_credentials", 400);
-  // The password lives only in this request's memory: it is used for
-  // one login attempt below, never written to a table, never logged,
-  // never returned. It goes out of scope when this handler returns.
-
-  const blockedMsg =
-    "AANA sign-in could not be completed automatically: AANA member sign-in runs through SSO (aptify.aana.com → aana.com/sso-auth/login) and that page is bot-gated, so the server cannot open a member session. Your AANA password was used for this one attempt only and was not stored. Use the AANA CE transcript upload or manual entry below instead — and AANA shares CE with NBCRNA, so NBCRNA totals may already cover the same credits.";
-  try {
-    // 1. Load the Aptify member portal and find its sign-in link.
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
-    let loginHtml = "";
-    try {
-      const r = await fetch(AANA_LOGIN_URL, {
-        headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
-        signal: ctrl.signal,
-      });
-      if (!r.ok) throw new Error(`aana_page_http_${r.status}`);
-      loginHtml = await r.text();
-    } finally {
-      clearTimeout(timer);
-    }
-    const ssoHref = /href="([^"]*sso-auth\/login[^"]*)"/i.exec(loginHtml)?.[1];
-    if (!ssoHref) throw new Error("aana_login_link_not_found");
-
-    // 2. Follow the SSO login link and look for a real password form.
-    const ssoUrl = ssoHref.startsWith("http")
-      ? ssoHref
-      : `https://www.aana.com${ssoHref.startsWith("/") ? "" : "/"}${ssoHref}`;
-    const ctrl2 = new AbortController();
-    const timer2 = setTimeout(() => ctrl2.abort(), 20000);
-    let ssoHtml = "";
-    try {
-      const r = await fetch(ssoUrl, {
-        headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
-        signal: ctrl2.signal,
-      });
-      ssoHtml = await r.text();
-      if (!r.ok) throw new Error(`aana_sso_http_${r.status}`);
-    } finally {
-      clearTimeout(timer2);
-    }
-    const hasPasswordForm =
-      /type=["']password["']/i.test(ssoHtml) &&
-      /<form[^>]*>/i.test(ssoHtml) &&
-      !/incapsula/i.test(ssoHtml);
-    if (!hasPasswordForm) throw new Error("aana_sso_blocked");
-
-    // 3. A usable login form was found (not observed Nov 5, 2026):
-    // post the credentials once to the form's action. Any MFA
-    // challenge, bad-password response, or unexpected page ends the
-    // attempt as needs_reauth — the credentials are still never kept.
-    const action = /<form[^>]*action=["']([^"']+)["']/i.exec(ssoHtml)?.[1] ?? ssoUrl;
-    const postUrl = action.startsWith("http")
-      ? action
-      : new URL(action, ssoUrl).toString();
-    const inputNames = [...ssoHtml.matchAll(/<input[^>]*name=["']([^"']+)["'][^>]*>/gi)]
-      .map((m) => m[1]);
-    const userField = inputNames.find((n) => /user|email|login/i.test(n));
-    const passField = inputNames.find((n) => /pass/i.test(n));
-    if (!userField || !passField) throw new Error("aana_login_fields_not_found");
-    const params = new URLSearchParams();
-    for (const [name, value] of [...ssoHtml.matchAll(/<input[^>]*name=["']([^"']+)["'][^>]*value=["']([^"']*)["'][^>]*>/gi)]) {
-      if (name !== userField && name !== passField) params.set(name, value);
-    }
-    params.set(userField, username);
-    params.set(passField, password);
-    const ctrl3 = new AbortController();
-    const timer3 = setTimeout(() => ctrl3.abort(), 25000);
-    let after = "";
-    try {
-      const r = await fetch(postUrl, {
-        method: "POST",
-        headers: {
-          "User-Agent": UA,
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "text/html,application/xhtml+xml",
-          Referer: ssoUrl,
-        },
-        body: params.toString(),
-        signal: ctrl3.signal,
-      });
-      after = await r.text();
-    } finally {
-      clearTimeout(timer3);
-    }
-    const lowerAfter = after.toLowerCase();
-    if (/mfa|multi-factor|verification code|authenticator|one-time pass/i.test(lowerAfter)) {
-      await setPortalStatus(userId, "aana", null, "needs_reauth",
-        "AANA asked for a second factor (MFA / verification code). The one-time sign-in cannot finish without it — use the AANA CE transcript upload or manual entry instead.");
-      return json({
-        ok: false,
-        error: "aana_mfa_required",
-        message: "AANA asked for a second factor (MFA / verification code), so the automatic sign-in stopped there. Your password was not stored. Use the AANA CE transcript upload or manual entry below.",
-      }, 401);
-    }
-    const signedIn =
-      /sign out|log out|my ce|ce transcript|member dashboard/i.test(lowerAfter) &&
-      !/incorrect|invalid (username|password|credentials)|login failed/i.test(lowerAfter);
-    if (!signedIn) {
-      await setPortalStatus(userId, "aana", null, "failed",
-        "AANA sign-in did not complete — the member session was not established. Check the username/password, or use the AANA CE transcript upload or manual entry.");
-      return json({
-        ok: false,
-        error: "aana_signin_failed",
-        message: "AANA sign-in did not complete — no member session was established. Your password was not stored. Check the username/password, or use the AANA CE transcript upload or manual entry below.",
-      }, 401);
-    }
-    // Signed in (not observed Nov 5, 2026): record the connection.
-    // CE totals still need a transcript fetch, which is not wired —
-    // say so rather than inventing totals.
-    await setPortalStatus(userId, "aana", null, "connected", null);
-    await sbUpsert("aana_memberships", {
-      user_id: userId,
-      membership_status: "Active",
-      source: "aana_portal",
-      last_synced_at: nowIso(),
-    }, "user_id");
-    return json({
-      ok: true,
-      source: "aana_portal",
-      retrievedAt: nowIso(),
-      record: {
-        membership_status: "Active",
-        note: "Signed in to AANA, but the CE transcript totals were not pulled in this step — enter them from your AANA CE transcript, or upload the transcript.",
-      },
-    });
-  } catch {
-    await setPortalStatus(userId, "aana", null, "needs_reauth", blockedMsg);
-    return json({
-      ok: false,
-      error: "aana_signin_unavailable",
-      message: blockedMsg,
-    }, 502);
-  }
-}
-
 // --- Router ---
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -626,7 +496,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             wv: "blocked",
             ohio: "blocked",
           },
-          note: "NBCRNA public verification is implemented but unproven (its submit endpoint 404s server-side as of Nov 5, 2026). AANA needs a member sign-in that is bot-gated. WV and Ohio board lookups block automation.",
+          note: "NBCRNA public verification is implemented but unproven (its submit endpoint 404s server-side as of Nov 5, 2026). AANA needs a member sign-in that is bot-gated. WV and Ohio board lookups block automation. Final native design: sign-in happens in Apple's system sign-in sheet, never through this server — the former server-side AANA password endpoint was deleted Nov 5, 2026 — sign-in happens only in the system sign-in sheet.",
         });
       }
       const userId = await authUserId(req);
@@ -647,7 +517,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       try {
         if (body.action === "verify-nbcrna") return await handleVerifyNbcrna(userId, body);
         if (body.action === "verify-license") return await handleVerifyLicense(userId, body);
-        if (body.action === "connect-aana") return await handleConnectAana(userId, body);
         return err("unknown_action", 400);
       } catch (e) {
         // Unexpected throw before the handler recorded an outcome: mark
@@ -655,8 +524,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
         try {
           if (body.action === "verify-nbcrna") {
             await setPortalStatus(userId, "nbcrna", null, "failed", "The NBCRNA check failed before it could finish — no record was pulled.");
-          } else if (body.action === "connect-aana") {
-            await setPortalStatus(userId, "aana", null, "failed", "The AANA sign-in failed before it could finish — no record was pulled.");
           } else if (body.action === "verify-license") {
             const st = normalizeState(String(body.state ?? ""));
             if (st) await setPortalStatus(userId, "state_board", st.abbr, "failed", "The license check failed before it could finish — no record was pulled.");

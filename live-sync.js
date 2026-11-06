@@ -1,17 +1,57 @@
 'use strict';
 // CRNA Hub — live calendar sync client (Google / Outlook / Apple).
 //
-// Loaded after app.js (see index.html). All provider tokens live
-// server-side only, in the Supabase Edge Functions in supabase/functions/.
+// FINAL NATIVE MODEL (agreed with Caleb, Nov 4–5, 2026) — what this
+// panel describes and what the finished iOS app must do:
+//   1. The user connects ONCE per provider and picks which EXISTING
+//      calendar is their work calendar (e.g. "Caleb Work Schedule").
+//      The app pulls shifts from that calendar ONLY — no other
+//      calendar is ever read.
+//   2. The app creates its OWN calendar behind the scenes, for the
+//      shifts the user adds in CRNA Hub. The user never creates a
+//      calendar, never labels anything "CRNA Hub", and never sees the
+//      app-owned calendar as something to manage. The work calendar
+//      is NEVER written to.
+//   3. Apple, native: EventKit (EKEventStore) on the device —
+//      requestFullAccessToEvents, an EKCalendarChooser for the work
+//      calendar, a private EKCalendar for the app's own shifts.
+//      No app-specific password, no CalDAV, no server-held Apple
+//      credential. Google/Outlook, native: the same one-connection
+//      + pick-your-work-calendar flow via their OAuth consent
+//      screens; tokens stay in the device keychain / server session,
+//      never in the app's own storage.
+//   4. Sync rules that never change, preview or final (see the
+//      server engine in supabase/functions/sync-calendar/index.ts
+//      and the shared parser in supabase/functions/_shared/calendar.ts):
+//      facilities drive recognition and pricing; dedupe via
+//      calendar_import_map; a shift the user deleted is never
+//      re-imported; imported shifts arrive as "proposed"; a shift
+//      with no pay rule stays unpriced (pay blank, incomplete) —
+//      never $0; an unknown hospital is held and suggested once
+//      ("We noticed shifts at <Hospital> — add it as a facility?"),
+//      never imported and never auto-created; newest edit wins;
+//      deletions wait in Pending deletions unless auto-delete was
+//      explicitly turned on (default off).
+//
+// PREVIEW STAND-IN (this web preview only): a web page cannot use
+// EventKit, so the Apple path below still connects through CalDAV
+// with a one-time app-specific password, and the app-owned calendar
+// is created server-side through CalDAV instead of on-device. That
+// path is fenced off in the UI as a clearly-labelled "Preview
+// stand-in" box (LIVE_SYNC_STANDIN_LABEL) and is NEVER presented as
+// the designed flow. Everything else in this file — the work-calendar
+// picker, the facilities-driven import, the suggestion flow, the
+// pending-deletion rules — is the final flow, not a stand-in.
+//
 // This file NEVER holds, stores, or logs a token, client secret, or
 // app-specific password:
 //   - Google/Outlook: the browser is redirected to the provider's consent
 //     screen; tokens are exchanged and stored by the Edge Function.
-//   - Apple: the app-specific password is sent once, over HTTPS, to the
-//     Edge Function's connect-apple action, which validates it and stores
-//     only its AES-GCM ciphertext. The password field is cleared
-//     immediately after sending, and the value is never written to
-//     localStorage, a backup, or the repo.
+//   - Apple (preview stand-in only): the app-specific password is sent
+//     once, over HTTPS, to the Edge Function's connect-apple action,
+//     which validates it and stores only its AES-GCM ciphertext. The
+//     password field is cleared immediately after sending, and the value
+//     is never written to localStorage, a backup, or the repo.
 // What IS kept on this device (localStorage key 'crna-hub-live-sync'):
 //   pending deletions awaiting the user's decision, and tombstones for
 //   locally deleted shifts (shift id + provider only — no credentials).
@@ -23,6 +63,16 @@
 // deletions are never silent — a provider-side deletion waits in
 // "Pending deletions" until the user confirms it, unless auto-delete was
 // explicitly turned on for that provider (default off).
+//
+// The full native design — what the native layer must do, what the
+// server still owns, and what moves on-device — is documented in the
+// README section "Final native calendar sync (EventKit) — design".
+
+// The label that marks the Apple CalDAV / app-specific-password path
+// as a temporary preview stand-in. It appears on the stand-in box
+// itself and in every alert the stand-in path shows, so the password
+// flow is never mistaken for the designed flow.
+const LIVE_SYNC_STANDIN_LABEL = 'Preview stand-in — the finished app uses EventKit, no password needed';
 
 let liveSyncConfig = { state: 'loading', google: false, outlook: false, apple: false, encryption: false };
 let liveSyncConnections = {}; // provider -> {status, autoDelete, lastSyncedAt}
@@ -30,15 +80,21 @@ let liveSyncLog = [];
 let liveSyncWizard = false;
 let liveSyncError = '';
 let liveSyncBusy = '';
-// Pending Apple pick-an-existing-calendar flow: iCloud refused to create
-// a new calendar, so the user chooses one of their existing calendars.
+// Pending Apple pick-a-work-calendar flow (preview stand-in only):
+// iCloud refused to create the app-owned calendar through CalDAV, so
+// the user chooses one of their existing calendars instead. In the
+// finished native app this picker is the PRIMARY flow — it appears
+// right after the user grants calendar access, with no password step
+// and no calendar-creation step at all — so the pick itself is final;
+// only the password that precedes it here is the stand-in.
 // Holds the Apple ID + app-specific password only until the pick is made
 // or cancelled; never persisted, never stored on this device.
 let liveSyncApplePick = null; // { appleId, password, calendars: [{url, name}] }
-// Apple import-source picker: the user's iCloud calendars, listed
+// Apple work-calendar picker: the user's iCloud calendars, listed
 // server-side (never the password). Empty until fetched for a connected
-// Apple account; the dedicated "CRNA Hub" calendar is flagged on each
-// entry (isDedicated) and excluded from the picker.
+// Apple account; the app-owned calendar is flagged on each entry
+// (isDedicated) and excluded from the picker — it is the calendar the
+// app keeps behind the scenes, never a calendar the user picks.
 let liveSyncAppleCalendars = [];
 let liveSyncPushTimer = null;
 
@@ -210,8 +266,8 @@ function liveSyncApplyChanges(provider, data) {
       const s = ch.shift;
       if (db.shifts.some((x) => x.date === s.date && x.facility === s.facility && x.type === s.type)) return;
       // Imported shifts arrive with source 'apple-import' (and a note
-      // naming the calendar they came from); dedicated-calendar shifts
-      // carry no source and default to 'calendar-<provider>'.
+      // naming the calendar they came from); shifts from the app-owned
+      // calendar carry no source and default to 'calendar-<provider>'.
       db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
       created++;
       // No auto-created facility here (ask-first, Nov 5, 2026): a shift
@@ -297,7 +353,7 @@ async function liveSyncNow(provider, silent) {
       let msg = 'Synced ' + liveSyncLabel(provider) + ': ' + applied.created + ' created, ' + applied.updated + ' updated, ' + applied.deleted + ' deleted, ' + applied.flagged + ' flagged for your confirmation (see Pending deletions below).';
       if (data.imported && typeof data.imported === 'object') {
         if (data.imported.error) {
-          msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the dedicated-calendar sync above still ran; try Sync now again.';
+          msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the app-calendar sync above still ran; try Sync now again.';
         } else {
           // Skips are reported by reason, not as one opaque total: not
           // shifts, shifts the user deleted, shifts skipped only
@@ -415,18 +471,21 @@ async function liveSyncAppleConnect() {
     await liveSyncFetchAppleCalendars();
     await liveSyncFetchLog();
     render();
-    alert('Apple Calendar connected. Shifts will sync with your dedicated “CRNA Hub” calendar. If your shifts live in another calendar (for example “Caleb Work Schedule”), pick it below under “Import shifts from” and sync — those shifts will be pulled in.');
+    alert('Apple Calendar connected (' + LIVE_SYNC_STANDIN_LABEL + '). Now pick your work calendar below — for example “Caleb Work Schedule” — and sync: shifts are pulled from that calendar only. The app keeps its own calendar behind the scenes for shifts you add here.');
   } catch (e) {
-    // iCloud refused to create a new calendar: offer the user's
-    // existing calendars instead of failing the whole connect.
+    // iCloud refused to create the app-owned calendar through CalDAV:
+    // offer the user's existing calendars instead of failing the whole
+    // connect. In the finished app this picker is the normal flow —
+    // pick the calendar your shifts already live in — with no password
+    // step before it.
     const cals = e.data && Array.isArray(e.data.calendars) ? e.data.calendars : null;
     if (e.message === 'apple_create_forbidden_pick_calendar' && cals) {
       liveSyncApplePick = { appleId, password, calendars: cals };
       render();
       if (!cals.length) {
-        alert('iCloud would not let CRNA Hub create a new calendar, and no existing calendars were found. Create a calendar in the Apple Calendar app first, then try connecting again. Nothing was stored.');
+        alert('iCloud would not let the preview create its own calendar, and no existing calendars were found. Create a calendar in the Apple Calendar app first, then try connecting again. Nothing was stored.');
       } else {
-        alert('iCloud would not let CRNA Hub create a new calendar — your sign-in is fine. Pick one of your existing calendars below to sync with instead. Nothing was stored yet.');
+        alert('iCloud would not let the preview create its own calendar — your sign-in is fine. Pick your work calendar below to sync with instead. Nothing was stored yet.');
       }
       return;
     }
@@ -435,7 +494,7 @@ async function liveSyncAppleConnect() {
     if (e.message && e.message.startsWith('apple_') && e.message !== 'apple_auth_failed') {
       alert('Apple Calendar connection failed at: ' + e.message + '. That names the failing discovery step and its HTTP status — it is not a password error unless the code says apple_auth_failed. Nothing was stored.');
     } else {
-      alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored.');
+      alert('Apple Calendar connection failed: ' + e.message + '. Check the Apple ID and app-specific password (not your normal Apple password), then try again. Nothing was stored. (' + LIVE_SYNC_STANDIN_LABEL + ')');
     }
   }
 }
@@ -471,10 +530,13 @@ async function liveSyncRepairImport() {
   liveSyncStateSave();
   await liveSyncNow('apple', false);
 }
-// Save the Apple import-source calendar picked in the connected Apple
-// card, then sync immediately so the result ("imported N shifts from …")
-// is visible at once instead of waiting for the next app open. Only the
-// calendar URL + name are sent; the password is never involved here.
+// Save the Apple work calendar picked in the connected Apple card,
+// then sync immediately so the result ("imported N shifts from …")
+// is visible at once instead of waiting for the next app open. Only
+// the calendar URL + name are sent; the password is never involved
+// here. In the final model this picker IS the connection: the user
+// picks the existing calendar their shifts live in, and the app pulls
+// from that calendar only.
 async function liveSyncAppleSourceSave() {
   const sel = document.getElementById('f_liveAppleSource');
   const calendarUrl = sel ? sel.value : '';
@@ -486,18 +548,18 @@ async function liveSyncAppleSourceSave() {
     await liveSyncFetchAppleCalendars();
     render();
     if (!calendarUrl) {
-      alert('Import source cleared — Apple sync now uses the dedicated “CRNA Hub” calendar only.');
+      alert('Work calendar cleared — Apple sync now uses the app’s own calendar only.');
       return;
     }
     await liveSyncNow('apple', false);
   } catch (e) {
     render();
     if (e.message === 'migration_004_required') {
-      alert('The app owner still needs to run migration 004 (supabase-schema-004.sql) in the Supabase SQL Editor before an import source can be saved. Sync itself is unaffected — it still uses the dedicated “CRNA Hub” calendar.');
+      alert('The app owner still needs to run migration 004 (supabase-schema-004.sql) in the Supabase SQL Editor before a work calendar can be saved. Sync itself is unaffected — it still uses the app’s own calendar.');
     } else if (e.message === 'source_is_dedicated_calendar') {
-      alert('That is the dedicated “CRNA Hub” calendar — pick a different calendar to import from.');
+      alert('That is the app’s own calendar — pick your work calendar instead.');
     } else {
-      alert('Could not save that import source: ' + e.message + '. Nothing was changed.');
+      alert('Could not save that work calendar: ' + e.message + '. Nothing was changed.');
     }
   }
 }
@@ -567,12 +629,12 @@ function liveSyncProviderCard(provider) {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Needs reconnecting</span></div><div class="muted">Access expired or was revoked. Reconnect to restore sync. Nothing was deleted.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Reconnect</button></div></div>';
   }
   if (conn && conn.status === 'connected') {
-    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
+    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the app’s own calendar, kept behind the scenes — your work calendar is never written to.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
     if (provider === 'apple') {
-      // Import source: the dedicated calendar starts empty, so shifts
-      // that live in another iCloud calendar (e.g. "Caleb Work
-      // Schedule") never arrive unless the user picks that calendar
-      // here. Read-only pull: events are recognised as shifts from the
+      // Work calendar (final model): the user picks the ONE existing
+      // calendar their shifts already live in — e.g. "Caleb Work
+      // Schedule" — and each sync pulls from that calendar only.
+      // Read-only pull: events are recognised as shifts from the
       // Facilities list (name or abbreviation, in the title or the
       // location — even just the facility name) and from other
       // facility-like shift titles; anything else is skipped, and
@@ -586,12 +648,12 @@ function liveSyncProviderCard(provider) {
       if (!liveSyncAppleCalendars.length) {
         picker = '<p class="muted">Your iCloud calendars could not be listed yet.</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-calendars">Load my calendars</button></div>';
       } else if (!importable.length) {
-        picker = '<p class="muted">No other iCloud calendar was found to import from — only the dedicated “CRNA Hub” calendar exists.</p>';
+        picker = '<p class="muted">No other iCloud calendar was found — only the app’s own calendar exists. Your shifts need to live in one of your own calendars for the app to pull them in.</p>';
       } else {
-        const opts = '<option value="">No import — “CRNA Hub” calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
-        picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Import shifts from</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save import source &amp; sync now</button></div>';
+        const opts = '<option value="">No work calendar — app calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
+        picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Your work calendar</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save work calendar &amp; sync now</button></div>';
       }
-      card += '<div style="margin-top:10px"><div class="item-title">Import shifts from another calendar</div><div class="muted">Your work shifts live in “Caleb Work Schedule”, not in the empty “CRNA Hub” calendar — pick it here and each sync pulls them in. Recognition comes from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other facility-like shift titles (e.g. “CAMC 8”, “CAMC 1st call”) import too — but only for hospitals already on your Facilities tab. Shifts at a hospital that is not listed yet are held, not imported: the sync suggests the hospital (“We noticed shifts at … — add it as a facility?”) and, once you add it with its pay rule, the next sync pulls those shifts in and prices them. Events that are not work shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
+      card += '<div style="margin-top:10px"><div class="item-title">Your work calendar</div><div class="muted">Pick the calendar your shifts already live in — for example “Caleb Work Schedule” — and each sync pulls from that calendar only. Recognition comes from your Facilities tab (add each hospital first, with its abbreviations and pay rule): an event titled with the facility name or abbreviation — even just the facility name — imports as a shift, and other facility-like shift titles (e.g. “CAMC 8”, “CAMC 1st call”) import too — but only for hospitals already on your Facilities tab. Shifts at a hospital that is not listed yet are held, not imported: the sync suggests the hospital (“We noticed shifts at … — add it as a facility?”) and, once you add it with its pay rule, the next sync pulls those shifts in and prices them. Events that are not work shifts are skipped, never imported. Nothing is ever written back to that calendar, and a shift you delete here is never re-imported.</div>' + picker + '</div>';
       const li = liveSyncState.lastImport;
       if (li && li.provider === 'apple') {
         const skipBits = [];
@@ -612,7 +674,7 @@ function liveSyncProviderCard(provider) {
           card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Use this if shifts you expect are still missing: it clears the stale records from the earlier interrupted sync and pulls them in again. Shifts you deleted on purpose stay deleted.</p>';
         }
       } else if (current) {
-        card += '<p class="muted">Import source: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
+        card += '<p class="muted">Work calendar: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
       }
     }
     return card + '</div>';
@@ -620,11 +682,16 @@ function liveSyncProviderCard(provider) {
   if (provider === 'apple') {
     if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
       const opts = liveSyncApplePick.calendars.map((c) => '<option value="' + escapeHTML(c.url) + '">' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
-      return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Pick a calendar</span></div><div class="muted">iCloud would not let CRNA Hub create a new calendar, but your sign-in worked. Choose one of your existing calendars to sync shifts with — CRNA Hub will only write its own shifts there, and will not read, move, or delete your other events.</div><div class="form-grid"><div class="field"><label for="f_liveApplePick">Use this calendar</label><select id="f_liveApplePick">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-pick">Connect to this calendar</button><button type="button" class="tiny secondary" data-action="live-apple-pick-cancel">Cancel</button></div></div>';
+      return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Pick your work calendar</span></div><div class="muted">In the finished app this picker is the whole connection: grant calendar access, pick the calendar your shifts already live in, and the app pulls from that calendar only. The app keeps its own calendar behind the scenes — you never create or label one. (In this preview your sign-in already worked; iCloud would not let the preview create its own calendar, so pick one of your existing calendars below. CRNA Hub will only write its own shifts there, and will not read, move, or delete your other events.)</div><div class="form-grid"><div class="field"><label for="f_liveApplePick">Your work calendar</label><select id="f_liveApplePick">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-pick">Connect to this calendar</button><button type="button" class="tiny secondary" data-action="live-apple-pick-cancel">Cancel</button></div></div>';
     }
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">Apple has no one-click OAuth for calendar apps, so this one is honestly different: create an <strong>app-specific password</strong> once in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It goes straight to the server-side sync function, is stored encrypted there, and is never stored on this device or shown again. Revoking it in your Apple account disconnects sync at once. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div>';
+    // Final flow, stated first: one tap, grant access, pick the work
+    // calendar. The password form below it is fenced off as a
+    // PREVIEW STAND-IN — a web page cannot use EventKit, so this
+    // preview connects through CalDAV with a one-time app-specific
+    // password instead. It is never presented as the designed path.
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">In the finished app this is one tap: grant calendar access, pick the calendar your shifts already live in, and the app pulls from that calendar only. The app keeps its own calendar behind the scenes for shifts you add here — you never create or label a calendar, and your work calendar is never written to.</div><div class="preview-standin"><div class="item-title"><span class="pill warn">' + LIVE_SYNC_STANDIN_LABEL + '</span></div><div class="muted">This web preview cannot use EventKit, so Apple connects here through a one-time <strong>app-specific password</strong> instead: create one in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It goes straight to the server-side sync function, is stored encrypted there, and is never stored on this device or shown again. Revoking it in your Apple account disconnects sync at once. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
   }
-  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">One click to the provider consent screen, then back here — no files to upload, no passwords typed into this app. Syncs to the dedicated “CRNA Hub” calendar only.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
+  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="muted">One click to the provider consent screen, then back here — pick the calendar your shifts already live in and the app pulls from that calendar only. No files to upload, no passwords typed into this app. The app keeps its own calendar behind the scenes for shifts you add here — you never create or label one.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
 }
 
 function liveSyncWizardHTML() {
@@ -635,13 +702,13 @@ function liveSyncWizardHTML() {
     + '<p class="muted">Everything in the app and the Edge Functions is already built. Live sync turns on the moment the owner finishes these steps — no app change is needed after that. End users never see this wizard unless setup is unfinished.</p>'
     + '<ol>'
     + '<li><strong>Run migration 003</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-003.sql</code> (tables for connections, sync map, OAuth state, pending deletions, sync log).</li>'
-    + '<li><strong>Run migration 004</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-004.sql</code> (Apple import-source calendar choice + import pairing table). Without it, sync still works, but the Apple “Import shifts from” picker cannot save a source.</li>'
+    + '<li><strong>Run migration 004</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-004.sql</code> (Apple work-calendar choice + import pairing table). Without it, sync still works, but the Apple work-calendar picker cannot save a choice.</li>'
     + '<li><strong>Run migration 005</strong> in the Supabase SQL Editor: <code>supabase/supabase-schema-005.sql</code> (delivery flags on the import pairing table, so a shift lost to an interrupted sync is repaired instead of skipped forever as if deleted). Without it, sync still works, but the Apple card offers a manual “Re-import missing shifts” button instead of repairing automatically.</li>'
     + '<li><strong>Deploy the functions:</strong> <code>supabase link --project-ref xgoghgihfhtnyevgapyp</code>, then <code>supabase functions deploy google-auth outlook-auth sync-calendar</code> (or <code>sh supabase/deploy-calendar-sync.sh</code>).</li>'
     + '<li><strong>Set function secrets</strong> (server side only, never in this repo): <code>APP_URL</code> = the URL users open, <code>CALENDAR_ENCRYPTION_KEY</code> = output of <code>openssl rand -hex 32</code>, plus the provider IDs/secrets below.</li>'
     + '<li><strong>Google Cloud (once):</strong> enable the Google Calendar API; create a Web OAuth client; authorized redirect URI (exact): <code>' + escapeHTML(googleUri) + '</code>; scope: <code>https://www.googleapis.com/auth/calendar</code>. Copy the client ID + secret into function secrets as <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code>. Add test users if Google requires verification.</li>'
     + '<li><strong>Microsoft Entra (once):</strong> new app registration, Web redirect URI (exact): <code>' + escapeHTML(outlookUri) + '</code>; delegated Graph permissions <code>Calendars.ReadWrite</code>, <code>offline_access</code>, <code>openid</code>, <code>profile</code>. Copy the client ID + secret into function secrets as <code>OUTLOOK_CLIENT_ID</code> / <code>OUTLOOK_CLIENT_SECRET</code>.</li>'
-    + '<li><strong>Apple: nothing for the owner to register.</strong> Each user creates their own app-specific password once (see the Apple card above). That is the one step that cannot be one-click OAuth, because Apple does not offer OAuth for third-party calendar apps.</li>'
+    + '<li><strong>Apple: nothing for the owner to register — and in the finished native app, nothing for the user to type either.</strong> The finished app uses EventKit on the device (no password, no CalDAV, no owner setup). In this web preview only, each user creates their own app-specific password once — see the “Preview stand-in” box on the Apple card — because a web page cannot use EventKit. That password path is a preview stand-in, not the designed flow.</li>'
     + '</ol>'
     + '<p class="muted">How the app knows: it calls the sync function’s public config check. If the function is unreachable, or a provider’s ID/secret is not set, that provider’s button says “Live sync setup not finished by the app owner yet” instead of faking a connection. Full steps: <code>supabase/functions/README.md</code>.</p>'
     + '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Recheck setup now</button><button type="button" class="secondary tiny" data-action="live-wizard">Hide wizard</button></div></div>';
@@ -658,7 +725,7 @@ function liveSyncPanelHTML() {
     if (liveSyncWizard) html += liveSyncWizardHTML();
     html += '<p class="muted">Manual fallback (works today, no sign-in): .ics import/export below.</p>';
   } else {
-    html += '<p class="muted">Connect once per provider — then sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. Syncs write to a dedicated “CRNA Hub” calendar in each provider; your other calendars are never written to. Apple can also <strong>read</strong> one calendar you pick (see the Apple card) to pull your existing shifts in.</p>';
+    html += '<p class="muted">Connect once per provider, then pick the calendar your shifts already live in — the app pulls from that calendar only. The app keeps its own calendar behind the scenes for the shifts you add here: you never create or label a calendar, and your work calendar is never written to. Sync runs automatically when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed: shifts live on this device, not in a server-side table yet. (Apple in this web preview still connects through the “Preview stand-in” box on its card — the finished native app uses EventKit, no password needed.)</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
