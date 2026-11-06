@@ -146,8 +146,9 @@ t('portal stand-in constants gone from the source',
 t('OCR diagnostics debug readout is gone (function is a no-op)',
   run(`ocrDiagnosticsHTML([{text:'x'}],[{name:'p.jpg'}],'abc')`) === '' &&
   !appSrc.includes('What the app read from your photos'));
-t('sync still works: panel lists all three providers with their buttons',
-  panel.includes('Google Calendar') && panel.includes('Outlook') && panel.includes('Apple Calendar') &&
-  panel.includes('Sync now') && panel.includes('Refresh status &amp; log'));
+t('sync still works: chosen provider shows collapsed with its controls inside; unchosen prompts hidden behind the fallback (Nov 6, 2026)',
+  panel.includes('Apple Calendar') && panel.includes('Sync now') && panel.includes('Refresh status &amp; log') &&
+  panel.includes('Use a different calendar service') &&
+  !panel.includes('Connect Google Calendar') && !panel.includes('Not available yet'));
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');

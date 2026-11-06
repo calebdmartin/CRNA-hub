@@ -205,9 +205,13 @@ run(`
   cloudSession = null;
 `);
 t('signed-in Account tab lets the goal be set later (profile panel)',
+  // Nov 6, 2026: the profile here is complete (name set earlier in this
+  // suite), so the panel renders collapsed — the goal is set later via
+  // Edit, which must reveal the full form with the goal field + Save.
   sandbox.__acctSignedIn.includes('Profile — step 1') &&
-  sandbox.__acctSignedIn.includes('f_profileIncomeGoal') &&
-  sandbox.__acctSignedIn.includes('data-action="save-profile"'));
+  sandbox.__acctSignedIn.includes('data-action="edit-profile"') &&
+  run(`cloudSession = { access_token: 'x' }; actions('edit-profile'); globalThis.__exp = accountPage(); cloudSession = null; __exp`).includes('f_profileIncomeGoal') &&
+  run(`cloudSession = { access_token: 'x' }; globalThis.__exp2 = accountPage(); cloudSession = null; profileEditing = false; __exp2`).includes('data-action="save-profile"'));
 
 // ---------- Skip action clears the goal field, leaves goal unset ----------
 run(`

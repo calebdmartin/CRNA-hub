@@ -85,6 +85,7 @@
 let liveSyncConfig = { state: 'loading', google: false, outlook: false, apple: false, encryption: false };
 let liveSyncConnections = {}; // provider -> {status, autoDelete, lastSyncedAt}
 let liveSyncLog = [];
+let liveSyncShowOthers = false; // unchosen providers' connect cards revealed via "Use a different calendar service"
 let liveSyncError = '';
 let liveSyncBusy = '';
 // Pending Apple pick-a-work-calendar flow (preview stand-in only):
@@ -750,6 +751,7 @@ async function liveSyncKeepAllPending() {
 }
 
 function liveSyncAction(action, entry) {
+  if (action === 'live-toggle-other-calendars') { liveSyncShowOthers = !liveSyncShowOthers; return render(); }
   if (action === 'live-connect') return liveSyncConnect(entry);
   if (action === 'live-disconnect') return liveSyncDisconnect(entry);
   if (action === 'live-sync-now') return liveSyncNow(entry, false);
@@ -834,7 +836,12 @@ function liveSyncProviderCard(provider) {
         card += '<p class="muted">Work calendar: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
       }
     }
-    return card + '</div>';
+    // A connected provider's card collapses to a one-line summary
+    // (Nov 6, 2026): provider · Connected · last sync. Tap to expand
+    // for the controls (Sync now, auto-delete, Disconnect, work
+    // calendar picker). Session state only — the <details> re-renders
+    // collapsed, which is the point.
+    return '<details class="collapse-sub sync-provider"><summary class="collapse-head"><span class="collapse-title">' + label + ' · Connected · Last sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + '</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary>' + card + '</div></details>';
   }
   if (provider === 'apple') {
     if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
@@ -851,6 +858,33 @@ function liveSyncProviderCard(provider) {
   return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
 }
 
+// Providers the user has chosen: connected now, or connected before
+// and needing a reconnect (its prompt must never be buried).
+function liveSyncChosenProviders() {
+  return ['google', 'outlook', 'apple'].filter((p) => {
+    const c = liveSyncConnections[p];
+    return c && (c.status === 'connected' || c.status === 'needs_reauth');
+  });
+}
+// Provider cards for the sync panel (Nov 6, 2026): once at least one
+// provider is chosen, the connect prompts for the ones they did NOT
+// choose are hidden — display only, nothing disconnected — behind one
+// quiet "Use a different calendar service" line that brings them back.
+// With nothing chosen yet, all cards show as always (onboarding step 2).
+function liveSyncCardsHTML() {
+  const chosen = liveSyncChosenProviders();
+  const hideOthers = liveSyncConfig.state === 'ready' && chosen.length > 0 && !liveSyncShowOthers;
+  let html = '';
+  ['google', 'outlook', 'apple'].forEach((p) => {
+    if (hideOthers && !chosen.includes(p)) return;
+    html += liveSyncProviderCard(p);
+  });
+  if (liveSyncConfig.state === 'ready' && chosen.length > 0) {
+    html += '<p class="muted"><button type="button" class="tiny secondary" data-action="live-toggle-other-calendars">' + (liveSyncShowOthers ? 'Hide other calendar services' : 'Use a different calendar service') + '</button></p>';
+  }
+  return html;
+}
+
 function liveSyncPanelHTML() {
   let html = '<h2>Live calendar sync</h2>';
   if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) {
@@ -863,7 +897,7 @@ function liveSyncPanelHTML() {
     html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
-    html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
+    html += liveSyncCardsHTML();
     html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button></div>';
     if (liveSyncState.pending.length) {
       html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">Gone from your calendar — nothing is deleted here until you say so.</p>';
@@ -875,12 +909,18 @@ function liveSyncPanelHTML() {
         html += '<div class="item"><div class="item-title">' + escapeHTML(p.date || '') + ' · ' + escapeHTML(p.facility || '') + ' · ' + escapeHTML(p.type || '') + '</div><div class="muted">' + escapeHTML(liveSyncLabel(p.provider)) + (p.localMissing ? ' · shift no longer on this device — delete it from the calendar, or stop tracking it' : ' · deleted in the calendar') + '</div><div class="item-actions"><button type="button" class="tiny danger" data-action="live-confirm-delete" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Delete from calendar' : 'Delete here too') + '</button><button type="button" class="tiny secondary" data-action="live-keep" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Stop tracking it' : 'Keep here') + '</button></div></div>';
       });
     }
-    html += '<h3>Sync log</h3>';
+    // Sync log is collapsed by default (Nov 6, 2026): the header row
+    // carries the latest run's line; tap to expand the full log, tap
+    // again to collapse. Syncing itself is unchanged.
+    const logLatest = liveSyncLog.length ? liveSyncLog[0] : null;
+    const logHead = logLatest ? ('Sync log · last: ' + liveSyncWhen(logLatest.created_at) + ' · ' + escapeHTML(logLatest.provider || '')) : 'Sync log';
+    html += '<details class="collapse-sub sync-log"><summary class="collapse-head"><span class="collapse-title">' + logHead + '</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary>';
     if (!liveSyncLog.length) {
       html += '<p class="muted">No sync runs yet.</p>';
     } else {
       html += liveSyncLog.slice(0, 15).map((r) => '<div class="item"><div class="muted">' + escapeHTML(liveSyncWhen(r.created_at)) + ' · ' + escapeHTML(r.provider) + ' · ' + escapeHTML(r.direction || 'both') + ' · created ' + (r.shifts_created || 0) + ' · updated ' + (r.shifts_updated || 0) + ' · flagged ' + (r.shifts_flagged || 0) + ' · deleted ' + (r.shifts_deleted || 0) + (r.error ? ' · error: ' + escapeHTML(r.error) : '') + '</div></div>').join('');
     }
+    html += '</details>';
     html += '<p class="muted">Conflict rule: newest edit wins. Deletions wait above unless auto-delete is on for that provider.</p>';
   }
   return html;
