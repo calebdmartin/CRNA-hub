@@ -59,6 +59,17 @@
 // "Sync now", and shortly after a shift is added, edited, or deleted.
 // It cannot run while the app is closed, because shifts live on this
 // device, not in a server-side shifts table (see the README).
+// Per-shift calendar state: every sync response carries `shiftSync`
+// (one { shiftId, state } per shift, derived server-side from
+// calendar_sync_map — see shiftSyncStateFor in
+// supabase/functions/_shared/calendar.ts). The client stores it per
+// shift per provider in liveSyncState.shiftSync and renders it on
+// Dashboard → Saved shifts as "On your calendar" / "Not yet synced" /
+// "Pending deletion" (liveSyncShiftSyncLabel). A shift added or edited
+// in the app is marked "not-synced" until the next sync response
+// pairs it; a shift the user deletes loses its stored state with its
+// tombstone. No label is shown when no provider is connected — there
+// is no calendar state to show.
 // Conflict rule: newest edit wins (updatedAt timestamps, both sides);
 // deletions are never silent — a provider-side deletion waits in
 // "Pending deletions" until the user confirms it, unless auto-delete was
@@ -104,9 +115,9 @@ function liveSyncStateLoad() {
     // repairImport survives a reload: it is a one-shot request, not a
     // completed action, so losing it to a refresh (or to a sync that
     // timed out before the server answered) must not burn the repair.
-    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null, repairImport: v.repairImport === true };
+    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null, repairImport: v.repairImport === true, shiftSync: (v.shiftSync && typeof v.shiftSync === 'object') ? v.shiftSync : {} };
   } catch (e) {}
-  return { pending: [], tombstones: [], lastImport: null, repairImport: false };
+  return { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {} };
 }
 let liveSyncState = liveSyncStateLoad();
 function liveSyncStateSave() {
@@ -192,6 +203,52 @@ function liveSyncConnectedProviders() {
 function liveSyncLabel(provider) {
   return provider === 'google' ? 'Google Calendar' : provider === 'outlook' ? 'Outlook' : 'Apple Calendar';
 }
+// Per-shift calendar state, from the server's shiftSync array in the
+// last sync response (the pairing, not a guess — see the header note).
+// Stored per shift per provider, so a shift synced to one provider
+// and not another is not mislabelled by a single flag.
+function liveSyncShiftState(shiftId, provider) {
+  const per = liveSyncState.shiftSync && liveSyncState.shiftSync[shiftId];
+  const rec = per && provider ? per[provider] : null;
+  return rec && rec.state ? rec.state : null;
+}
+function liveSyncSetShiftState(provider, shiftId, state) {
+  if (!shiftId || !provider || !state) return;
+  liveSyncState.shiftSync = liveSyncState.shiftSync || {};
+  const per = liveSyncState.shiftSync[shiftId] || {};
+  per[provider] = { state, at: new Date().toISOString() };
+  liveSyncState.shiftSync[shiftId] = per;
+  liveSyncStateSave();
+}
+function liveSyncDropShiftState(shiftId) {
+  if (liveSyncState.shiftSync && liveSyncState.shiftSync[shiftId]) {
+    delete liveSyncState.shiftSync[shiftId];
+    liveSyncStateSave();
+  }
+}
+// Label for one shift on Dashboard → Saved shifts, or '' when it does
+// not apply (no provider connected — there is no calendar state to
+// show). Pending deletion wins over synced: the provider copy is gone
+// and the user has not confirmed yet. Synced on any connected provider
+// counts as on the calendar; otherwise a connected provider means the
+// shift has not been pushed yet.
+function liveSyncShiftSyncLabel(shift) {
+  if (!shift || !shift.id) return '';
+  const connected = liveSyncConnectedProviders();
+  if (!connected.length) return '';
+  if (liveSyncState.pending.some((p) => p.shiftId === shift.id)) return ' · <span class="pill warn">Pending deletion</span>';
+  for (const p of connected) {
+    if (liveSyncShiftState(shift.id, p) === 'synced') return ' · <span class="pill">On your calendar</span>';
+  }
+  return ' · <span class="pill warn">Not yet synced</span>';
+}
+// Called when a shift is added or edited in the app, before the
+// delayed push runs: the stored state is stale until the next sync
+// response pairs the edited shift, so it reads "not-synced" meanwhile
+// instead of claiming an outdated copy is on the calendar.
+function liveSyncMarkShiftNotSynced(shiftId) {
+  liveSyncConnectedProviders().forEach((p) => liveSyncSetShiftState(p, shiftId, 'not-synced'));
+}
 function liveSyncWhen(iso) {
   if (!iso) return 'never';
   try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
@@ -269,6 +326,12 @@ function liveSyncApplyChanges(provider, data) {
       // naming the calendar they came from); shifts from the app-owned
       // calendar carry no source and default to 'calendar-<provider>'.
       db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: 'proposed', incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
+      // Not on the app-owned calendar yet: an imported shift reaches
+      // it only on the next sync, once the browser sends it back as a
+      // local shift. The shiftSync application below overrides this
+      // when the server says otherwise (an event found in the
+      // app-owned calendar is already synced).
+      liveSyncSetShiftState(provider, s.id, 'not-synced');
       created++;
       // No auto-created facility here (ask-first, Nov 5, 2026): a shift
       // for a hospital with no saved record cannot arrive — the server
@@ -286,6 +349,7 @@ function liveSyncApplyChanges(provider, data) {
       updated++;
     } else if (ch.action === 'delete' && ch.shiftId) {
       db.shifts = db.shifts.filter((x) => x.id !== ch.shiftId);
+      liveSyncDropShiftState(ch.shiftId);
       deleted++;
     }
   });
@@ -314,7 +378,26 @@ function liveSyncApplyChanges(provider, data) {
     if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
       liveSyncState.pending.push({ provider: p.provider, shiftId: p.shiftId, date: p.date || '', facility: p.facility || '', type: p.type || '', localMissing: !!p.localMissing });
     }
+    liveSyncSetShiftState(p.provider || provider, p.shiftId, 'pending-deletion');
   });
+  // Per-shift calendar state from this sync's response (server-derived
+  // from calendar_sync_map). Applied AFTER the providerChanges above,
+  // so the server's pairing wins over the interim 'not-synced' set
+  // while applying creates. An older server sends no shiftSync — the
+  // stored states and the 'not-synced' default then stand.
+  if (Array.isArray(data.shiftSync)) {
+    data.shiftSync.forEach((entry) => {
+      if (!entry || !entry.shiftId || !entry.state) return;
+      liveSyncSetShiftState(provider, entry.shiftId, entry.state);
+    });
+  }
+  // Drop stored states for shifts no longer on this device, so a
+  // deleted shift keeps no stale "On your calendar".
+  if (liveSyncState.shiftSync) {
+    Object.keys(liveSyncState.shiftSync).forEach((id) => {
+      if (!db.shifts.some((x) => x.id === id)) delete liveSyncState.shiftSync[id];
+    });
+  }
   // Tombstones for this provider are cleared after a successful sync.
   // If the server failed to delete a provider event, the next sync flags
   // it as a pending deletion instead — nothing is silently lost.
@@ -410,6 +493,7 @@ function liveSyncSchedulePush() {
   }, 3000);
 }
 function liveSyncRecordTombstone(shiftId) {
+  liveSyncDropShiftState(shiftId);
   liveSyncConnectedProviders().forEach((p) => {
     if (!liveSyncState.tombstones.some((t) => t.provider === p && t.shiftId === shiftId)) {
       liveSyncState.tombstones.push({ provider: p, shiftId });
@@ -440,6 +524,16 @@ async function liveSyncDisconnect(provider) {
     await liveSyncPost('sync-calendar', { action: 'disconnect', provider });
     await liveSyncFetchStatus();
     await liveSyncFetchLog();
+    // Disconnect deletes the server pairing, so a stored "On your
+    // calendar" would be stale — drop this provider's per-shift states.
+    if (liveSyncState.shiftSync) {
+      Object.keys(liveSyncState.shiftSync).forEach((id) => {
+        const per = liveSyncState.shiftSync[id];
+        if (per) delete per[provider];
+        if (per && !Object.keys(per).length) delete liveSyncState.shiftSync[id];
+      });
+      liveSyncStateSave();
+    }
   } catch (e) { alert('Disconnect failed: ' + e.message); }
   render();
 }
@@ -629,7 +723,7 @@ function liveSyncProviderCard(provider) {
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Needs reconnecting</span></div><div class="muted">Access expired or was revoked. Reconnect to restore sync. Nothing was deleted.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Reconnect</button></div></div>';
   }
   if (conn && conn.status === 'connected') {
-    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the app’s own calendar, kept behind the scenes — your work calendar is never written to.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
+    let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last automatic sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON (deletions apply without asking)' : 'OFF (deletions ask first)') + ' · Shifts you add or edit here go to the app’s own calendar, kept behind the scenes — your work calendar is never written to. Each shift shows its calendar state on Dashboard → Saved shifts: On your calendar, Not yet synced, or Pending deletion.</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
     if (provider === 'apple') {
       // Work calendar (final model): the user picks the ONE existing
       // calendar their shifts already live in — e.g. "Caleb Work
@@ -781,5 +875,7 @@ if (typeof window !== 'undefined') {
   window.liveSyncInit = liveSyncInit;
   window.liveSyncSchedulePush = liveSyncSchedulePush;
   window.liveSyncRecordTombstone = liveSyncRecordTombstone;
+  window.liveSyncShiftSyncLabel = liveSyncShiftSyncLabel;
+  window.liveSyncMarkShiftNotSynced = liveSyncMarkShiftNotSynced;
 }
 liveSyncInit();

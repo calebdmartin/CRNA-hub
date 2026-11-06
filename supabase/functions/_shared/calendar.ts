@@ -857,6 +857,31 @@ export function decideImportEvent(opts: {
   return "create";
 }
 
+// Per-shift calendar state for the sync response (`shiftSync`), so the
+// client can show it on each shift (Dashboard → Saved shifts) instead
+// of only a sync total. Pure, so the sync engine and the tests agree:
+//   "synced" — a calendar_sync_map row pairs the shift with an event
+//     in the DEDICATED "CRNA Hub" calendar. That is the only calendar
+//     writes ever target; the work calendar is read-only and can never
+//     produce a "synced" state.
+//   "pending-deletion" — the provider copy was deleted or went missing
+//     and the user has not confirmed yet. Wins over "synced": the map
+//     row still stands, but the calendar copy is gone.
+//   "not-synced" — everything else: never pushed, or its pairing was
+//     dropped (e.g. an imported shift, which reaches the dedicated
+//     calendar only on the NEXT sync, once the browser sends it back
+//     as a local shift).
+export type ShiftSyncState = "synced" | "not-synced" | "pending-deletion";
+
+export function shiftSyncStateFor(
+  shiftId: string,
+  syncedShiftIds: Set<string>,
+  pendingDeletionIds: Set<string>,
+): ShiftSyncState {
+  if (pendingDeletionIds.has(shiftId)) return "pending-deletion";
+  return syncedShiftIds.has(shiftId) ? "synced" : "not-synced";
+}
+
 export function nextDay(iso: string): string {
   const d = new Date(`${iso}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);

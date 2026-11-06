@@ -21,3 +21,10 @@
    the finished EventKit flow. See live-sync.js LIVE_SYNC_STANDIN_LABEL. */
 .preview-standin{margin-top:12px;padding:14px;border:2px dashed #c98a1b;border-radius:12px;background:#fff8e6}
 .preview-standin .item-title{margin-bottom:6px}
+
+/* Confirmed / submitted / proposed income table (Dashboard + Saved shifts) */
+.csp-table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
+.csp-table th,.csp-table td{border-bottom:1px solid #e7edf3;padding:8px 6px;text-align:left;vertical-align:top}
+.csp-table th:first-child,.csp-table td:first-child{color:#385b72}
+.csp-table strong{font-size:15px}
+select[data-shift-status]{width:auto;display:inline-block;padding:6px 8px;font-size:13px}

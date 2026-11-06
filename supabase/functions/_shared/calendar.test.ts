@@ -35,6 +35,7 @@ import {
   priceShiftWithFacility,
   sameFacility,
   sbUpsertMany,
+  shiftSyncStateFor,
   suggestionAddressForLocation,
 } from "./calendar.ts";
 
@@ -451,4 +452,25 @@ Deno.test("suggestion address comes only from an address-like location", () => {
   assertEquals(suggestionAddressForLocation("Charleston Area Medical Center", "CAMC"), "");
   assertEquals(suggestionAddressForLocation("CAMC", "CAMC"), "");
   assertEquals(suggestionAddressForLocation("", "CAMC"), "");
+});
+
+Deno.test("shiftSyncStateFor: pending deletion wins, paired is synced, the rest is not-synced", () => {
+  // The three states the client renders per shift ("On your calendar" /
+  // "Not yet synced" / "Pending deletion"). The sync engine maintains
+  // the two sets from calendar_sync_map + pending deletions; this pins
+  // the derivation, not the engine's bookkeeping.
+  const synced = new Set(["s-paired", "s-flagged"]);
+  const pending = new Set(["s-flagged"]);
+  // Paired with the dedicated calendar: on the calendar.
+  assertEquals(shiftSyncStateFor("s-paired", synced, pending), "synced");
+  // Paired AND flagged: the provider copy is gone and unconfirmed, so
+  // the flag wins — the label must say Pending deletion, not On your
+  // calendar.
+  assertEquals(shiftSyncStateFor("s-flagged", synced, pending), "pending-deletion");
+  // Flagged without a pairing (local-missing flag): still pending.
+  assertEquals(shiftSyncStateFor("s-missing", new Set(), new Set(["s-missing"])), "pending-deletion");
+  // Never paired (fresh app-entered shift, or an import not yet pushed
+  // to the dedicated calendar): not synced yet.
+  assertEquals(shiftSyncStateFor("s-fresh", synced, pending), "not-synced");
+  assertEquals(shiftSyncStateFor("s-fresh", new Set(), new Set()), "not-synced");
 });

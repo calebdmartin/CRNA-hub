@@ -25,10 +25,24 @@
 //     parser itself, calendar_import_map dedupe, never-reimport-deleted
 //     on the server, newest-wins comparison. This file tests the client
 //     half of each rule and the copy around it.
+//   * TWO-WAY PUSH (Nov 5, 2026): a confirmed/app-entered shift is
+//     pushed to the app-owned calendar (the sync sends it with
+//     updatedAt, stamped on every app-side save, so newest-wins can
+//     push edits); the sync response's shiftSync is stored per shift
+//     and rendered on Saved shifts as "On your calendar" / "Not yet
+//     synced" / "Pending deletion"; deleting a shift records a
+//     tombstone and drops its stored state, and the next sync sends
+//     the tombstone without re-creating the shift; no sync request
+//     ever carries the work-calendar URL, so nothing can write to the
+//     work calendar.
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const R = path.join(__dirname, 'repo') + path.sep;
+// Repo root is either this file's directory, or a `repo/` checkout
+// beside it (the staging layout earlier workers used).
+const R = fs.existsSync(path.join(__dirname, 'repo', 'app.js'))
+  ? path.join(__dirname, 'repo') + path.sep
+  : __dirname + path.sep;
 const store = new Map();
 function el() {
   return {
@@ -58,9 +72,17 @@ const cannedSync = {
     sourceCalendarName: 'Caleb Work Schedule', created: 2, updated: 0, skipped: 0, duplicates: 0,
     seen: 2, parsed: 2, unpriced: 1, skippedSuggested: 0, suggestions: [], newFacilities: [],
   },
+  // Per-shift calendar state, derived server-side from
+  // calendar_sync_map (see shiftSyncStateFor): the just-imported
+  // shift is not on the app-owned calendar yet; the flagged shift's
+  // provider copy is gone and unconfirmed.
+  shiftSync: [
+    { shiftId: 'shift-new-1', state: 'not-synced' },
+    { shiftId: 'shift-old-1', state: 'pending-deletion' },
+  ],
 };
 const sandbox = {
-  console, setTimeout, clearTimeout, URL, URLSearchParams, Date, JSON, Math,
+  console, setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date, JSON, Math,
   crypto: require('crypto').webcrypto,
   FormData: FakeFormData,
   localStorage: {
@@ -280,6 +302,106 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   t('stubbed sync applied the canned import: proposed shifts in, pending deletion flagged',
     run(`db.shifts.some(x => x.id === 'shift-new-1' && x.status === 'proposed')`) &&
     run(`liveSyncState.pending.some(p => p.shiftId === 'shift-old-1')`));
+
+  // --- 9. Two-way push: confirmed shift on the calendar, edit updates,
+  // deletion waits, never writes to the work calendar, labels correct. ---
+  fetchCalls.length = 0;
+  alerts.length = 0;
+  run(`
+    db.shifts = [
+      { id: 'shift-user-1', date: '2026-11-12', facility: 'Holzer', type: '8-hour day', pay: '2125', note: '', source: 'user-entered', status: 'confirmed', incomplete: false, updatedAt: '2026-11-05T09:00:00Z' },
+      { id: 'shift-old-1', date: '2026-11-03', facility: 'Holzer', type: '8-hour day', pay: '2125', note: '', source: 'apple-import', status: 'proposed', incomplete: false, updatedAt: null },
+    ];
+    db.facilitySuggestions = [];
+    liveSyncState.pending = [];
+    liveSyncState.tombstones = [];
+    liveSyncState.shiftSync = {};
+    globalThis.__push = liveSyncApplyChanges('apple', {
+      providerChanges: [],
+      pendingDeletions: [{ provider: 'apple', shiftId: 'shift-old-1', date: '2026-11-03', facility: 'Holzer', type: '8-hour day', localMissing: false }],
+      imported: null,
+      shiftSync: [
+        { shiftId: 'shift-user-1', state: 'synced' },
+        { shiftId: 'shift-old-1', state: 'pending-deletion' },
+      ],
+    });
+    globalThis.__saved = savedShiftsHTML();
+  `);
+  t('confirmed user-entered shift is stored as synced from the sync response',
+    run(`liveSyncShiftState('shift-user-1', 'apple')`) === 'synced');
+  t('Saved shifts shows "On your calendar" for the synced shift',
+    sandbox.__saved.includes('On your calendar'));
+  t('Saved shifts shows "Pending deletion" for the flagged shift — and the shift is still there',
+    sandbox.__saved.includes('Pending deletion') && run(`db.shifts.some(x => x.id === 'shift-old-1')`));
+
+  // A fresh shift added locally reads "Not yet synced" until a sync
+  // pairs it; marking it dirty after an edit keeps it that way.
+  run(`
+    db.shifts.push({ id: 'shift-user-2', date: '2026-11-13', facility: 'Holzer', type: '8-hour day', pay: '2125', note: '', source: 'user-entered', status: 'confirmed', incomplete: false, updatedAt: '2026-11-05T09:30:00Z' });
+    liveSyncMarkShiftNotSynced('shift-user-2');
+    globalThis.__saved2 = savedShiftsHTML();
+    globalThis.__label2 = liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-2'));
+    globalThis.__label1 = liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-1'));
+  `);
+  t('fresh/edited shift reads "Not yet synced" until a sync pairs it',
+    sandbox.__label2.includes('Not yet synced') && sandbox.__saved2.includes('Not yet synced'));
+  t('synced shift still reads "On your calendar" beside it',
+    sandbox.__label1.includes('On your calendar'));
+
+  // Saving a shift in the app stamps updatedAt (newest-wins needs it)
+  // and marks it not-synced until its push syncs.
+  run(`
+    const fakeForm = { dataset: { kind: 'shifts' }, _entries: [['date', '2026-11-14'], ['facility', 'Holzer'], ['type', '8-hour day'], ['pay', '2125']] };
+    submitEntry({ preventDefault() {}, currentTarget: fakeForm });
+    globalThis.__savedShift = db.shifts[db.shifts.length - 1];
+    globalThis.__savedLabel = liveSyncShiftSyncLabel(globalThis.__savedShift);
+  `);
+  t('saving a shift in the app stamps updatedAt, so the next sync can push the edit',
+    !!sandbox.__savedShift && typeof sandbox.__savedShift.updatedAt === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(sandbox.__savedShift.updatedAt));
+  t('a shift saved in the app reads "Not yet synced" until its push syncs',
+    sandbox.__savedLabel.includes('Not yet synced'));
+
+  // The sync sends the edited shift with its updatedAt — and nothing
+  // in any sync request names the work calendar as a target.
+  fetchCalls.length = 0;
+  await run(`liveSyncNow('apple', true)`);
+  const pushCall = fetchCalls.find((c) => c.body && c.body.action === 'sync');
+  t('sync sends the edited shift with its updatedAt, so newest-wins can push the edit',
+    !!pushCall && pushCall.body.body.localShifts.some((x) => x.id === 'shift-user-2' && x.updatedAt === '2026-11-05T09:30:00Z'));
+  t('sync payload sends local shifts + tombstones + facilities, and no calendar URL field',
+    !!pushCall && Array.isArray(pushCall.body.body.localShifts) && !('sourceCalendarUrl' in pushCall.body.body) && !('calendarUrl' in pushCall.body.body));
+  t('no sync request ever carries the work-calendar URL (it is only ever an import choice, never a write target)',
+    !fetchCalls.some((c) => JSON.stringify(c.body).includes('cal-work')));
+  t('after the sync, the pushed shift still reads "On your calendar" (stored state survives a response that does not mention it)',
+    run(`liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-1'))`).includes('On your calendar'));
+
+  // Deleting a shift in the app records a tombstone (never a silent
+  // delete), drops its calendar state, and the next sync sends the
+  // tombstone without re-creating the shift.
+  fetchCalls.length = 0;
+  run(`
+    liveSyncRecordTombstone('shift-user-2');
+    db.shifts = db.shifts.filter(x => x.id !== 'shift-user-2');
+    globalThis.__stateAfterDelete = liveSyncState.shiftSync['shift-user-2'];
+    globalThis.__tombs2 = liveSyncState.tombstones;
+  `);
+  t('deleting a shift records a tombstone and drops its stored calendar state',
+    sandbox.__tombs2.some((x) => x.provider === 'apple' && x.shiftId === 'shift-user-2') && sandbox.__stateAfterDelete === undefined);
+  await run(`liveSyncNow('apple', true)`);
+  const delCall = fetchCalls.find((c) => c.body && c.body.action === 'sync');
+  t('the next sync sends the tombstone — and the deleted shift is not re-created by the response',
+    !!delCall && delCall.body.body.tombstones.some((x) => x.shiftId === 'shift-user-2') &&
+    run(`!db.shifts.some(x => x.id === 'shift-user-2')`));
+
+  // No pill at all when no provider is connected: there is no
+  // calendar state to show.
+  run(`
+    liveSyncConnections = {};
+    globalThis.__labelNone = liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-1'));
+    liveSyncConnections = { apple: { status: 'connected', autoDelete: false, lastSyncedAt: '2026-11-05T12:00:00Z', sourceCalendarUrl: 'cal-work', sourceCalendarName: 'Caleb Work Schedule' } };
+  `);
+  t('no sync pill when no provider is connected (no calendar state to show)',
+    sandbox.__labelNone === '');
 
   console.log(failures === 0 ? '\nAll calendar-sync-final checks passed.' : `\n${failures} check(s) FAILED.`);
 })().catch((e) => { console.error('TEST ERROR', e); process.exitCode = 1; });

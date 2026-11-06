@@ -16,6 +16,10 @@
 //        password is never returned. Apple only.
 //   POST { action: "sync", provider, localShifts, tombstones } (auth)
 //        -> two-way sync for one provider (see algorithm below).
+//           The response carries `shiftSync` — one { shiftId, state }
+//           per local shift ("synced" / "not-synced" /
+//           "pending-deletion") — so the client can show each shift's
+//           calendar state on Dashboard → Saved shifts.
 //   POST { action: "connect-apple", appleId, appSpecificPassword, calendarUrl? } (auth)
 //        -> validates the password with CalDAV, then stores ONLY its
 //           AES-GCM ciphertext server-side. The plaintext is never logged,
@@ -140,6 +144,25 @@
 //     Other calendars are never read, written, or deleted — except the
 //     Apple import source above, which is read-only: it is never
 //     written to, and events are only ever pulled FROM it.
+//   * PUSH (app -> calendar, Nov 5, 2026): every local shift the
+//     browser sends is pushed to the dedicated calendar — created
+//     there if unmapped, updated there when the local copy is newer
+//     (the browser stamps `updatedAt` on every app-side shift save,
+//     so an edit is visible to the newest-wins comparison; without
+//     that stamp an edit never left the app). Writes go through
+//     googleWrite / outlookWrite / appleWrite, which only ever
+//     receive the dedicated calendar id (ensure*Calendar /
+//     conn.calendar_id). The source calendar URL is never passed to a
+//     write function — there is no code path that writes to the work
+//     calendar. The response carries `shiftSync` (one entry per local
+//     shift, plus shifts the provider just created locally): "synced"
+//     while a calendar_sync_map row pairs the shift with an event in
+//     the dedicated calendar, "pending-deletion" while its provider
+//     copy is gone and unconfirmed, "not-synced" otherwise (see
+//     shiftSyncStateFor in ../_shared/calendar.ts). The client renders
+//     that per shift as "On your calendar" / "Not yet synced" /
+//     "Pending deletion" on Dashboard → Saved shifts, so the push is
+//     verifiable shift by shift instead of only as a sync total.
 //   * The `calendar_sync_map` table pairs a CRNA Hub shift id with a
 //     provider event id, plus the last-seen updated timestamps on both
 //     sides. A shift and an event are the same record only through that
@@ -206,6 +229,7 @@ import {
   sbUpsert,
   sbUpsertMany,
   shiftDescription,
+  shiftSyncStateFor,
   shiftTitle,
   writeSyncLog,
 } from "../_shared/calendar.ts";
@@ -720,6 +744,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   const pendingDeletions: Record<string, unknown>[] = [];
   const handledLocal = new Set<string>();
   const autoDelete = conn.auto_delete === true;
+  // Per-shift push state for the response (see shiftSync below): a
+  // shift is "synced" while a calendar_sync_map row pairs it with an
+  // event in the DEDICATED calendar. Both sets start from the pre-sync
+  // pairings and are maintained through every step, so the response
+  // says per shift whether it is on the calendar.
+  const syncedShiftIds = new Set<string>(mapByShift.keys());
+  const pendingDeletionIds = new Set<string>();
 
   // Apple import source, if the user picked one. The columns come from
   // migration 004; until the owner runs supabase-schema-004.sql they are
@@ -808,6 +839,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       continue;
     }
     await dropMap(t.shiftId);
+    syncedShiftIds.delete(t.shiftId);
     counts.deleted++;
   }
 
@@ -823,6 +855,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       if (autoDelete) {
         providerChanges.push({ action: "delete", shiftId: local.id });
         await dropMap(local.id);
+        syncedShiftIds.delete(local.id);
         counts.deleted++;
       } else {
         pendingDeletions.push({
@@ -833,6 +866,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           provider,
           localMissing: false,
         });
+        pendingDeletionIds.add(local.id);
         counts.flagged++;
       }
     } else if (mapRow) {
@@ -844,6 +878,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         provider,
         localMissing: true,
       });
+      pendingDeletionIds.add(shiftId);
       counts.flagged++;
     }
   }
@@ -859,6 +894,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         if (autoDelete) {
           providerChanges.push({ action: "delete", shiftId: local.id });
           await dropMap(local.id);
+          syncedShiftIds.delete(local.id);
           counts.deleted++;
         } else {
           pendingDeletions.push({
@@ -869,6 +905,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             provider,
             localMissing: false,
           });
+          pendingDeletionIds.add(local.id);
           counts.flagged++;
         }
       } else if (mapRow) {
@@ -882,6 +919,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           provider,
           localMissing: true,
         });
+        pendingDeletionIds.add(String(mapRow.shift_id));
         counts.flagged++;
       }
       continue;
@@ -938,6 +976,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         provider,
         localMissing: true,
       });
+      pendingDeletionIds.add(String(mapRow.shift_id));
       counts.flagged++;
       continue;
     }
@@ -966,6 +1005,9 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       provider_updated_at: ev.updatedAt,
       local_updated_at: ev.updatedAt,
     });
+    // This event came FROM the dedicated calendar, so the new local
+    // shift is already on it — paired from the first sight.
+    syncedShiftIds.add(newId);
     providerChanges.push({
       action: "create",
       shift: {
@@ -1405,6 +1447,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         provider_updated_at: dupe.updatedAt,
         local_updated_at: s.updatedAt ?? null,
       });
+      syncedShiftIds.add(s.id);
       continue;
     }
     const newId = await writeProvider(s, null, "create");
@@ -1417,6 +1460,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       provider_updated_at: s.updatedAt ?? null,
       local_updated_at: s.updatedAt ?? null,
     });
+    syncedShiftIds.add(s.id);
   }
 
   // 4. Persist connection state + log.
@@ -1455,6 +1499,25 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     connPatch,
   );
   await writeSyncLog(userId, provider, "both", counts, null);
+  // Per-shift calendar state for the client (see the PUSH note in the
+  // header): one entry per local shift the browser sent, plus shifts
+  // the provider just created locally. Local shifts win on a clash —
+  // a provider create for a shift already sent is the same shift.
+  // Imported shifts are "not-synced" here: they are paired with their
+  // source event (import map), not with the dedicated calendar, and
+  // reach it only on the next sync, once the browser sends them back
+  // as local shifts.
+  const shiftSyncById = new Map<string, string>();
+  for (const s of localShifts) {
+    shiftSyncById.set(s.id, shiftSyncStateFor(s.id, syncedShiftIds, pendingDeletionIds));
+  }
+  for (const ch of providerChanges) {
+    const sh = (ch as { action?: string; shift?: LocalShift }).shift;
+    if (sh && !shiftSyncById.has(sh.id)) {
+      shiftSyncById.set(sh.id, shiftSyncStateFor(sh.id, syncedShiftIds, pendingDeletionIds));
+    }
+  }
+  const shiftSync = [...shiftSyncById.entries()].map(([shiftId, state]) => ({ shiftId, state }));
   return json({
     ok: true,
     provider,
@@ -1464,6 +1527,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     // Null when no Apple import source is picked; otherwise the panel
     // renders "imported N shifts from <name>" from this object.
     imported,
+    shiftSync,
     lastSyncedAt: String(connPatch.last_synced_at),
   });
 }

@@ -211,6 +211,15 @@ The flow is deliberately narrow:
   calendar on the NEXT sync (once the browser sends them back as local
   shifts), via the normal local → provider step. Deletions still go
   through Pending deletions (default off).
+- Every sync response also carries `shiftSync` — one `{ shiftId, state }`
+  per local shift ("synced" / "not-synced" / "pending-deletion",
+  derived from `calendar_sync_map` by `shiftSyncStateFor` in
+  `_shared/calendar.ts`) — which the app renders per shift on
+  Dashboard → Saved shifts as "On your calendar" / "Not yet synced" /
+  "Pending deletion", so the push is verifiable shift by shift instead
+  of only as a sync total. The browser stamps `updatedAt` on every
+  app-side shift save, so an edited shift is visible to the
+  newest-wins comparison and updates the calendar copy.
 
 ## How the app detects "owner setup pending"
 
