@@ -328,7 +328,10 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
         { shiftId: 'shift-old-1', state: 'pending-deletion' },
       ],
     });
-    globalThis.__saved = savedShiftsHTML();
+    selected = '2026-11-12'; dayViewOpen = true;
+    globalThis.__saved = dayViewHTML();
+    selected = '2026-11-03';
+    globalThis.__saved = globalThis.__saved + dayViewHTML();
   `);
   t('confirmed user-entered shift is stored as synced from the sync response',
     run(`liveSyncShiftState('shift-user-1', 'apple')`) === 'synced');
@@ -342,7 +345,8 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   run(`
     db.shifts.push({ id: 'shift-user-2', date: '2026-11-13', facility: 'Holzer', type: '8-hour day', pay: '2125', note: '', source: 'user-entered', status: 'confirmed', incomplete: false, updatedAt: '2026-11-05T09:30:00Z' });
     liveSyncMarkShiftNotSynced('shift-user-2');
-    globalThis.__saved2 = savedShiftsHTML();
+    selected = '2026-11-13'; dayViewOpen = true;
+    globalThis.__saved2 = dayViewHTML();
     globalThis.__label2 = liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-2'));
     globalThis.__label1 = liveSyncShiftSyncLabel(db.shifts.find(x => x.id === 'shift-user-1'));
   `);

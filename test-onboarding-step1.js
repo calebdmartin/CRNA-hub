@@ -166,10 +166,10 @@ t('employment type normalizes: unknown values read as unset, labels are exact',
   run(`db.settings.employmentType = 'W2'; employmentType()`) === 'w2' &&
   run(`db.settings.employmentType = 'both'; employmentTypeLabel()`) === 'W-2 + 1099' &&
   run(`db.settings.employmentType = '1099'; employmentTypeLabel()`) === '1099');
-run(`db.settings.employmentType = 'w2'; globalThis.__w2dash = dashboard(); globalThis.__w2saved = savedShiftsHTML(); db.settings.employmentType = '';`);
-t('W-2 only: Dashboard and Saved shifts say per-shift totals do not apply',
+run(`db.settings.employmentType = 'w2'; globalThis.__w2dash = dashboard(); selected = '2026-11-12'; dayViewOpen = true; globalThis.__w2saved = dayViewHTML(); db.settings.employmentType = '';`);
+t('W-2 only: Dashboard says per-shift totals do not apply, day view labels the W-2 salary day',
   sandbox.__w2dash.includes('Employment type: W-2 only') &&
-  sandbox.__w2saved.includes('W-2 only, so no shift counts as billable income'));
+  sandbox.__w2saved.includes('W-2 salary day — excluded from income totals'));
 t('assistant answers the employment-type question from settings',
   run(`db.settings.employmentType = 'both'; answerQuestion('Am I W-2 or 1099?')`).includes('W-2 + 1099') &&
   run(`db.settings.employmentType = ''; answerQuestion('What is my employment type?')`).includes('No employment type is set yet'));

@@ -216,8 +216,10 @@ t('goal unset (0) still reads through the Assistant summary context',
 // ---------- Dashboard + Saved shifts render C/S/P ----------
 run(`
   globalThis.__dash = dashboard();
-  savedShiftsYear = 2026;
-  globalThis.__saved = savedShiftsHTML();
+  selected = '2026-10-20'; dayViewOpen = true;
+  globalThis.__saved = dayViewHTML();
+  selected = '2026-11-06';
+  globalThis.__saved = globalThis.__saved + dayViewHTML();
 `);
 t('Dashboard shows C/S/P table with YTD + predicted-annual labels',
   sandbox.__dash.includes('C — Confirmed only') &&
@@ -230,12 +232,12 @@ t('Dashboard keeps the paystub disclaimer and has no income-goal panel',
   !sandbox.__dash.includes('f_incomeGoal'));
 t('Dashboard month gross is labelled as all statuses (no silent single total)',
   sandbox.__dash.includes('Expected gross · this month (all statuses)'));
-t('Saved shifts shows C/S/P for the selected year + per-shift status changer + W-2 label',
-  sandbox.__saved.includes('C — Confirmed only') &&
+t('Day view carries the per-shift status changer + W-2 label (moved from the removed Saved shifts list)',
   sandbox.__saved.includes('data-shift-status="s1"') &&
+  sandbox.__saved.includes('data-action="delete-shifts" data-id="s1"') &&
   sandbox.__saved.includes('W-2 salary day — excluded from income totals'));
-t('Saved shifts year scoping note preserved',
-  sandbox.__saved.includes('only the totals above are scoped to 2026'));
+t('Dashboard income table is scoped to the current year (year scoping lives with the table now)',
+  sandbox.__dash.includes('Income · 2026 — confirmed vs submitted vs proposed'));
 run(`globalThis.__form = shiftFormHTML();`);
 t('shift form offers the status select, defaulting new shifts to proposed',
   sandbox.__form.includes('name="status"') && sandbox.__form.includes('value="proposed" selected'));

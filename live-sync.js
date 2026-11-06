@@ -833,7 +833,7 @@ function liveSyncWizardHTML() {
     + '<li><strong>Microsoft Entra (once):</strong> new app registration, Web redirect URI (exact): <code>' + escapeHTML(outlookUri) + '</code>; delegated Graph permissions <code>Calendars.ReadWrite</code>, <code>offline_access</code>, <code>openid</code>, <code>profile</code>. Copy the client ID + secret into function secrets as <code>OUTLOOK_CLIENT_ID</code> / <code>OUTLOOK_CLIENT_SECRET</code>.</li>'
     + '<li><strong>Apple: nothing for the owner to register — and in the finished native app, nothing for the user to type either.</strong> The finished app uses EventKit on the device (no password, no CalDAV, no owner setup). In this web preview only, each user creates their own app-specific password once — see the “Preview stand-in” box on the Apple card — because a web page cannot use EventKit. That password path is a preview stand-in, not the designed flow.</li>'
     + '</ol>'
-    + '<p class="muted">How the app knows: it calls the sync function’s public config check. If the function is unreachable, or a provider’s ID/secret is not set, that provider says “Live sync setup not finished by the app owner yet” instead of faking a connection. Full steps: <code>supabase/functions/README.md</code>.</p>'
+    + '<p class="muted">Providers only show here once the app owner has finished their setup.</p>'
     + '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Recheck setup now</button><button type="button" class="secondary tiny" data-action="live-wizard">Hide wizard</button></div></div>';
 }
 
@@ -848,14 +848,14 @@ function liveSyncPanelHTML() {
     if (liveSyncWizard) html += liveSyncWizardHTML();
     html += '<p class="muted">Manual fallback (works today, no sign-in): .ics import/export below.</p>';
   } else {
-    html += '<p class="muted">Connect once per provider, then pick the calendar your shifts already live in — the app pulls from that calendar only. The app keeps its own calendar behind the scenes for the shifts you add here: you never create or label a calendar, and your work calendar is never written to. Sync runs when you open the app, on “Sync now”, and shortly after you add, edit, or delete a shift. It cannot run while the app is closed — shifts live on this device, not in a server-side table yet. (Apple in this web preview still connects through the “Preview stand-in” box on its card — the finished native app uses EventKit, no password needed.)</p>';
+    html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in. (Apple here is a “Preview stand-in” — the finished app uses EventKit, no password needed.)</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
     html += liveSyncProviderCard('google') + liveSyncProviderCard('outlook') + liveSyncProviderCard('apple');
     html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button>' + (liveSyncConfig.state === 'ready' ? '' : '<button type="button" class="secondary tiny" data-action="live-wizard">' + (liveSyncWizard ? 'Hide owner-setup wizard' : 'Owner-setup wizard') + '</button>') + '</div>';
     if (liveSyncWizard && liveSyncConfig.state !== 'ready') html += liveSyncWizardHTML();
     if (liveSyncState.pending.length) {
-      html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">These shifts were deleted (or went missing) on the provider side. Nothing has been deleted here yet. “Delete here too” removes the CRNA Hub shift; “Keep here” keeps it and re-creates it in the calendar at the next sync.</p>';
+      html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">Gone from your calendar — nothing is deleted here until you say so.</p>';
       liveSyncState.pending.forEach((p) => {
         const key = p.provider + '|' + p.shiftId;
         html += '<div class="item"><div class="item-title">' + escapeHTML(p.date || '') + ' · ' + escapeHTML(p.facility || '') + ' · ' + escapeHTML(p.type || '') + '</div><div class="muted">' + escapeHTML(liveSyncLabel(p.provider)) + (p.localMissing ? ' · shift no longer on this device — delete it from the calendar, or stop tracking it' : ' · deleted in the calendar') + '</div><div class="item-actions"><button type="button" class="tiny danger" data-action="live-confirm-delete" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Delete from calendar' : 'Delete here too') + '</button><button type="button" class="tiny secondary" data-action="live-keep" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Stop tracking it' : 'Keep here') + '</button></div></div>';

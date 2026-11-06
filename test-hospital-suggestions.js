@@ -247,13 +247,13 @@ run(`
 `);
 t('disclaimer shows on the Dashboard near the income totals',
   sandbox.__dash.includes(DISCLAIMER));
-t('disclaimer shows on the Facilities tab (contract preview + manual panel)',
-  (sandbox.__facPage.match(new RegExp(DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 2);
-t('guide no longer carries the disclaimer as a step paragraph (it stays on Dashboard + Facilities)',
+t('disclaimer no longer sits in the Facilities main flow (Nov 6 cleanup — it lives in Account small print + collapsed toggles)',
+  !(sandbox.__facPage.match(new RegExp(DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length);
+t('guide no longer carries the disclaimer as a step paragraph',
   sandbox.__onboard3.title === 'Add facilities & contracts' &&
   !sandbox.__onboard3.direction.includes('Income figures are estimates') &&
   !sandbox.__onboardHtml.includes('Income figures are estimates'));
-t('build stamp bumped (cache v34)', sandbox.__buildStamp.includes('cache v34'));
+t('build stamp bumped (cache v35)', sandbox.__buildStamp.includes('cache v35'));
 t('no key-like secrets in app.js',
   !/(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/.test(fs.readFileSync(R + 'app.js', 'utf8')));
 console.log('hospital-suggestion test done');
