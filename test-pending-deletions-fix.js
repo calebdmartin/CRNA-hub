@@ -198,8 +198,8 @@ const HIS_FLAGS = `
   const liveSrc = fs.readFileSync(R + 'live-sync.js', 'utf8');
   t('client: stored pending list is replaced per provider on each sync, not union-merged',
     liveSrc.includes("liveSyncState.pending = liveSyncState.pending.filter((p) => p.provider !== provider);"));
-  t('service worker cache bumped to v54',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v54'));
+  t('service worker cache bumped to v55',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v55'));
 
   console.log(failures ? ('\n' + failures + ' FAILURES') : '\nALL PASS');
 })();

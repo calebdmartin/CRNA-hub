@@ -2705,6 +2705,7 @@ if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.
 if(action==='skip-income-goal'){const gl=$('f_incomeGoalStep1');if(gl)gl.value='';cloudAuthStatus='No income goal set — you can set it later on the Account tab (Profile — step 1).';return render()}
 if(action==='save-profile'){const nm=$('f_profileName'),et=$('f_profileEmploymentType'),gl=$('f_profileIncomeGoal');applyProfileValues({name:nm?String(nm.value||'').trim():'',employmentType:et?String(et.value||'').trim():'',monthlyIncomeGoal:gl&&String(gl.value||'').trim()!==''?num(gl.value):0});cloudSaveProfile();profileEditing=false;return render()}
 if(action==='cloud-signout'){cloudSignOut();return}
+if(action==='cloud-signout-clear'){cloudSignOutAndClearDevice();return}
 if(action==='goto-account')return setTab('Account');if(action==='goto-mileage')return setTab('Mileage');
 
 if(action==='facility-contract-approve')return approveFacilityContract();
@@ -2731,7 +2732,7 @@ if(action==='facility-page-remove'||action==='facility-page-up'||action==='facil
 if(action==='contract-page-remove'||action==='contract-page-up'||action==='contract-page-down'){const i=+entry;if(Number.isNaN(i)||i<0||i>=contractPendingImages.length)return render();const mv=action.endsWith('-up')?-1:action.endsWith('-down')?1:0;if(mv){const j=i+mv;if(j<0||j>=contractPendingImages.length)return render();[contractPendingImages[i],contractPendingImages[j]]=[contractPendingImages[j],contractPendingImages[i]]}else contractPendingImages.splice(i,1);contractOcrPages=orderedOcrPages(contractOcrPages,contractPendingImages);if(contractOcrPages.length){if(!reparseContractOcrPages()){contractImportError='The remaining pages contain no shifts by deterministic parsing. Nothing was saved.';contractPreview=null}}else{contractPreview=null;contractImportError=''}return render()}
 if(action==='view-contract-image')return viewContractImage(entry);
 if(action==='view-contract-image-page')return viewContractImage(entry,+date);
-if(action==='backup')return download('crna-hub-backup.json',JSON.stringify({...db,_backupMeta:{mode:cloudMode(),account:cloudSession?cloudSession.email:null,exportedAt:new Date().toISOString(),note:'Cloud vs on-device mode at export time. Restore loads records onto this device only; it never overwrites the cloud account.'}},null,2),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage')return exportCsv('crna-hub-mileage.csv',['date','facility','purpose','miles','tripType','oneWayMiles','milesSource','origin','hotelAddress','status'],verifiedMileageTrips())}
+if(action==='backup')return download('crna-hub-backup.json',deviceBackupJSON(),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage')return exportCsv('crna-hub-mileage.csv',['date','facility','purpose','miles','tripType','oneWayMiles','milesSource','origin','hotelAddress','status'],verifiedMileageTrips())}
 async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=(db.facilities||[]).find(f=>String(f.name||'').trim().toLowerCase()===String(x.facility||'').trim().toLowerCase());if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file, so no miles were guessed.`:''} Review every trip and tax eligibility before using them.`)}
 function csvEscape(v){const s=String(v??'');return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function exportCsv(filename,headers,rows){download(filename,[headers.join(','),...rows.map(r=>headers.map(h=>csvEscape(r[h])).join(','))].join('\r\n'),'text/csv;charset=utf-8')}
@@ -3944,6 +3945,75 @@ async function cloudSignUp(email, password, scheduleNm, employment, monthlyGoal)
   // user_metadata (profileMetadata) so the account is created with them.
   applyProfileValues({ name: scheduleNm || '', employmentType: employment || '', monthlyIncomeGoal: monthlyGoal }); try { const signupBody = { email: email, password: password, data: profileMetadata() }; const data = await sbAuthReq('/auth/v1/signup', signupBody); if (!cloudStoreSession(data)) { cloudAuthStatus = 'Account created. If Supabase requires email confirmation, confirm from your inbox, then sign in with the form above.'; render(); alert('Account created. If Supabase requires email confirmation, confirm from your inbox, then sign in with the form above.'); return; } cloudAuthStatus = ''; await cloudAfterSignIn(); } catch (err) { let msg = err.message || ''; if (/email rate limit/i.test(msg)) msg = 'Too many confirmation emails were sent recently \u2014 wait a little while and try again, or sign in if the account was already created.'; cloudAuthStatus = 'Sign-up failed: ' + msg; render(); alert('Sign-up failed: ' + msg); } }
 async function cloudSignOut() { try { if (cloudSession) await sbAuthReq('/auth/v1/logout', {}, { token: cloudSession.access_token }); } catch (e) {} cloudSession = null; cloudActive = false; cloudOffline = false; cloudError = ''; cloudPersistSession(); render(); }
+// --- Sign out & clear this device (Nov 6, 2026) -----------------------
+// Plain Sign out leaves the on-device copy in place by design, so the
+// data is still on screen for whoever picks the phone up next. This
+// second option is for showing the app to someone else: it signs out
+// AND wipes every user-specific store on this device, leaving the app
+// exactly as a new visitor sees it. The cloud account is NOT touched —
+// nothing here deletes anything server-side (the only network call is
+// the auth logout), so the credential records that live in the account
+// merge back automatically on the next sign-in.
+// HONEST LIMIT, stated in the confirmation itself: shifts, facilities,
+// mileage, pay stubs, contracts, and other on-device-only records have
+// no cloud copy, so before clearing, the same JSON backup the Backup
+// button makes is downloaded — the clear stays recoverable through
+// Restore instead of silently destroying the only copy.
+function deviceBackupJSON() { return JSON.stringify({ ...db, _backupMeta: { mode: cloudMode(), account: cloudSession ? cloudSession.email : null, exportedAt: new Date().toISOString(), note: 'Cloud vs on-device mode at export time. Restore loads records onto this device only; it never overwrites the cloud account.' } }, null, 2); }
+function deviceHasLocalOnlyData() { return ['shifts', 'facilities', 'mileage', 'payStubs', 'contracts', 'hotelStays', 'credentials', 'pto'].some(k => Array.isArray(db[k]) && db[k].length > 0); }
+function resetDeviceLocalState() {
+  db = empty();
+  try {
+    localStorage.removeItem(KEY);
+    localStorage.removeItem(OLD);
+    localStorage.removeItem(PORTAL_CHECK_STORAGE);
+    localStorage.removeItem('crna-hub-live-sync');
+    localStorage.removeItem('crna-hub-supabase-session');
+    localStorage.removeItem('crna-hub-cloud-active');
+    localStorage.removeItem('crna-hub-last-sync');
+  } catch (e) {}
+  // Stored contract pictures live in IndexedDB, outside localStorage.
+  try { if (typeof indexedDB !== 'undefined' && indexedDB && typeof indexedDB.deleteDatabase === 'function') indexedDB.deleteDatabase('crna-hub-files'); } catch (e) {}
+  // In-memory state back to first-run values, so nothing from the
+  // signed-in session can surface after the clear: no import previews,
+  // no portal-check or guided-flow state, no pending prompts.
+  showShiftForm = false; dayViewOpen = false; editId = null; savedShiftsYear = null; facilitySuggestionPrefill = null;
+  month = new Date(); month.setDate(1); selected = localDate(new Date());
+  paystubPreview = null; paystubError = ''; paystubStatus = ''; paystubBusy = false; paystubPendingImages = [];
+  assistantChatBusy = false; assistantChatLastLiveAt = 0;
+  portalCheck = null; portalCheckError = ''; portalCheckOcrStatus = '';
+  portalOpened = {}; portalLeaveSheet = '';
+  Object.keys(portalFlows).forEach(k => { delete portalFlows[k]; });
+  docStorageError = ''; docOcrStatus = '';
+  mileageCalcStatus = ''; facilityDistanceStatus = ''; homeGeocodeStatus = ''; mileageClearStatus = '';
+  profileEditing = false; addressesEditing = false;
+  mileageReviewWeek = ''; mileageLogMonth = '';
+  callOriginPromptDismissed = new Set();
+  schedulePreview = null; scheduleImportError = ''; scheduleAiStatus = ''; scheduleImportContext = '';
+  qgendaStatusLoaded = false; qgendaStatusError = '';
+  contractPreview = null; contractImportError = '';
+  facilityContractPreview = null; facilityContractError = ''; facilityContractOcrStatus = ''; facilityContractPendingImages = []; facilityContractOcrPages = []; facilityContractFallbackNote = ''; facilityContractCropNote = ''; facilityContractLastCropAdded = [];
+  ruleChatMessages = []; ruleChatPreview = null; ruleChatBusy = false; ruleChatError = '';
+  cropRegionByPage = {};
+  calPreview = null; calImportError = '';
+  contractPendingImages = []; contractOcrPages = []; contractOcrStatus = '';
+  onboardStep = 0;
+  if (typeof window !== 'undefined' && window && typeof window.liveSyncResetDeviceState === 'function') window.liveSyncResetDeviceState();
+}
+async function cloudSignOutAndClearDevice() {
+  const localOnly = deviceHasLocalOnlyData();
+  const msg = localOnly
+    ? 'This clears everything off this phone. A backup downloads first — shifts, facilities, and mileage live only on this phone. Your credentials stay saved in your account and come back when you sign in.'
+    : 'This clears everything off this phone. Your data stays saved in your account and comes back when you sign in.';
+  if (!confirm(msg)) return;
+  if (localOnly) { try { download('crna-hub-backup.json', deviceBackupJSON(), 'application/json'); } catch (e) {} }
+  try { if (cloudSession) await sbAuthReq('/auth/v1/logout', {}, { token: cloudSession.access_token }); } catch (e) {}
+  cloudSession = null; cloudActive = false; cloudOffline = false; cloudError = ''; cloudLastSync = ''; cloudSyncTimes = {}; cloudAuthStatus = ''; cloudPortals = []; portalAttemptFailed = {}; portalHealed = {};
+  resetDeviceLocalState();
+  cloudPersistSession();
+  try { localStorage.removeItem('crna-hub-last-sync'); } catch (e) {}
+  render();
+}
 function cloudDocumentRow(x) { return { id: x.id, user_id: cloudUid(), cert_type: x.certType || null, file_name: x.fileName || null, storage_path: x.storagePath || null, issue_date: x.issue || null, expiration_date: x.expiry || null, expiry_source: x.expirySource || 'user_entered', storage_status: x.storageStatus || 'local_details_only', uploaded_at: x.uploadedAt || cloudNow() }; }
 async function cloudSaveDocument(rec) { if (!cloudSyncEnabled()) return; try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } }
 function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const rec = (db.documents || []).find(x => x.id === entryId); (async () => { try { if (rec && rec.storagePath) { await cloudEnsureToken(); await sbStorageReq('/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), 'DELETE'); } await sbReq('/rest/v1/documents?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
@@ -4184,7 +4254,7 @@ function accountPage() {
   if (!SUPABASE_CONFIGURED) return onboardDirectionHTML(1) + `<section class="panel"><h2>Account</h2><p><strong>Sign-in isn’t available yet.</strong> Everything is saved on this device only.</p></section>` + home + syncSectionHTML() + backupHTML();
   if (!cloudSession) return onboardDirectionHTML(1) + `<section class="panel"><h2>Account — sign in to sync credentials</h2><p class="muted">Create your account, add the name as it appears on your schedule and licenses, pick W-2, 1099, or both, and set a monthly income goal — or skip it.</p><form id="cloudAuthForm"><div class="form-grid">${field('email', 'Email', 'email', '', 'required autocomplete="email"')}${field('password', 'Password', 'password', '', 'required autocomplete="current-password"')}${field('scheduleName', 'Name as it appears on your schedule and licenses', 'text', (db.settings && db.settings.scheduleName) || '', 'placeholder="e.g. C. Martin" autocomplete="off"')}${selectLabeled('employmentType','Employment type',[['','Select employment type'],['w2','W-2 — employed'],['1099','1099 — independent contractor'],['both','Both W-2 and 1099']],employmentType())}${field('incomeGoalStep1', 'Monthly income goal ($) — optional', 'number', monthlyIncomeGoal()>0?monthlyIncomeGoal():'', 'min="0" step="1" placeholder="e.g. 40000"')}</div><div class="toolbar"><button type="button" class="secondary tiny" data-action="skip-income-goal">Skip — I\u2019ll set this later</button></div><p class="muted">No goal yet? No worries — skip it and set one later.</p>${formEnd('Sign in')}</form>${cloudAuthStatus ? `<p class="hint" id="cloudAuthStatus">${escapeHTML(cloudAuthStatus)}</p>` : ''}<div class="toolbar"><button type="button" class="secondary" data-action="cloud-signup">Create account</button></div><p class="muted">If we email you a confirmation, tap it, then sign in.</p></section>` + home + syncSectionHTML() + backupHTML();
   const profileSection = profileSectionHTML();
-  return onboardDirectionHTML(1) + profileSection + `<section class="panel"><h2>Account</h2><p><strong>Signed in as ${escapeHTML(cloudSession.email || '')}.</strong></p>${cloudLastSync ? `<p class="muted">Last sync: ${escapeHTML(cloudFmtWhen(cloudLastSync))}</p>` : ''}${cloudError ? `<p class="muted">Last sync problem: ${escapeHTML(cloudError)}</p>` : ''}<p class="muted">Credential records sync with your account automatically — newest edit wins, and nothing one-sided is ever overwritten or deleted. Shifts, facilities, and mileage stay on this device.</p><div class="toolbar"><button class="secondary" data-action="cloud-signout">Sign out</button></div></section>` + home + syncSectionHTML() + backupHTML();
+  return onboardDirectionHTML(1) + profileSection + `<section class="panel"><h2>Account</h2><p><strong>Signed in as ${escapeHTML(cloudSession.email || '')}.</strong></p>${cloudLastSync ? `<p class="muted">Last sync: ${escapeHTML(cloudFmtWhen(cloudLastSync))}</p>` : ''}${cloudError ? `<p class="muted">Last sync problem: ${escapeHTML(cloudError)}</p>` : ''}<p class="muted">Credential records sync with your account automatically — newest edit wins, and nothing one-sided is ever overwritten or deleted. Shifts, facilities, and mileage stay on this device.</p><div class="toolbar"><button class="secondary" data-action="cloud-signout">Sign out</button><button class="secondary" data-action="cloud-signout-clear">Sign out &amp; clear this device</button></div></section>` + home + syncSectionHTML() + backupHTML();
 }
 async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; try { await cloudEnsureToken(); } catch (e) { cloudSession = null; cloudActive = false; cloudPersistSession(); render(); return; } await cloudAutoMerge(); render(); monitorBackgroundSweep(); }
 

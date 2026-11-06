@@ -970,6 +970,28 @@ async function liveSyncInit() {
   render();
 }
 
+// Sign out & clear this device (Nov 6, 2026): app.js calls this after
+// wiping the main database so the calendar-sync side leaves nothing
+// behind either — pending deletions awaiting a decision, tombstones,
+// the sync log, connection summaries, and any half-finished Apple
+// calendar pick all reset to the fresh, signed-out state. Server-side
+// calendar connections are NOT touched (they belong to the account);
+// they simply stop being shown or used until the next sign-in.
+// liveSyncConfig stays: it describes the deployment's capabilities,
+// not the user's data.
+function liveSyncResetDeviceState() {
+  if (liveSyncPushTimer) { try { clearTimeout(liveSyncPushTimer); } catch (e) {} liveSyncPushTimer = null; }
+  liveSyncState = { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {} };
+  try { localStorage.removeItem('crna-hub-live-sync'); } catch (e) {}
+  liveSyncConnections = {};
+  liveSyncLog = [];
+  liveSyncError = '';
+  liveSyncBusy = '';
+  liveSyncShowOthers = false;
+  liveSyncApplePick = null;
+  liveSyncAppleCalendars = [];
+}
+
 // Expose the one entry point app.js hooks call after shift changes.
 if (typeof window !== 'undefined') {
   window.liveSyncInit = liveSyncInit;
@@ -977,5 +999,6 @@ if (typeof window !== 'undefined') {
   window.liveSyncRecordTombstone = liveSyncRecordTombstone;
   window.liveSyncShiftSyncLabel = liveSyncShiftSyncLabel;
   window.liveSyncMarkShiftNotSynced = liveSyncMarkShiftNotSynced;
+  window.liveSyncResetDeviceState = liveSyncResetDeviceState;
 }
 liveSyncInit();
