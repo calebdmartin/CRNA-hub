@@ -28,7 +28,17 @@ function secrets (server side) and in the provider consoles below.
   path for contract photos): gpt-4o-mini vision read of the photos the
   user selected, returning structured rates + transcribed text into the
   same preview-before-save flow as OCR. On-device OCR is the labelled
-  fallback only.
+  fallback only. Schedule mode (`mode: "schedule"` + `scheduleName`):
+  photos of a staff schedule return only shifts for that person
+  (date/facility/type/name), for the schedule upload's preview-before-save.
+- `qgenda-feed/` — QGenda subscription feed (Nov 5, 2026): stores the
+  user's personal "Your Subscription URL" encrypted (AES-GCM, same as
+  other provider credentials) and polls that ICS feed server-side,
+  returning only that user's shifts for preview-before-save. The URL is
+  never returned in full (masked only) and never logged. Requires
+  migration 006 (provider check gains 'qgenda'). The official QGenda
+  REST API is NOT built here — per-hospital account, agreement, fees;
+  a later step. No QGenda password is ever stored.
 - `assistant-chat/` — live Assistant chat (Assistant tab): gpt-4o-mini
   answers the user's question from a minimal structured summary of
   their own records only (counts, totals, next shifts) — never facility
@@ -223,7 +233,7 @@ The flow is deliberately narrow:
 
 ## How the app detects "owner setup pending"
 
-On opening the Import & Backup tab, the app calls
+On opening the Account tab sync section, the app calls
 `GET /functions/v1/sync-calendar?action=config` (public booleans only).
 If that call fails (functions not deployed) or a provider's flag is
 false (its client ID/secret not set), the Connect button for that

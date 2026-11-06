@@ -234,7 +234,7 @@ run(`
 const steps0 = sandbox.__steps0;
 t('onboarding is 5 steps in the new order',
   steps0.length === 5 &&
-  steps0.map(s => s.title).join('|') === 'Create your account|Sync your calendars|Add facilities & contracts|Connect credentialing services and licenses|Upload certifications');
+  steps0.map(s => s.title).join('|') === 'Create your account|Sync calendars or upload a schedule|Add facilities & contracts|Connect credentialing services and licenses|Upload certifications');
 t('no standalone "Upload current contracts" step remains',
   !steps0.some(s => s.title === 'Upload current contracts') &&
   !appSrc.includes("title:'Upload current contracts'"));
@@ -250,5 +250,28 @@ t('step 3 description covers sync suggestion, contract upload, and manual entry'
   steps0[2].desc.includes('by hand is the backup'));
 t('step 3 still carries the paystub disclaimer',
   steps0[2].desc.includes('Income figures are estimates from your own rates and shifts'));
+t('step 1 asks for the name as it appears on the schedule; not done while signed out',
+  steps0[0].desc.includes('name as it appears on your schedule') && steps0[0].done === false);
+t('step 2 covers calendars, schedule upload, and QGenda; not done with none of them',
+  steps0[1].desc.includes('upload a schedule file') && steps0[1].desc.includes('QGenda') && steps0[1].done === false);
+run(`
+  db.settings.scheduleImported = true;
+  globalThis.__stepsSched = onboardingSteps();
+  db.settings.scheduleImported = false;
+  db.settings.qgendaConnected = true;
+  globalThis.__stepsQg = onboardingSteps();
+  db.settings.qgendaConnected = false;
+  cloudSession = { access_token: 't', email: 'a@b.c', user_id: 'u1' };
+  db.settings.scheduleName = '';
+  globalThis.__stepsNoName = onboardingSteps();
+  db.settings.scheduleName = 'C. Martin';
+  globalThis.__stepsNamed = onboardingSteps();
+  cloudSession = null;
+  db.settings.scheduleName = '';
+`);
+t('step 2 checks off when a schedule file was imported, or the QGenda feed is connected',
+  sandbox.__stepsSched[1].done === true && sandbox.__stepsQg[1].done === true);
+t('step 1 checks off only when signed in AND the schedule name is set',
+  sandbox.__stepsNoName[0].done === false && sandbox.__stepsNamed[0].done === true);
 
 console.log(failures === 0 ? 'income-csp test done: all passed' : 'income-csp test done: FAILURES=' + failures);

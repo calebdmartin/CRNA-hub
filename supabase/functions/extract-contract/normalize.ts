@@ -160,3 +160,49 @@ export function parseAiResponseText(text: string): unknown | null {
     return null;
   }
 }
+
+// --- Schedule-photo mode (Nov 5, 2026) ---
+// The schedule upload sends photos of a staff schedule; the model
+// returns only shifts for the schedule name. A row is kept only when
+// it has a parseable YYYY-MM-DD date and a facility; the client still
+// classifies every row (matched / other / uncertain) before preview.
+export interface AiScheduleShift {
+  date: string;
+  facility: string;
+  type: string;
+  name: string;
+  pay: string;
+}
+
+function coerceScheduleDate(v: unknown): string {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  }
+  return "";
+}
+
+export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const shifts = (raw as Record<string, unknown>)["shifts"];
+  if (!Array.isArray(shifts)) return [];
+  const out: AiScheduleShift[] = [];
+  for (const item of shifts) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const date = coerceScheduleDate(row["date"]);
+    const facility = coerceAiText(row["facility"]) ?? "";
+    if (!date || !facility) continue;
+    out.push({
+      date,
+      facility,
+      type: coerceAiText(row["type"]) ?? "Other",
+      name: coerceAiText(row["name"]) ?? "",
+      pay: "",
+    });
+  }
+  return out;
+}

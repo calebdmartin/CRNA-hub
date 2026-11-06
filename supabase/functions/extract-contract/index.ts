@@ -1,7 +1,7 @@
 // CRNA Hub — AI contract reading (Edge Function).
 //
-// Server side of the "Read with AI" button on the Facilities tab and on
-// the Import & Backup tab. Contract photos ONLY, and only on the user's
+// Server side of the "Read with AI" button on the Facilities tab and
+// on the schedule upload (Account tab). Contract/schedule photos ONLY, and only on the user's
 // explicit tap — nothing here runs on page load, on OCR, or on any other
 // trigger. The browser resizes photos to <=1024px on the long side
 // before sending, and the photos travel once, over HTTPS, to OpenAI;
@@ -39,6 +39,7 @@ import {
 } from "../_shared/calendar.ts";
 import {
   normalizeAiContract,
+  normalizeAiSchedule,
   extractAiContent,
   parseAiResponseText,
 } from "./normalize.ts";
@@ -64,6 +65,25 @@ const PROMPT =
   "premium_hourly_rate is the 'Premium Hourly Rate' (applies after 8 hours). " +
   "first_call_hourly_rate is the hourly rate for 1st call. " +
   "Amounts are numbers without $ or commas. Do not invent any rate.";
+
+// Schedule-photo mode (Nov 5, 2026): photos of a STAFF SCHEDULE, not a
+// contract. The model returns ONLY shifts for the named person —
+// matching the name as it appears on the schedule, in any of its forms
+// ("C. Martin", "Martin, Caleb", "Caleb Martin"). Rows for anyone else
+// are left out entirely; the client still classifies every returned row
+// before showing the preview. Dates are YYYY-MM-DD; when a date has no
+// year, use the current year. Never invent a shift, a date, or a name.
+function schedulePrompt(scheduleName: string): string {
+  return (
+    "Read these photos of a staff schedule. " +
+    "Return ONLY a JSON object with these keys: shifts (an array) and raw_text. " +
+    "Each shift has date (YYYY-MM-DD), facility, type (one of: 8-hour day, 10-hour shift, 12-hour shift, 24-hour call, Second call, Other, Off / PTO), and name (the person the shift belongs to, exactly as printed). " +
+    "Include ONLY shifts for the person named '" + scheduleName + "' — match the name in any of its printed forms. " +
+    "Leave out every shift that belongs to anyone else. " +
+    "If no shift for that person is visible, return an empty shifts array. " +
+    "Do not invent any shift."
+  );
+}
 
 const KEY_MISSING_MESSAGE =
   "AI reading isn't set up yet — add the OpenAI key in Supabase (Edge Functions → Manage secrets → OPENAI_API_KEY)";
@@ -106,6 +126,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
+    const mode = body.mode === "schedule" ? "schedule" : "contract";
+    const scheduleName = typeof body.scheduleName === "string"
+      ? body.scheduleName.trim()
+      : "";
+    if (mode === "schedule" && !scheduleName) {
+      return err("missing_schedule_name", 400);
+    }
     const parsed = imagesFromBody(body);
     if ("error" in parsed) return err(parsed.error, parsed.status);
 
@@ -120,7 +147,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     const content: Record<string, unknown>[] = [
-      { type: "text", text: PROMPT },
+      {
+        type: "text",
+        text: mode === "schedule" ? schedulePrompt(scheduleName) : PROMPT,
+      },
       ...parsed.images.map((url) => ({
         type: "image_url",
         image_url: { url, detail: "high" },
@@ -180,10 +210,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
           ok: false,
           error: "openai_bad_response",
           message:
-            "OpenAI answered without readable contract data — try again, or use on-device OCR.",
+            "OpenAI answered without readable " +
+            (mode === "schedule" ? "schedule" : "contract") +
+            " data — try again, or use on-device OCR.",
         },
         502,
       );
+    }
+    if (mode === "schedule") {
+      const shifts = normalizeAiSchedule(raw);
+      const rawText = (raw as Record<string, unknown>)["raw_text"];
+      return json({
+        ok: true,
+        mode: "schedule",
+        shifts,
+        raw_text: typeof rawText === "string" ? rawText : "",
+        model: MODEL,
+      });
     }
     const rates = normalizeAiContract(raw);
     return json({ ok: true, rates, raw_text: rates.raw_text, model: MODEL });
