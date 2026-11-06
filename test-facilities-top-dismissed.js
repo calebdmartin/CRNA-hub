@@ -141,4 +141,4 @@ t('contract upload, AI rule chat, pay stub and manual form all still present',
   pageMixed.includes('id="paystub-panel"') &&
   pageMixed.includes('id="f_name"'));
 
-t('service worker cache bumped to v49', swSrc.includes('crna-hub-shell-v49'));
+t('service worker cache bumped to v50', swSrc.includes('crna-hub-shell-v50'));
