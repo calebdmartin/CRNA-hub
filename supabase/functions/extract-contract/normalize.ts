@@ -318,26 +318,54 @@ export function normalizeAiPortalCheck(raw: unknown): AiPortalCheck {
   return out;
 }
 
-// --- Schedule-photo mode (Nov 5, 2026) ---
+// --- Schedule-photo mode (Nov 5, 2026; grid support Nov 6, 2026) ---
 // The schedule upload sends photos of a staff schedule; the model
-// returns only shifts for the schedule name. A row is kept only when
-// it has a parseable YYYY-MM-DD date and a facility; the client still
-// classifies every row (matched / other / uncertain) before preview.
+// returns only shifts for the schedule name. A LIST row is kept only
+// when it has a parseable date and a facility; a GRID row (a cell
+// from a names-by-dates grid) legitimately has NO facility — it is
+// kept when it has a date and its cell code, carried verbatim in
+// `code` and as the shift `type` (the app never invents a meaning
+// for a code; the user can rename it in the preview). The client
+// still classifies every row (matched / other / uncertain) before
+// preview.
 export interface AiScheduleShift {
   date: string;
   facility: string;
   type: string;
+  code: string;
   name: string;
   pay: string;
 }
+
+const SCHEDULE_MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
 
 function coerceScheduleDate(v: unknown): string {
   if (typeof v !== "string") return "";
   const t = v.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (m) {
     return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  }
+  // Grid column headers are usually "23-Nov" or "Nov 23" with no
+  // year — same rule as the on-device importer: the current year.
+  const year = new Date().getFullYear();
+  m = t.match(/^(\d{1,2})[-\s]([A-Za-z]{3,9})\.?(?:[,\s]+(\d{4}))?$/);
+  if (m) {
+    const mo = SCHEDULE_MONTHS[m[2].slice(0, 3).toLowerCase()];
+    if (mo) {
+      return `${m[3] ? +m[3] : year}-${String(mo).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    }
+  }
+  m = t.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:[,\s]+(\d{4}))?$/);
+  if (m) {
+    const mo = SCHEDULE_MONTHS[m[1].slice(0, 3).toLowerCase()];
+    if (mo) {
+      return `${m[3] ? +m[3] : year}-${String(mo).padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+    }
   }
   return "";
 }
@@ -350,13 +378,22 @@ export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
   for (const item of shifts) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const row = item as Record<string, unknown>;
-    const date = coerceScheduleDate(row["date"]);
+    let date = coerceScheduleDate(row["date"]);
     const facility = coerceAiText(row["facility"]) ?? "";
-    if (!date || !facility) continue;
+    const code = coerceAiText(row["code"]) ?? "";
+    // List rows need a facility; grid cells need their code instead.
+    if (!date || (!facility && !code)) continue;
+    // Grid headers never print a year, so any year the model attaches
+    // to a grid cell is a guess — the importer's rule for year-less
+    // dates is the current year.
+    if (code) date = `${new Date().getFullYear()}-${date.slice(5)}`;
     out.push({
       date,
       facility,
-      type: coerceAiText(row["type"]) ?? "Other",
+      // A grid code stays verbatim as the shift type — never mapped
+      // to an invented meaning.
+      type: code ? code : (coerceAiText(row["type"]) ?? "Other"),
+      code,
       name: coerceAiText(row["name"]) ?? "",
       pay: "",
     });

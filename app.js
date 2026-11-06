@@ -2436,7 +2436,7 @@ function schedulePreviewHTML(){
   if(!schedulePreview)return '<p class="muted">No schedule parsed yet. Choose a file above, then read it — nothing is saved until you approve the preview.</p>';
   const rows=schedulePreview.rows;
   const matched=rows.filter(r=>r.match==='matched').length,other=rows.filter(r=>r.match==='other').length,unc=rows.filter(r=>r.match==='uncertain').length,dup=rows.filter(r=>r.duplicate).length;
-  return `<p><strong>Parsed from:</strong> ${escapeHTML(schedulePreview.fileName)} · ${rows.length} row(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will be skipped</p><p class="muted">Matched name: <strong>${escapeHTML(schedulePreview.matchedName||'(not set — add it above)')}</strong>${schedulePreview.noNamesInFile?' — no names found in this file, so it was treated as your own schedule; uncheck anything that is not yours.':''} ${matched} row(s) matched you, ${other} row(s) for other people are excluded, ${unc} uncertain row(s) are unchecked — check one to include it. Rows with a missing date or facility block approval until fixed or unchecked. Past shifts arrive confirmed (they already happened); future shifts arrive proposed.</p><div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay</th><th>Name on row</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="schedInclude" data-row="${i}" ${r.include?'checked':''} ${r.match==='other'?'disabled':''}></td><td><input type="date" class="schedEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.type||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${escapeHTML(r.matchedName||r.name||'—')}</td><td>${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="schedule-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="schedule-discard">Discard preview</button></div>`;
+  return `<p><strong>Parsed from:</strong> ${escapeHTML(schedulePreview.fileName)} · ${rows.length} row(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will be skipped</p><p class="muted">Matched name: <strong>${escapeHTML(schedulePreview.matchedName||'(not set — add it above)')}</strong>${schedulePreview.noNamesInFile?' — no names found in this file, so it was treated as your own schedule; uncheck anything that is not yours.':''} ${matched} row(s) matched you, ${other} row(s) for other people are excluded, ${unc} uncertain row(s) are unchecked — check one to include it. Rows with a missing date — or a missing facility with no grid code — block approval until fixed or unchecked; grid-code rows save without a facility and stay unpriced. Past shifts arrive confirmed (they already happened); future shifts arrive proposed.</p><div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay</th><th>Name on row</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="schedInclude" data-row="${i}" ${r.include?'checked':''} ${r.match==='other'?'disabled':''}></td><td><input type="date" class="schedEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.type||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${escapeHTML(r.matchedName||r.name||'—')}</td><td>${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="schedule-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="schedule-discard">Discard preview</button></div>`;
 }
 async function importSchedule(e){
   e.preventDefault(); scheduleImportError=''; scheduleAiStatus='';
@@ -2465,7 +2465,9 @@ async function importSchedule(e){
 function approveScheduleImport(){
   if(!schedulePreview)return;
   const rows=schedulePreview.rows.filter(r=>r.include&&!r.duplicate&&r.match!=='other');
-  const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());
+  // A grid-code row may save without a facility (the grid prints
+  // none) — it stays unpriced, carrying its code as the type.
+  const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||(!String(r.facility||'').trim()&&!String(r.code||'').trim()));
   if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}
   if(!rows.length){alert('Nothing selected to add — check the rows that are yours, or discard the preview.');return}
   let created=0,skipped=0,incomplete=0; const newNames=[];
@@ -2505,26 +2507,63 @@ function applyAiToSchedulePreview(data,fileName){
   if(!shifts.length)return false;
   const name=scheduleName();
   const rows=shifts.map(sh=>{
-    const date=String(sh.date||''); const facility=String(sh.facility||'').trim(); const type=String(sh.type||'Other');
+    const date=String(sh.date||''); const facility=String(sh.facility||'').trim();
+    // Grid schedules (Nov 6, 2026): a cell code ("5**") is carried
+    // verbatim as the shift type — never interpreted, never priced
+    // until the user renames it to a known shift type or maps it in
+    // the preview. Grid shifts have no facility on the page.
+    const code=String(sh.code||'').trim();
+    const type=code||String(sh.type||'Other');
     const rowName=String(sh.name||'').trim();
     const match=rowName?(scheduleNamesMatch(rowName,name)?'matched':(name?'other':'uncertain')):'uncertain';
     const duplicate=(db.shifts||[]).some(x=>x.date===date&&x.facility===facility&&x.type===type);
-    const flags=[]; if(duplicate)flags.push('already in CRNA Hub — duplicate'); if(match==='other')flags.push('other person — excluded'); if(match==='uncertain')flags.push('uncertain — check to include'); if(facility&&!facilityByNameOrAlias(facility))flags.push('new facility — will be suggested, not created');
-    return {date,facility,type,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched'&&!duplicate,duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
+    const flags=[]; if(duplicate)flags.push('already in CRNA Hub — duplicate'); if(match==='other')flags.push('other person — excluded'); if(match==='uncertain')flags.push('uncertain — check to include'); if(facility&&!facilityByNameOrAlias(facility))flags.push('new facility — will be suggested, not created'); if(code)flags.push('grid code "'+code+'" — not a known shift type; saved as-is, unpriced (rename it here if you know it)');
+    return {date,facility,type,code,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched'&&!duplicate,duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
   });
   schedulePreview={fileName,source:'schedule-import-ai',matchedName:name,rows,noNamesInFile:false,ai:true};
   return rows.length>0;
 }
+// The honest zero-result message for a photo read (Nov 6, 2026): a
+// grid that yields nothing must say so — never present "0 shifts"
+// as if it were the answer.
+function scheduleGridUnreadMessage(){
+  const nm=scheduleName();
+  return 'AI read the photos but found no shifts'+(nm?' for "'+nm+'"':'')+'. If this is a grid schedule (names down the side, dates across the top), I couldn\'t read this grid — try a closer, straight-on photo that shows the whole grid, your name row included. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';
+}
+// On-device fallback when the AI read is unavailable or finds
+// nothing: OCR the photos and run the linear parser. Honest status
+// line says the read happened on-device. A grid read this way will
+// normally still yield nothing (OCR loses the grid alignment) — the
+// caller then shows the grid message above.
+async function scheduleOcrFallback(images,fileName){
+  try{
+    let text='';
+    for(const f of images.slice(0,4)){ text+='\n'+(await ocrImageFile(f)); }
+    if(!text.trim())return false;
+    const parsed=parseScheduleText(text,fileName);
+    if(!parsed.rows.length)return false;
+    schedulePreview=parsed;
+    scheduleAiStatus='AI reading wasn\'t available for these photos, so this was read on your device instead — check the rows carefully before approving.';
+    scheduleImportError='';
+    return true;
+  }catch(e){ return false }
+}
 async function readScheduleWithAI(images){
   scheduleImportError='';
   scheduleAiStatus='Sending '+images.length+' photo(s) to AI for reading — this can take a few seconds…'; render();
+  const fileName=images.map(f=>f.name).join(', ');
   try{
-    const fileName=images.map(f=>f.name).join(', ');
     const data=await callExtractSchedule(images.slice(0,4),scheduleName());
     const ok=applyAiToSchedulePreview(data,fileName);
-    if(!ok){scheduleImportError='AI read the photos but found no shifts in them. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';scheduleAiStatus='';schedulePreview=null;render();return}
+    if(!ok){
+      if(await scheduleOcrFallback(images,fileName)){render();return}
+      scheduleImportError=scheduleGridUnreadMessage();scheduleAiStatus='';schedulePreview=null;render();return;
+    }
     scheduleAiStatus=''; scheduleImportError=''; render();
-  }catch(e){const msg=String((e&&e.message)||e||''); scheduleAiStatus=''; schedulePreview=null; scheduleImportError=(msg===AI_KEY_MISSING_MESSAGE?AI_KEY_MISSING_MESSAGE:'AI reading failed: '+msg+' Nothing was saved — upload a CSV or text file instead (read on this device).'); render()}
+  }catch(e){
+    if(await scheduleOcrFallback(images,fileName)){render();return}
+    const msg=String((e&&e.message)||e||''); scheduleAiStatus=''; schedulePreview=null; scheduleImportError=(msg===AI_KEY_MISSING_MESSAGE?AI_KEY_MISSING_MESSAGE:'AI reading failed: '+msg+' Nothing was saved — upload a CSV or text file instead (read on this device).'); render();
+  }
 }
 
 // --- QGenda (Nov 5, 2026): easiest legal v1 ---

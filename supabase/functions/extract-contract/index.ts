@@ -90,22 +90,39 @@ const PROMPT =
   "first_call_hourly_rate is the hourly rate for 1st call. " +
   "Amounts are numbers without $ or commas. Do not invent any rate.";
 
-// Schedule-photo mode (Nov 5, 2026): photos of a STAFF SCHEDULE, not a
-// contract. The model returns ONLY shifts for the named person —
-// matching the name as it appears on the schedule, in any of its forms
-// ("C. Martin", "Martin, Caleb", "Caleb Martin"). Rows for anyone else
-// are left out entirely; the client still classifies every returned row
-// before showing the preview. Dates are YYYY-MM-DD; when a date has no
-// year, use the current year. Never invent a shift, a date, or a name.
+// Schedule-photo mode (Nov 5, 2026; grid schedules Nov 6, 2026):
+// photos of a STAFF SCHEDULE, not a contract. The model returns ONLY
+// shifts for the named person — matching the name as it appears on
+// the schedule, in any of its forms ("C. Martin", "Martin, Caleb",
+// "Caleb Martin"). Rows for anyone else are left out entirely; the
+// client still classifies every returned row before showing the
+// preview. Dates are YYYY-MM-DD; when a date has no year, use the
+// current year. Never invent a shift, a date, or a name.
+//
+// Nov 6, 2026: the first grid photo (names down the left, dates
+// across the top, short codes like "5**" in the cells) returned zero
+// shifts — the old prompt described only list schedules, so the
+// model had no way to reconstruct rows x columns, and the normalizer
+// then dropped every facility-less cell. The prompt now teaches the
+// grid layout explicitly: find the named person's ROW, take each
+// column's date from the HEADER row, and return one shift per
+// non-blank cell with the code VERBATIM. Codes are never interpreted
+// — no times, hours, or meanings are invented for them.
 function schedulePrompt(scheduleName: string): string {
   return (
     "Read these photos of a staff schedule. " +
     "Return ONLY a JSON object with these keys: shifts (an array) and raw_text. " +
-    "Each shift has date (YYYY-MM-DD), facility, type (one of: 8-hour day, 10-hour shift, 12-hour shift, 24-hour call, Second call, Other, Off / PTO), and name (the person the shift belongs to, exactly as printed). " +
     "Include ONLY shifts for the person named '" + scheduleName + "' — match the name in any of its printed forms. " +
     "Leave out every shift that belongs to anyone else. " +
     "If no shift for that person is visible, return an empty shifts array. " +
-    "Do not invent any shift."
+    "Do not invent any shift. " +
+    "LIST schedules (one shift per line or row, with words like '8-hour day' or 'Second call'): each shift has date (YYYY-MM-DD), facility, type (one of: 8-hour day, 10-hour shift, 12-hour shift, 24-hour call, Second call, Other, Off / PTO), name (the person the shift belongs to, exactly as printed), and code null. " +
+    "GRID schedules (a table: people's names down the left side, dates across the top header row, and a short code in each cell): " +
+    "find the row whose name matches '" + scheduleName + "' (the row label may be just a last name), " +
+    "read the date of each column from the header row at the top (headers look like '23-Nov', '1-Dec', 'Nov 23' — when a header has no year, use the current year), " +
+    "and return one shift for each NON-BLANK cell in that row: date = that column's header date (YYYY-MM-DD), code = the cell's text EXACTLY as printed (for example '5**', '5*', '7', 'NC1'), type null, facility null, name = the row's name exactly as printed. " +
+    "Blank cells are not shifts — skip them. " +
+    "NEVER interpret a grid code: do not turn it into hours, times, or a shift-type name, and do not copy codes from anyone else's row."
   );
 }
 

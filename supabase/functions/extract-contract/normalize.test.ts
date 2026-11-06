@@ -22,12 +22,43 @@ Deno.test("normalizeAiSchedule: keeps dated rows for the named person, drops the
     date: "2026-11-10",
     facility: "Holzer",
     type: "8-hour day",
+    code: "",
     name: "C. Martin",
     pay: "",
   });
   assertEquals(out[1].date, "2026-11-12");
   assertEquals(out[1].name, "Martin, Caleb");
   assertEquals(out[2].name, "");
+});
+
+Deno.test("normalizeAiSchedule: grid cells keep their code verbatim and need no facility (Nov 6, 2026)", () => {
+  // The verified extraction of Caleb's grid photo: columns 23-Nov to
+  // 6-Dec, the "Martin" row reads 1-Dec "5**", 2-Dec "5*", 3-Dec
+  // "5**", 4-Dec "5*", 5-Dec "7" — everything else blank.
+  const out = normalizeAiSchedule({
+    shifts: [
+      { date: "1-Dec", facility: null, type: null, code: "5**", name: "Martin" },
+      // Grid headers print no year — a guessed year is overridden to
+      // the current year, the importer's year-less-date rule.
+      { date: "2023-12-02", facility: null, type: null, code: "5*", name: "Martin" },
+      { date: "Dec 3, 2026", facility: null, type: null, code: "5**", name: "Martin" },
+      { date: "2026-12-04", facility: null, type: null, code: "5*", name: "Martin" },
+      { date: "2026-12-05", facility: null, type: null, code: "7", name: "Martin" },
+      // A code with no readable date is still dropped.
+      { date: "", facility: null, type: null, code: "5**", name: "Martin" },
+      // A facility-less row with NO code is a broken list row — dropped.
+      { date: "2026-12-06", facility: "", type: "8-hour day", name: "Martin" },
+    ],
+    raw_text: "grid",
+  });
+  assertEquals(out.length, 5);
+  const y = new Date().getFullYear();
+  assertEquals(out[0].date, `${y}-12-01`);
+  assertEquals(out[1].date, `${y}-12-02`);
+  assertEquals(out.map((s) => s.code), ["5**", "5*", "5**", "5*", "7"]);
+  // The code stays verbatim as the type — never interpreted.
+  assertEquals(out.map((s) => s.type), ["5**", "5*", "5**", "5*", "7"]);
+  assertEquals(out.every((s) => s.facility === "" && s.pay === ""), true);
 });
 
 Deno.test("normalizeAiSchedule: non-object input yields no shifts", () => {
