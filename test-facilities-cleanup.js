@@ -74,7 +74,7 @@ t('remaining items in order: 1 sync, 2 manual',
 const page = run(`facilitiesPage()`);
 t('contract upload panel still on the Facilities page',
   page.includes('id="facility-contract-panel"') && page.includes('Add a facility from a contract') &&
-  page.includes('facilityContractForm') && page.includes('Read with AI'));
+  page.includes('facilityContractForm') && page.includes('Read my contract'));
 t('no build-notes block on the Facilities page',
   !page.includes('Build 2026') && !page.includes('TDZ') &&
   !page.includes('Still seeing an old build') && !page.includes('Check for update') &&
@@ -103,7 +103,7 @@ t('Account small print carries NO version line (Nov 6 sweep: build stamp removed
   !pages.Account.includes('cache v'));
 t('build stamp is gone entirely from the app',
   run(`typeof BUILD_STAMP`) === 'undefined' && !appSrc.includes('checkAppUpdate'));
-t('service worker cache bumped to v39', swSrc.includes("crna-hub-shell-v39"));
+t('service worker cache bumped to v41', swSrc.includes("crna-hub-shell-v41"));
 
 // ---------- 4. Contract upload still works end to end (pasted text) ----------
 (async () => {

@@ -142,7 +142,7 @@ t('a rule stating nothing maps to no rates (never $0)',
     page.includes('Describe it in your own words') && page.includes('ruleChatForm') &&
     page.indexOf('Describe it in your own words') > page.indexOf('facility-contract-panel'));
   t('existing rate boxes are still on the page (chat is an addition, not a replacement)',
-    page.includes('Hourly rate ($)') && page.includes('1st call hourly rate ($/hr)') && page.includes('Read with AI'));
+    page.includes('Hourly rate ($)') && page.includes('1st call hourly rate ($/hr)') && page.includes('Read my contract'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

@@ -46,3 +46,18 @@ select[data-shift-status]{width:auto;display:inline-block;padding:6px 8px;font-s
 .csp-table strong{font-size:13px}
 .contract-table th,.contract-table td{padding:7px 5px}
 }
+
+/* Collapsed-by-default panels (declutter, Nov 6): a tappable header row
+   — title + chevron — keeps secondary blocks (pay stub, manual entry,
+   backup & restore) out of the main flow until they are wanted. */
+details.collapse-panel{padding:0}
+details.collapse-panel>summary.collapse-head{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 20px;font-size:18px;font-weight:700;color:#121e53}
+details.collapse-panel>summary.collapse-head::-webkit-details-marker{display:none}
+details.collapse-panel>.collapse-body{padding:0 20px 18px}
+.collapse-chevron{transition:transform .15s ease;color:#0f7f8a;font-size:15px;flex:0 0 auto}
+details.collapse-panel[open ]>.collapse-head .collapse-chevron{transform:rotate(180deg)}
+details.collapse-sub{margin-top:14px;border-top:1px solid #e7edf3;padding-top:8px}
+details.collapse-sub>summary.collapse-head{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:15px;font-weight:700;color:#121e53;padding:6px 0}
+details.collapse-sub>summary.collapse-head::-webkit-details-marker{display:none}
+details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(180deg)}
+@media(max-width:650px){details.collapse-panel>summary.collapse-head{padding:13px}details.collapse-panel>.collapse-body{padding:0 13px 14px}}

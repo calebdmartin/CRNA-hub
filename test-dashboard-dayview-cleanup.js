@@ -155,12 +155,12 @@ run(`
   globalThis.__acct = accountPage();
 `);
 const fac = sandbox.__fac, cred = sandbox.__cred, acct = sandbox.__acct;
-t('step 3 contract panel: short direction, long explanations gone',
-  fac.includes('Upload your contract and we’ll extract your dates and pay') &&
+t('step 3 contract panel: one read button, long explanations gone',
+  fac.includes('Add a facility from a contract') && fac.includes('Read my contract') &&
   !fac.includes('Works with text (.txt, CSV)') && !fac.includes('on-device OCR dropped rows'));
-t('step 3 manual panel: one friendly line, rate caveats condensed',
-  fac.includes('No contract? No problem') && !fac.includes('each sync recognises its events') &&
-  fac.includes('leave a rate blank if you don’t take it here'));
+t('step 3 manual panel: collapsed, one friendly line inside',
+  fac.includes('Add a facility manually') && !fac.includes('each sync recognises its events') &&
+  fac.includes('leave blank what you don’t take here'));
 t('step 3 pay stub panel: one line, stub-never-stored kept, disclaimer out of the main flow',
   fac.includes('never stored') && !fac.includes('Two agencies paying the same day') &&
   !fac.includes('CRNA Hub is not liable for mistakes'));

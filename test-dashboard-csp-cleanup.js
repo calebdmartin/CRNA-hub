@@ -80,4 +80,36 @@ t('Dashboard default flow shows the table and the toggle, disclaimer only inside
 t('disclaimer also lives as small print on the Account tab (backup section)',
   sandbox.__acct.includes('Income figures are estimates from your own rates and shifts') &&
   sandbox.__acct.includes('font-size:0.85em'));
+// --- "Why might these totals be off?" toggle (Nov 6, 2026) ---
+// Collapsed by default, next to the C/S/P toggle: totals only count
+// shifts the app could see and recognize in the calendar, they get
+// better the longer the app is used, and paystubs are the check.
+t('a second collapsed toggle "Why might these totals be off?" exists, not open by default',
+  table.includes('<details class="csp-info"><summary>Why might these totals be off?</summary>'));
+t('inside it: calendar-recognition caveat + improves-with-use line + paystub check',
+  table.includes("built only from the shifts CRNA Hub can see in your calendar") &&
+  table.includes("so the totals can understate your real income") &&
+  table.includes('The longer you use the app, the better our information gets.') &&
+  table.includes('Always check against your paystubs.'));
+t('default view (before any toggle) has none of the off-totals text',
+  !beforeToggle.includes('Why might these totals be off?') &&
+  !beforeToggle.includes('understate your real income'));
+t('no unrecognized-events line when sync holds nothing unrecognized',
+  !table.includes("weren't recognized as shifts"));
+run(`
+  db.facilitySuggestions = [
+    {id:'sg1', name:'CAMC', count:5, dismissed:false},
+    {id:'sg2', name:'Other Hospital', count:2, dismissed:true}
+  ];
+  globalThis.__table2 = incomeCSPTableHTML(2026, yearIncomeSplit(2026));
+`);
+t('unrecognized-events line shows the tracked held count when N > 0',
+  sandbox.__table2.includes("7 calendar events weren't recognized as shifts and aren't counted yet") &&
+  sandbox.__table2.includes('add the hospital on the Facilities tab'));
+run(`
+  db.facilitySuggestions = [{id:'sg3', name:'CAMC', count:1, dismissed:false}];
+  globalThis.__table3 = incomeCSPTableHTML(2026, yearIncomeSplit(2026));
+`);
+t('singular wording for exactly one unrecognized event',
+  sandbox.__table3.includes("1 calendar event wasn't recognized as a shift and isn't counted yet"));
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
