@@ -78,8 +78,8 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 t('no "Import & Backup" tab in tabs or the render map',
   run(`tabs.indexOf('Import & Backup')`) === -1 &&
   !appSrc.includes("'Import & Backup':importPage"));
-t('no user-facing "Import & Backup" copy remains (only the removal note + build stamp)',
-  (appSrc.match(/Import & Backup/g) || []).length === 2);
+t('no user-facing "Import & Backup" copy remains (only the removal-note comment; the build stamp no longer carries it)',
+  (appSrc.match(/Import & Backup/g) || []).length === 1);
 run(`
   db.facilities = [{id:'f1', name:'Holzer', aliases:'', rate8:'2125', rate10:'2625', rate12:'', rate24:'', rateSecond:'3000', weekendRateSecond:'2000', hourlyRate:'250', paidHours8:'8.5', callBonus:'1000'}];
   db.shifts = [];

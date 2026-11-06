@@ -1,5 +1,5 @@
 // CRNA Hub — client tests for ask-first hospital suggestions from
-// calendar sync (Nov 5, 2026), the three-paths prompt, and the income
+// calendar sync (Nov 5, 2026), the paths prompt, and the income
 // disclaimer. Run: node test-hospital-suggestions.js
 //
 // Covers the parent task's acceptance checks without a live calendar:
@@ -7,7 +7,7 @@
 //     repeat sync refreshes it instead of duplicating it;
 //   * "Not now" dismisses it — the next sync does not re-ask — and the
 //     dismissed suggestion stays visible with an "Ask again" button;
-//   * Yes (and each of the three path buttons) opens the facility form
+//   * Yes (and each of the path buttons) opens the facility form
 //     pre-filled with the hospital name and address;
 //   * adding the facility clears its suggestion, so the next sync
 //     re-scans the held events and imports them (past confirmed /
@@ -105,14 +105,13 @@ t('no shift imported for the held hospital',
 t('suggestion card asks the question with name, count and date range',
   run(`facilitySuggestionsHTML().includes('We noticed shifts at CAMC in your calendar. Add it as a facility?')`) &&
   run(`facilitySuggestionsHTML().includes('3 shift(s)')`));
-t('three paths appear together, in Caleb’s order (sync, contract, manual)',
+t('two paths appear together, in order (sync, manual) \u2014 no contract item (Nov 6 cleanup: it only scrolled to the panel below)',
   (() => {
     const h = run(`facilitySuggestionsHTML()`);
-    const a = h.indexOf('Sync your calendar, upload a contract, or manually enter a facility');
-    const s = h.indexOf('data-date="sync"', a);
-    const c = h.indexOf('data-date="contract"', s);
-    const m = h.indexOf('data-date="manual"', c);
-    return a > -1 && s > a && c > s && m > c;
+    const a = h.indexOf('Sync your calendar or manually enter a facility');
+    const s = h.indexOf('data-date=\"sync\"', a);
+    const m = h.indexOf('data-date=\"manual\"', s);
+    return a > -1 && s > a && m > s && !h.includes('data-date=\"contract\"') && !h.includes('<strong>Upload a contract</strong>');
   })());
 t('Yes / Not now buttons present on the suggestion card',
   run(`facilitySuggestionsHTML().includes('data-action="facility-suggestion-yes"')`) &&
@@ -142,7 +141,7 @@ t('dismissed suggestion stays visible later, with Ask again',
   sandbox.__facPageDismissed.includes('data-action="facility-suggestion-undismiss"'));
 t('Ask again restores the suggestion', sandbox.__afterUndismiss.active === 1);
 
-// --- 3. Yes pre-fills the facility form (name + address) and shows the three paths.
+// --- 3. Yes pre-fills the facility form (name + address) and shows the paths.
 run(`
   actions('facility-suggestion-yes', db.facilitySuggestions[0].id);
   globalThis.__facPageYes = facilitiesPage();
@@ -153,22 +152,23 @@ t('Yes pre-fills the hospital name in the manual form',
   sandbox.__facPageYes.includes('id="f_name"') && sandbox.__facPageYes.includes('value="CAMC"'));
 t('Yes pre-fills the address from the calendar location',
   sandbox.__facPageYes.includes('value="3200 MacCorkle Ave, Charleston, WV 25304"'));
-t('facility form shows the three-paths chooser after Yes',
+t('facility form shows the paths chooser after Yes',
   sandbox.__facPageYes.includes('id="facility-three-ways-panel"') &&
-  sandbox.__facPageYes.includes('Sync your calendar, upload a contract, or manually enter a facility'));
+  sandbox.__facPageYes.includes('Sync your calendar or manually enter a facility'));
 t('contract-upload option and manual entry both available on the form',
   sandbox.__facPageYes.includes('id="facility-contract-panel"') &&
   sandbox.__facPageYes.includes('id="facility-manual-panel"'));
 t('manual path states it is the fallback for rates the other paths did not provide',
   sandbox.__facPageYes.includes('Manually enter the facility') &&
   sandbox.__facPageYes.includes('the fallback when sync or a contract did not provide them'));
-// Path button: contract path pre-fills and lands on the contract panel.
+// Path button: manual path pre-fills the form (the contract item was
+// removed Nov 6 — it only scrolled to the contract panel below).
 run(`
   facilitySuggestionPrefill = null;
-  actions('facility-suggestion-path', db.facilitySuggestions[0].id, 'contract');
+  actions('facility-suggestion-path', db.facilitySuggestions[0].id, 'manual');
   globalThis.__facPagePath = facilitiesPage();
 `);
-t('contract path also pre-fills the form',
+t('manual path also pre-fills the form',
   sandbox.__facPagePath.includes('value="CAMC"'));
 
 // --- 4. Adding the facility clears its suggestion; the next sync imports its shifts.
@@ -253,7 +253,7 @@ t('guide no longer carries the disclaimer as a step paragraph',
   sandbox.__onboard3.title === 'Add facilities & contracts' &&
   !sandbox.__onboard3.direction.includes('Income figures are estimates') &&
   !sandbox.__onboardHtml.includes('Income figures are estimates'));
-t('build stamp bumped (cache v37)', sandbox.__buildStamp.includes('cache v37'));
+t('build stamp is a tiny version line (cache v38, no changelog)', sandbox.__buildStamp.includes('cache v38') && !sandbox.__buildStamp.includes('TDZ'));
 t('no key-like secrets in app.js',
   !/(sk-[A-Za-z0-9]{10,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/.test(fs.readFileSync(R + 'app.js', 'utf8')));
 console.log('hospital-suggestion test done');
