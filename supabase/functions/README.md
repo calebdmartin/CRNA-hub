@@ -36,10 +36,9 @@ function secrets (server side) and in the provider consoles below.
   backstop). Same `OPENAI_API_KEY` secret as `extract-contract`.
   Best-effort per-user throttle (1 per 10s, 30 per rolling hour);
   the durable per-user cap (`assistant_chat_log` table) is final-only
-  and not yet built. NOT YET DEPLOYED as of Nov 5, 2026 — deploy with
-  `supabase functions deploy assistant-chat` (see below); until then
-  the Assistant tab falls back to deterministic on-device answers,
-  labelled honestly.
+  and not yet built. DEPLOYED Nov 5, 2026 (`assistant-chat` v1,
+  verify_jwt on); if it or the key is ever unavailable, the Assistant
+  tab falls back to deterministic on-device answers, labelled honestly.
 - `_shared/` — auth validation, AES-GCM token encryption, PostgREST
   helpers, shift/event mapping, and one provider module each
   (`google.ts`, `outlook.ts`, `caldav.ts`).

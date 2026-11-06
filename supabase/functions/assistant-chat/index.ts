@@ -56,12 +56,12 @@
 // with a short code. The provider's response body is never forwarded:
 // it can carry request echoes and is not needed to explain a failure.
 //
-// NOT YET DEPLOYED (as of Nov 5, 2026): this file is the full source,
-// written to the extract-contract pattern, but it has not been deployed
-// to Supabase and the client cannot reach it until it is. Deploy with:
+// DEPLOYED Nov 5, 2026 (assistant-chat v1, verify_jwt on; OPENAI_API_KEY
+// set in Supabase secrets). Redeploy with:
 //   supabase functions deploy assistant-chat
-// Until then the Assistant tab's live call fails and the app falls back
-// to deterministic on-device answers, labelled "On-device answer".
+// If the function or the key is ever unavailable, the Assistant tab's
+// live call fails and the app falls back to deterministic on-device
+// answers, labelled "On-device answer".
 
 import {
   CORS,
