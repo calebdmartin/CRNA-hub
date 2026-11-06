@@ -523,6 +523,90 @@ const PORTAL_CHECK_SOURCES={
     how:'Open your state board\u2019s license lookup (or Nursys), look yourself up, and screenshot the result page that shows your license.',
     limit:'Honest limit: WV and Ohio board lookups block automation, so the assistant cannot pull them directly — it reads the lookup page you show it instead. Nursys e-Notify can alert you when a license changes.'}
 };
+
+// --- Assistant-guided portal navigation (Nov 6, 2026) ---
+// The check is a guided walk, not one generic upload: each portal has
+// a navigation map — the ordered pages the assistant needs, each with
+// one short direction line. The step engine's only input is "pages
+// shown to the assistant" (a screenshot or pasted text here; in the
+// finished native app the in-app browser feeds the same engine the
+// page it is showing after the system sign-in sheet returns). After
+// each page is read, the fields it gave are checked off; the engine
+// advances to the next page that can still give something required,
+// re-asks BY NAME when a page gave nothing new (wrong page), and
+// finishes at the preview report once the required fields are in or
+// every needed page has been shown or skipped. Nothing saves before
+// approval — unchanged.
+const PORTAL_FIELD_LABELS={
+  nbcrna:[['status','Certification status'],['number','License / certification number'],['periodStart','Certification period start'],['periodEnd','Certification period end'],['renewalDeadline','Renewal / recertification deadline'],['classA','Class A credits'],['classB','Class B credits'],['macEd','MAC Ed credits'],['macDev','MAC Dev credits']],
+  aana:[['status','Membership status'],['number','Membership number'],['expiration','Membership expiration'],['classA','Class A credits'],['classB','Class B credits']],
+  licenses:[['status','License status'],['number','License / certification number'],['type','License type'],['issue','Issue date'],['expiry','Expiration date']]
+};
+const PORTAL_NAV_MAPS={
+  nbcrna:{required:['status','periodEnd'],pages:[
+    {key:'record',name:'certification record',direction:'Open your certification record — that’s the page I need.',fields:['status','number','periodStart','periodEnd','renewalDeadline']},
+    {key:'progress',name:'CPC progress',direction:'Now open your CPC progress — that’s the page I need.',fields:['classA','classB','macEd','macDev']}]},
+  aana:{required:['status','expiration'],pages:[
+    {key:'membership',name:'membership page',direction:'Open your membership page — that’s the page I need.',fields:['status','number','expiration']},
+    {key:'transcript',name:'CE transcript',direction:'Now open your CE transcript — that’s the page I need.',fields:['classA','classB']}]},
+  licenses:{required:['status','expiry'],pages:[
+    {key:'license',name:'license lookup result',direction:'Open your license lookup result — that’s the page I need.',fields:['status','number','type','issue','expiry']}]}
+};
+function portalNavMap(source){ return PORTAL_NAV_MAPS[source]||{required:[],pages:[{key:'record',name:'record page',direction:'Open the page that lists your record — that’s the page I need.',fields:[]}]}; }
+function portalGuidePage(pc){ const map=portalNavMap(pc.source); return map.pages[Math.min(pc.page||0,map.pages.length-1)]; }
+// After a page is read (or skipped): finish at the preview when the
+// required fields are all in, or when no unshown page can still give
+// a required field; otherwise advance to the next such page.
+function portalGuideAdvance(pc){
+  const map=portalNavMap(pc.source);
+  const has=(k)=>pc.fields&&String(pc.fields[k]||'').trim()!=='';
+  const missingReq=map.required.filter(k=>!has(k));
+  if(missingReq.length){
+    for(let i=(pc.page||0)+1;i<map.pages.length;i++){
+      if((pc.skippedPages||[]).includes(i)) continue;
+      if(map.pages[i].fields.some(k=>missingReq.includes(k))){ pc.page=i; return 'next'; }
+    }
+    return 'preview';
+  }
+  // Required is complete: still offer remaining pages that could add
+  // optional detail, unless every one has been shown or skipped.
+  for(let i=(pc.page||0)+1;i<map.pages.length;i++){
+    if((pc.skippedPages||[]).includes(i)) continue;
+    if(map.pages[i].fields.some(k=>!has(k))){ pc.page=i; return 'next'; }
+  }
+  return 'preview';
+}
+// Feed one read page into the guided check. Returns 'next' (advanced
+// to the next needed page), 'preview' (record complete — show the
+// report), or 'wrong' (the page gave nothing new — re-ask by name).
+function portalGuideIngest(parsed,via,state){
+  const pc=portalCheck; if(!pc) return 'wrong';
+  const page=portalGuidePage(pc);
+  const before={...(pc.fields||{})};
+  const merged={...before};
+  for(const k of Object.keys(parsed.fields||{})){ const v=parsed.fields[k]; if(v!==undefined&&String(v).trim()!=='') merged[k]=String(v); }
+  const newKeys=Object.keys(merged).filter(k=>String(before[k]||'')!==String(merged[k]||''));
+  pc.fields=merged; pc.state=state||pc.state;
+  const fm=portalCheckFoundMissing(pc.source,merged); pc.found=fm.found; pc.missing=fm.missing;
+  if(!newKeys.length){
+    portalCheckError='That page doesn’t show your '+page.name+' — open your '+page.name+' and show me that one.';
+    portalCheckOcrStatus=''; return 'wrong';
+  }
+  pc.pagesShown=(pc.pagesShown||0)+1; pc.via=via; pc.retrievedAt=cloudNow();
+  portalCheckError='';
+  const where=portalGuideAdvance(pc);
+  if(where==='preview'){ pc.step='preview'; }
+  else { pc.notice='Got it — '+newKeys.length+' new detail'+(newKeys.length>1?'s':'')+' checked off.'; }
+  return where;
+}
+function portalGuideSkip(){
+  const pc=portalCheck; if(!pc) return;
+  pc.skippedPages=[...new Set([...(pc.skippedPages||[]),pc.page||0])];
+  portalCheckError='';
+  if(portalGuideAdvance(pc)==='preview'){ pc.step='preview'; }
+  render();
+}
+
 const PORTAL_VERIFIED_SOURCES=['public_verification','nbcrna_portal','aana_portal','state_board_portal'];
 // --- Active portal monitoring (assistant's job, for every user) ---
 // The assistant ACTIVELY watches NBCRNA, AANA, and state licenses on a
@@ -717,6 +801,8 @@ function parsePortalCheckText(text,source,opts){
   } else if(source==='aana'){
     const exp=extractExpiryDateInfo(t,opts);
     take('expiration','Membership expiration',exp.iso||'');
+    take('classA','Class A credits',portalCheckCredits(t,'class\\s*A(?:\\s+credits?)?'));
+    take('classB','Class B credits',portalCheckCredits(t,'class\\s*B(?:\\s+credits?)?'));
   } else {
     take('type','License type',/\bAPRN\b/i.test(t)?'APRN':(/\bRN\b/i.test(t)?'RN':''));
     take('issue','Issue date',portalCheckDateNear(t,'issue(?:d)?(?:\\s+date)?|issued'));
@@ -731,7 +817,7 @@ function startPortalCheck(source){
   // check, so it opens the upload/paste panel for THIS portal — no
   // canned instruction essay, no restart of step 1. One short chat
   // line points at the panel; the panel IS the check.
-  portalCheck={source,state:'West Virginia',step:'collect',fields:{},found:[],missing:[],retrievedAt:'',via:''};
+  portalCheck={source,state:'West Virginia',step:'collect',page:0,pagesShown:0,skippedPages:[],notice:'',fields:{},found:[],missing:[],retrievedAt:'',via:''};
   portalCheckError=''; portalCheckOcrStatus='';
   db.assistantChat=[...(db.assistantChat||[]),
     {role:'assistant',text:'Portal check — '+meta.title+'. Show me the page that lists your record below and I’ll read it and show you the report — nothing is saved until you approve it.'}].slice(-50);
@@ -739,7 +825,7 @@ function startPortalCheck(source){
 }
 function portalCheckFieldRows(source,f){
   if(source==='nbcrna') return field('status','Certification status','text',f.status||'')+field('number','Certification number','text',f.number||'')+field('periodStart','Certification period start','date',f.periodStart||'')+field('periodEnd','Certification period end','date',f.periodEnd||'')+field('renewalDeadline','Renewal / recertification deadline','date',f.renewalDeadline||f.periodEnd||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"')+field('macEd','MAC Ed credits','number',f.macEd??'','min="0" step="1"')+field('macDev','MAC Dev credits','number',f.macDev??'','min="0" step="1"');
-  if(source==='aana') return field('status','Membership status','text',f.status||'')+field('number','Membership number','text',f.number||'')+field('expiration','Membership expiration','date',f.expiration||'');
+  if(source==='aana') return field('status','Membership status','text',f.status||'')+field('number','Membership number','text',f.number||'')+field('expiration','Membership expiration','date',f.expiration||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"');
   return select('state','State',US_STATES,f.state||(portalCheck&&portalCheck.state)||'West Virginia')+select('type','License type',['RN','APRN'],f.type||'APRN')+field('number','License number','text',f.number||'')+field('issue','Issue date','date',f.issue||'')+field('expiry','Expiration date','date',f.expiry||'','required');
 }
 function portalCheckHTML(){
@@ -749,10 +835,13 @@ function portalCheckHTML(){
     inner=`<p class="muted">Sign in on the portal’s own page, then show me the page that lists your record — I read it, and nothing is saved until you approve.</p><div class="toolbar">${['nbcrna','aana','licenses'].map(s=>`<button type="button" data-action="assistant-portal-check" data-id="${s}">Check ${PORTAL_CHECK_SOURCES[s].short}</button>`).join('')}</div>${checks.length?`<p class="muted">Recent assistant portal checks: ${checks.slice(0,3).map(c=>`${PORTAL_CHECK_SOURCES[c.source]?PORTAL_CHECK_SOURCES[c.source].short:c.source} · ${c.retrievedAt?String(c.retrievedAt).slice(0,10):''} · ${escapeHTML(c.summary||c.status||'')}`).join('; ')}</p>`:''}`;
   } else if(portalCheck.step==='collect'){
     const m=PORTAL_CHECK_SOURCES[portalCheck.source];
-    inner=`<h3>${m.title} — show me the page that lists your record</h3><p class="muted">The app can’t see inside the portal’s tab, so bring the record page here — upload a screenshot or paste its text and I’ll read it. In the finished app, the sign-in sheet hands the page back automatically.</p><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of the portal page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste the portal text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it — show my report</button><button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
+    const map=portalNavMap(portalCheck.source), page=portalGuidePage(portalCheck);
+    const stepNo=(portalCheck.page||0)+1, stepCount=map.pages.length;
+    const rows=(PORTAL_FIELD_LABELS[portalCheck.source]||[]).map(([k,l])=>{ const got=portalCheck.fields&&String(portalCheck.fields[k]||'').trim()!==''; return `<div>${got?'✓':'○'} ${escapeHTML(l)}${got?' — got it':''}</div>`; }).join('');
+    inner=`<h3>${m.title} — step ${stepNo} of ${stepCount}</h3><p><strong>${escapeHTML(page.direction)}</strong></p>${portalCheck.notice?`<p class="hint">${escapeHTML(portalCheck.notice)}</p>`:''}<div class="item"><strong>Your record so far</strong>${rows}</div><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of that page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste that page’s text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it</button>${stepCount>1?`<button type="button" class="secondary" data-action="portal-guide-skip">Skip this page</button>`:''}${(portalCheck.pagesShown||0)>0?`<button type="button" class="secondary" data-action="portal-guide-finish">That’s everything — show my report</button>`:''}<button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
   } else {
     const m=PORTAL_CHECK_SOURCES[portalCheck.source], f=portalCheck.fields||{};
-    inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ai'?'read with AI from your screenshot':portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'}). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
+    inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ai'?'read with AI from your screenshot':portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'} · ${(portalCheck.pagesShown||0)} page${(portalCheck.pagesShown||0)===1?'':'s'} shown). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
   }
   return `<section class="panel"><h2>Ask the assistant to check my portals</h2>${inner}</section>`;
 }
@@ -777,11 +866,7 @@ async function callExtractPortalCheck(files, source){
 // however the page was read.
 function portalCheckFoundMissing(source, fields){
   const has=(k)=>fields[k]!==undefined&&String(fields[k]).trim()!=='';
-  const rows=source==='nbcrna'
-    ? [['status','Certification status'],['number','License / certification number'],['periodStart','Certification period start'],['periodEnd','Certification period end'],['renewalDeadline','Renewal / recertification deadline'],['classA','Class A credits'],['classB','Class B credits'],['macEd','MAC Ed credits'],['macDev','MAC Dev credits']]
-    : source==='aana'
-    ? [['status','Membership status'],['number','Membership number'],['expiration','Membership expiration']]
-    : [['status','License status'],['number','License / certification number'],['type','License type'],['issue','Issue date'],['expiry','Expiration date']];
+  const rows=PORTAL_FIELD_LABELS[source]||[];
   const found=[], missing=[];
   rows.forEach(([k,l])=>{ (has(k)?found:missing).push(l); });
   return {found, missing};
@@ -823,13 +908,9 @@ async function submitPortalCheck(e){
           const data=await callExtractPortalCheck([file],portalCheck.source);
           aiParsed=portalCheckFieldsFromAi(data.portal||{},data.raw_text||'',portalCheck.source);
         }catch(aiErr){ aiFailed=true; }
-        if(aiParsed&&Object.keys(aiParsed.fields).length){
-          portalCheck={...portalCheck,step:'preview',state,fields:aiParsed.fields,found:aiParsed.found,missing:aiParsed.missing,retrievedAt:cloudNow(),via:'ai'};
-          portalCheckError=''; portalCheckOcrStatus=''; render(); return;
-        }
         if(aiParsed){
           portalCheckOcrStatus='';
-          portalCheckError='The assistant read the page but found no status, dates, or numbers it recognises. Check the screenshot shows the record itself (not just the sign-in page), or paste the details. Nothing was saved.';
+          portalGuideIngest(aiParsed,'ai',state);
           render(); return;
         }
         if(aiFailed) portalCheckOcrStatus='AI reading isn’t available right now — reading on this device instead…';
@@ -844,12 +925,8 @@ async function submitPortalCheck(e){
   } else if(pasted){ text=pasted; via='pasted'; }
   else { portalCheckError='Upload a screenshot of the portal page, or paste the portal text — nothing was read yet, and nothing was saved.'; render(); return; }
   const parsed=parsePortalCheckText(text,portalCheck.source,{ocr:via==='ocr'});
-  if(!Object.keys(parsed.fields).length){
-    portalCheckError='The assistant read the page but found no status, dates, or numbers it recognises. Check the screenshot shows the record itself (not just the sign-in page), or paste the details. Nothing was saved.';
-    render(); return;
-  }
-  portalCheck={...portalCheck,step:'preview',state,fields:parsed.fields,found:parsed.found,missing:parsed.missing,retrievedAt:cloudNow(),via};
-  portalCheckError=''; render();
+  portalGuideIngest(parsed,via,state);
+  render();
 }
 // Save an approved assistant portal check into the same records manual entry
 // uses (NBCRNA / AANA / licenses), with provenance
@@ -867,7 +944,7 @@ function applyPortalCheckRecord(source,f,when){
   }
   if(source==='aana'){
     const cur=db.aana||{};
-    db.aana={...cur,status:f.status||cur.status||'',number:f.number||cur.number||'',expiration:f.expiration||cur.expiration||'',docNote:cur.docNote||'',ceNote:cur.ceNote||'',reminders:cur.reminders||'90,60,30,7',source:keep(cur),updatedAt:new Date().toISOString()};
+    db.aana={...cur,status:f.status||cur.status||'',number:f.number||cur.number||'',expiration:f.expiration||cur.expiration||'',classA:f.classA!==undefined?f.classA:(cur.classA??''),classB:f.classB!==undefined?f.classB:(cur.classB??''),docNote:cur.docNote||'',ceNote:cur.ceNote||'',reminders:cur.reminders||'90,60,30,7',source:keep(cur),updatedAt:new Date().toISOString()};
     cloudSyncTimes.aana=when; cloudSaveKind('aana');
     return 'AANA '+(f.status||db.aana.status||'')+' · expires '+(db.aana.expiration||'unknown');
   }
@@ -2424,7 +2501,7 @@ function actions(action,entry,date){if(action.startsWith('live-')){if(typeof liv
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
 if(action==='mileage-autocalc')return calcMileageForForm();if(action==='facility-distance')return calcFacilityDistance();if(action==='edit-paystub'){editId=entry;tab='Facilities';paystubPreview=null;paystubError='';paystubStatus='';render();const el=document.getElementById('paystub-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return;}
 if(action==='delete-paystub'){if(!confirm("Delete this agency's pay schedule? Only this agency's estimated paychecks are removed — other agencies are untouched."))return;db.payStubs=(db.payStubs||[]).filter(x=>x.id!==entry);persist();return render()}

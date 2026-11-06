@@ -137,11 +137,11 @@ t('Connect AANA opens the real AANA login URL in a new tab',
   sandbox.__openedAana.length === 2 && sandbox.__openedAana[1] === 'https://www.aana.com/login');
 t('"I signed in — check it" opens the check step directly (collect step, NBCRNA) — Nov 6 flow fix',
   sandbox.__checkStep === 'collect' && sandbox.__checkSource === 'nbcrna');
-t('collect step is the upload/paste panel for that portal, not an instruction restart',
-  sandbox.__assistantHtml.includes('show me the page that lists your record') &&
+t('collect step is the guided panel for that portal (names the page it needs), not an instruction restart',
+  sandbox.__assistantHtml.includes('Open your certification record — that’s the page I need.') &&
   sandbox.__assistantHtml.includes('name="shotFile"') &&
   sandbox.__assistantHtml.includes('name="pasted"') &&
-  sandbox.__assistantHtml.includes('Read it — show my report') &&
+  sandbox.__assistantHtml.includes('Read it') &&
   !sandbox.__assistantHtml.includes('<ol') &&
   !sandbox.__assistantHtml.includes('Open the portal and sign in yourself') &&
   !sandbox.__assistantHtml.includes(STANDIN) && !sandbox.__assistantHtml.includes('standin'));

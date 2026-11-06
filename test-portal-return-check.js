@@ -129,14 +129,15 @@ run(`
   globalThis.__chatTail = (db.assistantChat || []).slice(-1)[0];
   globalThis.__chatAll = (db.assistantChat || []).map(m => m.text).join('\\n');
 `);
-t('check step opens the upload/paste panel for THAT portal directly',
-  sandbox.__collectHtml.includes('NBCRNA — show me the page that lists your record') &&
+t('check step opens the guided panel for THAT portal directly (step 1 names the page it needs)',
+  sandbox.__collectHtml.includes('NBCRNA — step 1 of 2') &&
+  sandbox.__collectHtml.includes('Open your certification record — that’s the page I need.') &&
   sandbox.__collectHtml.includes('name="shotFile"') &&
   sandbox.__collectHtml.includes('name="pasted"') &&
-  sandbox.__collectHtml.includes('Read it — show my report'));
-t('check step copy is one honest line about why the page is needed (web tab vs finished-app sheet)',
-  sandbox.__collectHtml.includes('can’t see inside the portal’s tab') &&
-  sandbox.__collectHtml.includes('sign-in sheet hands the page back automatically'));
+  sandbox.__collectHtml.includes('Read it'));
+t('guided step copy is one short direction line — no web-vs-native lecture',
+  !sandbox.__collectHtml.includes('can’t see inside the portal’s tab') &&
+  !sandbox.__collectHtml.includes('sign-in sheet hands the page back'));
 t('no instruction essay anywhere: no numbered restart list, no per-source how, no canned chat essay',
   !sandbox.__collectHtml.includes('<ol') &&
   !sandbox.__collectHtml.includes('Open the portal and sign in yourself') &&
@@ -203,10 +204,17 @@ t('canned portal answer is one short line pointing at the check step',
     startPortalCheck('nbcrna');
   `);
   await run(`submitPortalCheck({currentTarget: globalThis.__shotForm})`);
+  // Guided flow: the OCR'd page is only the record page (no CPC
+  // credits on it), so the assistant checks those fields off and
+  // advances to the CPC progress page — via=ocr, still a real check.
   t('when the AI read is unavailable the screenshot still checks via on-device OCR (via=ocr)',
-    run(`portalCheck && portalCheck.step`) === 'preview' &&
+    run(`portalCheck && portalCheck.step`) === 'collect' &&
+    run(`portalCheck && portalCheck.page`) === 1 &&
     run(`portalCheck && portalCheck.via`) === 'ocr' &&
     run(`portalCheck && portalCheck.fields.status`) === 'Certified');
+  run(`actions('portal-guide-finish')`);
+  t('finishing after the OCR read shows the preview report',
+    run(`portalCheck && portalCheck.step`) === 'preview');
 
   // --- 9. Pasted text still produces a preview report (and saves nothing).
   run(`
@@ -215,7 +223,16 @@ t('canned portal answer is one short line pointing at the check step',
     globalThis.__pasteForm = { _entries: [['pasted','AANA Membership Membership status: Active Membership number: 126402 Membership expiration: June 30, 2027']], querySelector: () => null };
   `);
   await run(`submitPortalCheck({currentTarget: globalThis.__pasteForm})`);
-  t('pasted portal text produces the extracted preview report for that portal',
+  // Guided flow (Nov 6, 2026): the membership page filled the required
+  // fields, so the assistant advances to the next page it needs — the
+  // CE transcript — instead of jumping straight to the report.
+  t('pasted membership page advances the guided flow to the CE transcript page',
+    run(`portalCheck && portalCheck.step`) === 'collect' &&
+    run(`portalCheck && portalCheck.page`) === 1 &&
+    run(`portalCheck && portalCheck.fields.expiration`) === '2027-06-30' &&
+    run(`db.aana && db.aana.status`) !== 'Active');
+  run(`actions('portal-guide-finish')`);
+  t('finishing from there shows the extracted preview report (still nothing saved)',
     run(`portalCheck && portalCheck.step`) === 'preview' &&
     run(`portalCheck && portalCheck.source`) === 'aana' &&
     run(`portalCheck && portalCheck.fields.expiration`) === '2027-06-30' &&
@@ -245,8 +262,8 @@ t('canned portal answer is one short line pointing at the check step',
     idx.includes('normalizeAiPortalCheck') && norm.includes('export function normalizeAiPortalCheck'));
 
   // --- 12. Cache bumped for the shell change.
-  t('service worker cache bumped to v46',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v46'));
+  t('service worker cache bumped to v47',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v47'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();
