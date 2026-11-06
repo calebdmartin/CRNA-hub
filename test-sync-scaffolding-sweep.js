@@ -123,7 +123,6 @@ run(`
 const pages = {
   Dashboard: run(`dashboard()`),
   Facilities: run(`facilitiesPage()`),
-  PTO: run(`ptoPage()`),
   Credentials: run(`credentialsPage()`),
   Mileage: run(`mileagePage()`),
   Assistant: run(`assistantPage()`),
