@@ -86,8 +86,8 @@ const t = (name, cond) => {
     page.includes('<details class="panel collapse-panel" id="facility-manual-panel">'));
   t('manual pay-schedule form is nested-collapsed inside the pay stub panel',
     page.includes('<details class="collapse-sub" id="paystub-manual">'));
-  t('contract panel stays a plain open panel at the top with the one read button',
-    page.includes('<section class="panel" id="facility-contract-panel">') &&
+  t('contract upload is its own collapse panel above the pay stub panel, with the one read button',
+    page.includes('<details class="panel collapse-panel" id="facility-contract-panel"') &&
     page.includes('Read my contract') &&
     page.indexOf('facility-contract-panel') < page.indexOf('paystub-panel') &&
     page.indexOf('paystub-panel') < page.indexOf('facility-manual-panel'));
