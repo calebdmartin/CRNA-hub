@@ -39,6 +39,18 @@
 // pay schedule per agency from the frequency + pay date and shows a
 // preview before saving anything; the stub photo itself is never
 // stored, server-side or client-side.
+//
+// Portal-check mode (Nov 6, 2026, mode: "portal"): photos of a
+// credentialing portal page the user signed into THEMSELVES (NBCRNA /
+// AANA / a state board lookup — body.portalSource says which) return
+// { ok: true, mode: "portal", portal, raw_text, model } where portal
+// is the normalised AiPortalCheck shape (status, number, period /
+// renewal dates, Class A / B and MAC Ed / Dev progress, license
+// fields — null where the page does not state a value). The client
+// shows the extraction as the check's preview report and saves
+// nothing until the user approves it. No portal password is ever
+// involved: the user signs in on the portal's own page and brings
+// back a screenshot of the record page.
 
 import {
   CORS,
@@ -49,6 +61,7 @@ import {
 import {
   normalizeAiContract,
   normalizeAiPaystub,
+  normalizeAiPortalCheck,
   normalizeAiSchedule,
   normalizeAiRule,
   extractAiContent,
@@ -142,6 +155,29 @@ function rulePrompt(): string {
   );
 }
 
+// Portal-check mode prompt: the record page for one credentialing
+// portal. Only what the page states — the client treats the result as
+// a preview report, never as a verified pull, and saves nothing
+// until the user approves it.
+function portalPrompt(source: string): string {
+  const which = source === "aana"
+    ? "an AANA member page (membership status / CE transcript)"
+    : source === "licenses"
+    ? "a state board of nursing license lookup result page"
+    : "an NBCRNA certification record page";
+  return (
+    "Read these photos of " + which + ". The user signed in themselves and photographed the page that lists their record. " +
+    "Return ONLY a JSON object with these keys, using null where the page does not state a value: " +
+    "status, number, period_start, period_end, renewal_deadline, class_a, class_b, mac_ed, mac_dev, expiration, license_type, issue_date, expiry, state, raw_text. " +
+    "status is the certification / membership / license status exactly as printed (e.g. Certified, Active). " +
+    "number is the certification / membership / license number. " +
+    "period_start and period_end are the certification period dates (YYYY-MM-DD); renewal_deadline is the renewal / recertification deadline when the page states one. " +
+    "class_a and class_b are CE credit totals; mac_ed and mac_dev are the MAC Ed / MAC Dev credit totals — numbers without commas. " +
+    "expiration is a membership expiration date; license_type is APRN or RN; issue_date and expiry are the license issue and expiration dates; state is the licensing state when printed. " +
+    "raw_text is the full text visible on the page. Do not invent any value."
+  );
+}
+
 const KEY_MISSING_MESSAGE =
   "AI reading isn't set up yet — add the OpenAI key in Supabase (Edge Functions → Manage secrets → OPENAI_API_KEY)";
 
@@ -183,7 +219,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
-    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rule" ? "rule" : "contract";
+    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rule" ? "rule" : body.mode === "portal" ? "portal" : "contract";
+    const portalSource = typeof body.portalSource === "string" &&
+      ["nbcrna", "aana", "licenses"].includes(body.portalSource)
+      ? body.portalSource
+      : "nbcrna";
     const scheduleName = typeof body.scheduleName === "string"
       ? body.scheduleName.trim()
       : "";
@@ -228,7 +268,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : PROMPT,
+        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -290,7 +330,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           error: "openai_bad_response",
           message:
             "OpenAI answered without readable " +
-            (mode === "schedule" ? "schedule" : mode === "paystub" ? "pay stub" : "contract") +
+            (mode === "schedule" ? "schedule" : mode === "paystub" ? "pay stub" : mode === "portal" ? "portal page" : "contract") +
             " data — try again, or use on-device OCR.",
         },
         502,
@@ -321,6 +361,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (mode === "rule") {
       const rule = normalizeAiRule(raw);
       return json({ ok: true, mode: "rule", rule, model: MODEL });
+    }
+    if (mode === "portal") {
+      const portal = normalizeAiPortalCheck(raw);
+      const rawText = (raw as Record<string, unknown>)["raw_text"];
+      return json({
+        ok: true,
+        mode: "portal",
+        portal,
+        raw_text: typeof rawText === "string" ? rawText : (portal.raw_text ?? ""),
+        model: MODEL,
+      });
     }
     const rates = normalizeAiContract(raw);
     return json({ ok: true, rates, raw_text: rates.raw_text, model: MODEL });

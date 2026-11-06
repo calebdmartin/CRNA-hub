@@ -135,13 +135,16 @@ t('Connect NBCRNA opens the real NBCRNA portal URL in a new tab',
   sandbox.__openedNbcrna.length === 1 && sandbox.__openedNbcrna[0] === 'https://portal.nbcrna.com/');
 t('Connect AANA opens the real AANA login URL in a new tab',
   sandbox.__openedAana.length === 2 && sandbox.__openedAana[1] === 'https://www.aana.com/login');
-t('"I signed in — check it" starts the assistant check (intro step, NBCRNA)',
-  sandbox.__checkStep === 'intro' && sandbox.__checkSource === 'nbcrna');
-t('portal-check intro step states the clean per-source how, with no scaffolding',
-  sandbox.__assistantHtml.includes('Open the portal and sign in yourself') &&
-  !sandbox.__assistantHtml.includes('system sign-in sheet') &&
-  !sandbox.__assistantHtml.includes(STANDIN) && !sandbox.__assistantHtml.includes('standin') &&
-  sandbox.__assistantHtml.includes('MAC Ed / MAC Dev'));
+t('"I signed in — check it" opens the check step directly (collect step, NBCRNA) — Nov 6 flow fix',
+  sandbox.__checkStep === 'collect' && sandbox.__checkSource === 'nbcrna');
+t('collect step is the upload/paste panel for that portal, not an instruction restart',
+  sandbox.__assistantHtml.includes('show me the page that lists your record') &&
+  sandbox.__assistantHtml.includes('name="shotFile"') &&
+  sandbox.__assistantHtml.includes('name="pasted"') &&
+  sandbox.__assistantHtml.includes('Read it — show my report') &&
+  !sandbox.__assistantHtml.includes('<ol') &&
+  !sandbox.__assistantHtml.includes('Open the portal and sign in yourself') &&
+  !sandbox.__assistantHtml.includes(STANDIN) && !sandbox.__assistantHtml.includes('standin'));
 
 // --- 4. Assistant tab intro + assistant answer: final first, stand-in labelled.
 run(`portalCheck = null; globalThis.__portalIntro = portalCheckHTML();`);
@@ -150,11 +153,12 @@ t('Assistant portal-check intro is one clean line + Check buttons, no scaffoldin
   !sandbox.__portalIntro.includes('system sign-in sheet') &&
   !sandbox.__portalIntro.includes(STANDIN) && !sandbox.__portalIntro.includes('standin'));
 run(`globalThis.__answer = answerQuestion('check my NBCRNA portal');`);
-t('assistant answer is clean: sign in yourself, show the page, nothing saved until approved',
+t('assistant answer is ONE short line pointing at the check step (canned essay gone — Nov 6)',
   !sandbox.__answer.includes('system sign-in sheet') &&
   !sandbox.__answer.includes(STANDIN) &&
-  sandbox.__answer.includes('never store a portal password') &&
-  sandbox.__answer.includes('never call a record verified unless I actually read it'));
+  sandbox.__answer.includes('I signed in — check it') &&
+  sandbox.__answer.includes('nothing is saved until you approve') &&
+  sandbox.__answer.length < 300);
 
 // --- 5. Onboarding step 4: one-line direction; the final model +
 // stand-in labelling live on the Credentials page (the destination).

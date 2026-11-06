@@ -301,7 +301,7 @@ function answerQuestion(raw){
   if(/shift.*(coming|upcoming|next)|upcoming shift/.test(l)){const up=assistantUpcoming();if(!up.length)return 'You have no upcoming shifts recorded on this device. Add one from the Dashboard, or import a schedule CSV.';const top=up.slice(0,5),total=up.filter(isBillableShift).reduce((s,x)=>s+num(x.pay),0),conf=up.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).reduce((s,x)=>s+num(x.pay),0);return `You have ${up.length} upcoming shift(s) recorded, worth ${currency(total)} in expected gross (proposed-inclusive; ${currency(conf)} of that is confirmed). Next up: ${top.map(x=>`${fmt(x.date)} at ${x.facility} (${x.type}, ${x.pay===''||x.incomplete?'pay not yet priced':currency(x.pay)}, ${shiftStatusLabel(x.status)})`).join('; ')}${up.length>5?` — plus ${up.length-5} more.`:''}`}
   if(/this year|year.*(income|gross|earn|pay)|income.*year|annual (income|gross|pay)|how much.*year/.test(l)){const y=currentYear(),cur=shiftsForYear(y);if(!cur.length)return `No shifts are recorded for ${y} yet, so I can't project this year's income. Add shifts or import a CSV, and this answer will use them.`;const split=yearIncomeSplit(y);return `Income for ${y}, from recorded shifts only — three totals, same split as the Dashboard: C (confirmed only) ${currency(split.c.ytd)} year to date and ${currency(split.c.predicted)} predicted annual; S (submitted-inclusive — confirmed plus submitted, if every submitted date is approved) ${currency(split.s.ytd)} year to date and ${currency(split.s.predicted)} predicted annual; P (proposed-inclusive — S plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date and ${currency(split.p.predicted)} predicted annual. None of these is paid income — they are estimates from scheduled shifts. Shifts from other years are not included.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in any of the three totals.`:''}${split.w2Salary?` ${split.w2Salary} W-2 salary day(s) are excluded — paid through W-2 salary, never double-counted.`:''}`}
   if(/income|projected|earn|gross|pay.*month|this month/.test(l)){const cur=assistantMonthShifts();if(!cur.length)return 'No shifts are recorded for this month, so I can\'t project income yet. Add shifts or import a CSV, and this answer will use them.';const m=monthIncomeSplit(localDate(new Date()).slice(0,7));const by={};cur.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).forEach(x=>{by[x.facility||'Unknown']=(by[x.facility||'Unknown']||0)+num(x.pay)});return `Projected income this month, from recorded shifts only — three totals, same split as the Dashboard: C (confirmed only) ${currency(m.c)}; S (submitted-inclusive) ${currency(m.s)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). By facility (confirmed only): ${Object.keys(by).length?Object.entries(by).map(([f,v])=>`${f} ${currency(v)}`).join('; '):'no confirmed shifts yet'}. None of these is paid income.${m.unpriced?` ${m.unpriced} shift(s) this month are unpriced and are not included in any total.`:''}`}
-  if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'A portal check works like this: you sign in to the portal yourself — the app never sees your password. Then you show me the page that lists your record (a screenshot, or the copied text). I read it, show you exactly what I found, and save nothing until you approve it. I never store a portal password, and I never call a record verified unless I actually read it. Tap the Check buttons in the portal-check section below, or the “I signed in — check it” button on any Connect card on the Credentials tab.';
+  if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: tap “I signed in — check it” on the portal’s Connect card (or a Check button below), then show me the page that lists your record — I read it and show you the report, and nothing is saved until you approve it.';
   if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — open the Assistant tab and tap Run check.`:''} Public checks run automatically where the source allows it; private portals run when you sign in yourself, and the assistant prompts you when a sign-in is due.`;}
   if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, and state license dates are entered.';return `Credentials needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records a portal pull brought back are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
   if(/mileage|miles|trip/.test(l)){if(!db.mileage.length)return 'No mileage trips are logged yet. Log one from the Mileage tab, or generate schedule-based drafts there and confirm each trip.';const total=verifiedMileageTotal(),verified=verifiedMileageTrips().length,draft=db.mileage.filter(x=>x.status==='draft').length;return `Mileage on this device: ${total.toFixed(1)} verified miles across ${verified} confirmed trip(s), including ${draft} draft(s) still needing confirmation (drafts are not counted until the weekly review confirms them). Mileage defaults to ${tripTypeLabel(mileageTripType())}, and each trip shows whether it is round trip or one way — a round-trip trip is counted once, never doubled. Drafts are not verified trips — confirm the trip occurred and the actual miles before using them.`}
@@ -727,11 +727,14 @@ function parsePortalCheckText(text,source,opts){
 }
 function startPortalCheck(source){
   const meta=PORTAL_CHECK_SOURCES[source]; if(!meta) return;
-  portalCheck={source,state:'West Virginia',step:'intro',fields:{},found:[],missing:[],retrievedAt:'',via:''};
+  // Straight to the check step (Nov 6, 2026): the button promises a
+  // check, so it opens the upload/paste panel for THIS portal — no
+  // canned instruction essay, no restart of step 1. One short chat
+  // line points at the panel; the panel IS the check.
+  portalCheck={source,state:'West Virginia',step:'collect',fields:{},found:[],missing:[],retrievedAt:'',via:''};
   portalCheckError=''; portalCheckOcrStatus='';
   db.assistantChat=[...(db.assistantChat||[]),
-    {role:'user',text:'Ask the assistant to check my '+meta.title+' portal'},
-    {role:'assistant',text:'Portal check — '+meta.title+'. '+meta.how+' I will never store your portal password, and nothing is saved until you approve it. Start below: open the portal, sign in yourself, and bring back a screenshot (or the text) of the page that shows your record.'}].slice(-50);
+    {role:'assistant',text:'Portal check — '+meta.title+'. Show me the page that lists your record below and I’ll read it and show you the report — nothing is saved until you approve it.'}].slice(-50);
   persist(); tab='Assistant'; render();
 }
 function portalCheckFieldRows(source,f){
@@ -743,15 +746,60 @@ function portalCheckHTML(){
   const checks=(db.portalChecks||[]);
   let inner='';
   if(!portalCheck){
-    inner=`<p class="muted">Sign in on the portal’s own page, screenshot the page that shows your record, and bring it back here — the assistant reads it and saves nothing until you approve. No portal password is ever stored.</p><div class="toolbar">${['nbcrna','aana','licenses'].map(s=>`<button type="button" data-action="assistant-portal-check" data-id="${s}">Check ${PORTAL_CHECK_SOURCES[s].short}</button>`).join('')}</div><p class="muted">Some portals can’t be pulled directly — for those, the assistant reads the page you show it.</p>${checks.length?`<p class="muted">Recent assistant portal checks: ${checks.slice(0,3).map(c=>`${PORTAL_CHECK_SOURCES[c.source]?PORTAL_CHECK_SOURCES[c.source].short:c.source} · ${c.retrievedAt?String(c.retrievedAt).slice(0,10):''} · ${escapeHTML(c.summary||c.status||'')}`).join('; ')}</p>`:''}`;
-  } else if(portalCheck.step==='intro'){
+    inner=`<p class="muted">Sign in on the portal’s own page, then show me the page that lists your record — I read it, and nothing is saved until you approve.</p><div class="toolbar">${['nbcrna','aana','licenses'].map(s=>`<button type="button" data-action="assistant-portal-check" data-id="${s}">Check ${PORTAL_CHECK_SOURCES[s].short}</button>`).join('')}</div>${checks.length?`<p class="muted">Recent assistant portal checks: ${checks.slice(0,3).map(c=>`${PORTAL_CHECK_SOURCES[c.source]?PORTAL_CHECK_SOURCES[c.source].short:c.source} · ${c.retrievedAt?String(c.retrievedAt).slice(0,10):''} · ${escapeHTML(c.summary||c.status||'')}`).join('; ')}</p>`:''}`;
+  } else if(portalCheck.step==='collect'){
     const m=PORTAL_CHECK_SOURCES[portalCheck.source];
-    inner=`<h3>Portal check — ${m.title}</h3><p class="muted">${m.how}</p><ol class="muted"><li>Open the portal and sign in yourself: <a href="${m.url}" target="_blank" rel="noopener">${m.siteLabel}</a>.</li><li>Screenshot the page that shows your record — status, dates, and totals — or copy its text.</li><li>Upload the screenshot or paste the text below. The assistant reads it, shows you what it found, and saves nothing until you approve.</li></ol><p class="muted">What it looks for: ${m.what}. Anything it cannot read is left blank for you to fill in — never guessed.</p><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of the portal page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste the portal text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read the page — preview only (nothing saved yet)</button><button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
+    inner=`<h3>${m.title} — show me the page that lists your record</h3><p class="muted">The app can’t see inside the portal’s tab, so bring the record page here — upload a screenshot or paste its text and I’ll read it. In the finished app, the sign-in sheet hands the page back automatically.</p><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of the portal page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste the portal text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it — show my report</button><button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
   } else {
     const m=PORTAL_CHECK_SOURCES[portalCheck.source], f=portalCheck.fields||{};
-    inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'}). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
+    inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ai'?'read with AI from your screenshot':portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'}). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
   }
   return `<section class="panel"><h2>Ask the assistant to check my portals</h2>${inner}</section>`;
+}
+// Live-AI read of a portal record page (extract-contract mode
+// 'portal' — the same vision path as contracts and pay stubs). The
+// model returns the record's structured fields + the page's raw
+// text; the caller merges both and shows the preview report.
+async function callExtractPortalCheck(files, source){
+  if(!SUPABASE_CONFIGURED) throw new Error('Supabase is not configured yet.');
+  if(!cloudSession) throw new Error('Not signed in — sign in on the Account tab first.');
+  const images=await aiContractImagesDataURLs(files);
+  if(!images.length) throw new Error('Could not read these photos in this browser — try JPG or PNG exports.');
+  let data;
+  try{ data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'portal',portalSource:source,images}); }
+  catch(e){ if(e&&e.data&&e.data.error==='openai_key_missing'){ const k=new Error(AI_KEY_MISSING_MESSAGE); k.data=e.data; throw k; } throw e; }
+  if(data&&data.error==='openai_key_missing') throw new Error(AI_KEY_MISSING_MESSAGE);
+  if(!data||data.ok===false) throw new Error((data&&data.message)||(data&&data.error)||'AI reading failed.');
+  return data;
+}
+// Found / missing labels for a merged field set — the same labels the
+// deterministic text parser reports, so the preview reads the same
+// however the page was read.
+function portalCheckFoundMissing(source, fields){
+  const has=(k)=>fields[k]!==undefined&&String(fields[k]).trim()!=='';
+  const rows=source==='nbcrna'
+    ? [['status','Certification status'],['number','License / certification number'],['periodStart','Certification period start'],['periodEnd','Certification period end'],['renewalDeadline','Renewal / recertification deadline'],['classA','Class A credits'],['classB','Class B credits'],['macEd','MAC Ed credits'],['macDev','MAC Dev credits']]
+    : source==='aana'
+    ? [['status','Membership status'],['number','Membership number'],['expiration','Membership expiration']]
+    : [['status','License status'],['number','License / certification number'],['type','License type'],['issue','Issue date'],['expiry','Expiration date']];
+  const found=[], missing=[];
+  rows.forEach(([k,l])=>{ (has(k)?found:missing).push(l); });
+  return {found, missing};
+}
+// Merge an AI portal read with the deterministic parse of its raw
+// text: the union of both, the AI's structured fields winning where
+// both read a value. Nothing is invented — a field neither read
+// stays absent and is reported missing.
+function portalCheckFieldsFromAi(portal, rawText, source){
+  const fromText=rawText?parsePortalCheckText(rawText,source,{}):{fields:{}};
+  const fields={...fromText.fields};
+  const map={status:'status',number:'number',periodStart:'period_start',periodEnd:'period_end',renewalDeadline:'renewal_deadline',classA:'class_a',classB:'class_b',macEd:'mac_ed',macDev:'mac_dev',expiration:'expiration',type:'license_type',issue:'issue_date',expiry:'expiry',state:'state'};
+  for(const k of Object.keys(map)){
+    const v=portal?portal[map[k]]:null;
+    if(v!==null&&v!==undefined&&String(v).trim()!=='') fields[k]=String(v);
+  }
+  const fm=portalCheckFoundMissing(source,fields);
+  return {fields,found:fm.found,missing:fm.missing};
 }
 async function submitPortalCheck(e){
   if(!portalCheck) return;
@@ -764,6 +812,27 @@ async function submitPortalCheck(e){
     try{
       if(file.type.startsWith('image/')||/\.(png|jpe?g|webp|heic)$/i.test(file.name)){
         portalCheckOcrStatus='Reading your screenshot — this can take a few seconds…';
+        render();
+        // Live AI first (the same vision path as contracts / certs):
+        // its structured read IS the check's report. On-device OCR
+        // is the automatic fallback when the AI read is unavailable
+        // (signed out, key missing, network) — with an honest status
+        // line saying so, never a silent downgrade.
+        let aiParsed=null, aiFailed=false;
+        try{
+          const data=await callExtractPortalCheck([file],portalCheck.source);
+          aiParsed=portalCheckFieldsFromAi(data.portal||{},data.raw_text||'',portalCheck.source);
+        }catch(aiErr){ aiFailed=true; }
+        if(aiParsed&&Object.keys(aiParsed.fields).length){
+          portalCheck={...portalCheck,step:'preview',state,fields:aiParsed.fields,found:aiParsed.found,missing:aiParsed.missing,retrievedAt:cloudNow(),via:'ai'};
+          portalCheckError=''; portalCheckOcrStatus=''; render(); return;
+        }
+        if(aiParsed){
+          portalCheckOcrStatus='';
+          portalCheckError='The assistant read the page but found no status, dates, or numbers it recognises. Check the screenshot shows the record itself (not just the sign-in page), or paste the details. Nothing was saved.';
+          render(); return;
+        }
+        if(aiFailed) portalCheckOcrStatus='AI reading isn’t available right now — reading on this device instead…';
         render();
         try{ text=await ocrImageFile(file); }catch(err){ portalCheckOcrStatus=''; portalCheckError='Could not read this picture: '+err.message+' Try a clearer screenshot, or paste the portal text instead. Nothing was saved.'; render(); return; }
         portalCheckOcrStatus='';
@@ -1454,7 +1523,7 @@ function credentialsPage(){
   // Connect card: the FINAL model leads — system sign-in sheet, Face ID,
   // no passwords in the app. The new-tab sign-in below it is a
   // clearly-labelled preview stand-in (class "standin"), not the design.
-  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];return `<section class="panel"><h2>${title}</h2><p><strong>Status: ${escapeHTML(st.label)}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p><p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>${escapeHTML(siteLabel)} is open in a new tab.</strong> Sign in there, then tap “I signed in — check it”.</p>`:''}<div class="toolbar"><button type="button" data-action="connect-portal" data-id="${title}">Connect ${title} — open portal</button><button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div></section>`};
+  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];return `<section class="panel"><h2>${title}</h2><p><strong>Status: ${escapeHTML(st.label)}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p><p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>Signed in over there?</strong> One tap brings you back and starts your check.</p>`:''}<div class="toolbar"><button type="button" data-action="connect-portal" data-id="${title}">Connect ${title} — open portal</button>${opened?`<button type="button" data-action="portal-return" data-id="${portalKey}">I’m back — run my check</button>`:''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div></section>`};
   const nbcrnaManual=(n.status||n.number||n.renewalDeadline||n.periodEnd)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const aanaManual=(a.status||a.number||a.expiration)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const licManual=db.licenses.length?db.licenses.length+' license record(s) on file — entered by hand, not verified.':'No license records on file yet.';
@@ -2355,7 +2424,7 @@ function actions(action,entry,date){if(action.startsWith('live-')){if(typeof liv
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){editId=null;showShiftForm=false;facilitySuggestionPrefill=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
 if(action==='mileage-autocalc')return calcMileageForForm();if(action==='facility-distance')return calcFacilityDistance();if(action==='edit-paystub'){editId=entry;tab='Facilities';paystubPreview=null;paystubError='';paystubStatus='';render();const el=document.getElementById('paystub-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return;}
 if(action==='delete-paystub'){if(!confirm("Delete this agency's pay schedule? Only this agency's estimated paychecks are removed — other agencies are untouched."))return;db.payStubs=(db.payStubs||[]).filter(x=>x.id!==entry);persist();return render()}
@@ -3674,36 +3743,77 @@ function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not 
   if (row.status === 'failed') return { label: 'Not verified', detail: 'Last pull failed' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
   return { label: 'Not verified', detail: 'No successful pull yet — use Connect below, or the manual entry fallback' }; }
 function portalSourceLabel(source, when) { const labels = { 'public_verification': 'Verified — NBCRNA public lookup', 'nbcrna_portal': 'Verified — NBCRNA portal', 'aana_portal': 'Verified — AANA member sign-in', 'state_board_portal': 'Verified — state board lookup', 'assistant_portal_check': 'Assistant portal check — read from the portal page you showed the assistant', 'user_entered': 'User-entered — not verified' }; return (labels[source] || 'User-entered — not verified') + (when ? ' · ' + cloudFmtWhen(when) : ''); }
-// --- Connect: open the REAL portal (preview stand-in for the final sheet) ---
-// FINAL native design (see PORTAL_NATIVE_SPEC above): Connect opens the
-// portal in Apple's system sign-in sheet (ASWebAuthenticationSession) —
-// iPhone Passwords + Face ID fill the login, the app never sees a portal
-// password, and the assistant reads the record page and previews it before
-// saving. This web preview cannot open a system sheet, so Connect below is
-// the PREVIEW STAND-IN: it opens the official sign-in page in a new browser
-// tab, where the user's own browser, Face ID, and saved passwords work.
-// The user signs in there, comes back, and taps "I signed in — check it",
-// which opens the assistant portal-check flow (screenshot or pasted text,
-// preview before save). The stand-in is labelled as such everywhere it
-// appears (PORTAL_STANDIN_LABEL, class "standin") — never present it as
-// the final flow, and never build preview-only workarounds into the native
-// layer. No portal password is ever collected, sent, or stored by this app.
-// Server-side pulls stay blocked — NBCRNA public verification submit 404s,
-// AANA SSO sign-in is bot-gated, WV/OH board lookups block automation —
-// and the old in-app AANA username/password form could never complete a
-// sign-in (the server connect-aana endpoint was deleted Nov 5, 2026 —
-// audit F9; see supabase/functions/portal-sync/index.ts).
+// --- Portal connect flow (final-product structure, Nov 6, 2026) ---
+// ONE flow object per portal, built by portalConnectFlow() and shared
+// by every Connect card (NBCRNA, AANA, State Licenses — and any portal
+// added to PORTAL_CHECK_SOURCES later gets the same flow). The flow's
+// steps are open() -> returnToApp() -> the assistant check, and they
+// are the FINAL product's steps (see PORTAL_NATIVE_SPEC): in the
+// finished native app, open() is Apple's system sign-in sheet
+// (ASWebAuthenticationSession) — iPhone Passwords + Face ID fill the
+// login, the app never sees a portal password, and when sign-in
+// finishes the sheet RETURNS the user to the app automatically, where
+// returnToApp() hands straight into the check. The web build cannot
+// be redirected back by a third-party portal — the portal will never
+// send the user to our URL — so open() uses a new tab (the user's own
+// saved passwords / Face ID work there), the card shows a persistent
+// one-tap return prompt, and returnToApp() closes the portal tab when
+// this build opened it in a window it holds a handle to. Nothing here
+// fakes an automatic redirect the web cannot do.
+// Server-side pulls stay blocked — NBCRNA public verification submit
+// 404s, AANA SSO sign-in is bot-gated, WV/OH board lookups block
+// automation — so the check reads the record page the user brings
+// back (screenshot or pasted text) and previews it before saving.
 // (portalCall/portalRefreshStatus below still serve the monitoring log.)
-let portalOpened = {}; // portalKey -> true once Connect opened the real portal in a new tab this session
+let portalOpened = {}; // portalKey -> true once Connect opened the portal this session
+const portalFlows = {}; // portalKey -> connect flow object
+function portalConnectFlow(key) {
+  const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return null;
+  if (!portalFlows[key]) {
+    portalFlows[key] = {
+      key, meta, win: null, openedAt: '', returnedAt: '',
+      open() {
+        this.openedAt = new Date().toISOString();
+        this.returnedAt = '';
+        let win = null;
+        try { win = window.open(this.meta.url, '_blank'); } catch (e) {}
+        // Keep the handle so returnToApp() can close the tab — but
+        // sever the opener link at once, so the portal gets no handle
+        // back into this app.
+        if (win) { try { win.opener = null; } catch (e) {} }
+        this.win = win;
+        portalOpened[key] = true;
+        render();
+      },
+      returnToApp() {
+        this.returnedAt = new Date().toISOString();
+        if (this.win) { try { if (!this.win.closed) this.win.close(); } catch (e) {} this.win = null; }
+        startPortalCheck(this.key);
+      },
+    };
+  }
+  return portalFlows[key];
+}
+function portalOpenSignIn(key) { const f = portalConnectFlow(key); if (f) f.open(); }
+// The user coming back to this tab with a portal flow open: stamp the
+// return and re-render, so the card's return prompt is on screen.
+// (The web build cannot detect the moment sign-in completes inside
+// the portal's tab; the native sheet reports exactly that, which is
+// the hook returnToApp() hangs off in the finished app.)
+function portalNoteReturn() {
+  let any = false;
+  Object.values(portalFlows).forEach((f) => { if (f.openedAt && !f.returnedAt) { f.returnedAt = new Date().toISOString(); any = true; } });
+  if (any) render();
+}
+if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) portalNoteReturn(); });
+}
+if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {
+  window.addEventListener('focus', portalNoteReturn);
+}
 async function portalRefreshStatus() { try { if (typeof liveSyncGet !== 'function') return; const data = await liveSyncGet('portal-sync', 'status'); cloudPortals = data.connections || []; } catch (e) {} }
 async function portalCall(body) { await cloudEnsureToken(); return await liveSyncPost('portal-sync', body); }
 function portalErrMsg(e) { return (e && e.data && e.data.message) || (e && e.message) || 'The portal check failed.'; }
-function portalOpenSignIn(key) {
-  const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return;
-  portalOpened[key] = true;
-  try { window.open(meta.url, '_blank', 'noopener'); } catch (e) {}
-  render();
-}
 function syncSectionHTML(){
   return `<section class="panel" id="live-sync-panel">${onboardDirectionHTML(2)}${typeof liveSyncPanelHTML==='function'?liveSyncPanelHTML():'<h2>Live calendar sync</h2><p class="muted">Live calendar sync is loading…</p>'}${qgendaFeedHTML()}${scheduleImportHTML()}<details><summary>Manual fallback — import or export a .ics file</summary><h3>Import shifts from a calendar (.ics)</h3><p class="muted">Export your calendar as a .ics file and import it here — duplicates are skipped, never doubled.</p><form id="calendarForm"><div class="form-grid">${field('calFile','Choose .ics file','file','','accept=".ics,text/calendar"')}${select('calSource','Which calendar is this from?',['Google Calendar','Apple Calendar','Outlook','Calendar file'],'Calendar file')}</div><div class="form-actions"><button type="submit">Parse calendar — preview only (nothing saved yet)</button></div></form>${calImportError?`<p class="hint">${escapeHTML(calImportError)}</p>`:''}<div style="margin-top:14px">${calPreviewHTML()}</div><h3>Export shifts to a calendar (.ics)</h3><div class="toolbar"><button data-action="export-cal-all">Download all shifts (.ics)</button><button data-action="export-cal-month">Download this month (.ics)</button></div></details></section>`;
 }

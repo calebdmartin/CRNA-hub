@@ -253,6 +253,71 @@ export function normalizeAiPaystub(raw: unknown): AiPaystub {
   return out;
 }
 
+// --- Portal-check mode (Nov 6, 2026) ---
+// Photos of a credentialing portal page the user signed into
+// themselves (NBCRNA / AANA / a state board lookup). The model returns
+// ONLY the record facts printed on that page — status, number, dates,
+// CE / MAC progress — and the client shows them as a preview report:
+// nothing is saved until the user approves it. Same null rules as
+// every other mode: a field the page does not state is null, never
+// invented, never 0.
+export interface AiPortalCheck {
+  status: string | null;
+  number: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  renewal_deadline: string | null;
+  class_a: number | null;
+  class_b: number | null;
+  mac_ed: number | null;
+  mac_dev: number | null;
+  expiration: string | null;
+  license_type: "APRN" | "RN" | null;
+  issue_date: string | null;
+  expiry: string | null;
+  state: string | null;
+  raw_text: string | null;
+}
+
+export function normalizeAiPortalCheck(raw: unknown): AiPortalCheck {
+  const out: AiPortalCheck = {
+    status: null,
+    number: null,
+    period_start: null,
+    period_end: null,
+    renewal_deadline: null,
+    class_a: null,
+    class_b: null,
+    mac_ed: null,
+    mac_dev: null,
+    expiration: null,
+    license_type: null,
+    issue_date: null,
+    expiry: null,
+    state: null,
+    raw_text: null,
+  };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  out.status = coerceAiText(obj["status"]);
+  out.number = coerceAiText(obj["number"] ?? obj["license_number"] ?? obj["certification_number"]);
+  out.period_start = coercePaystubDate(obj["period_start"]);
+  out.period_end = coercePaystubDate(obj["period_end"]);
+  out.renewal_deadline = coercePaystubDate(obj["renewal_deadline"] ?? obj["renewal_date"]);
+  out.class_a = coerceAiNumber(obj["class_a"]);
+  out.class_b = coerceAiNumber(obj["class_b"]);
+  out.mac_ed = coerceAiNumber(obj["mac_ed"]);
+  out.mac_dev = coerceAiNumber(obj["mac_dev"]);
+  out.expiration = coercePaystubDate(obj["expiration"] ?? obj["membership_expiration"]);
+  const lt = coerceAiText(obj["license_type"]);
+  out.license_type = lt && /aprn/i.test(lt) ? "APRN" : lt && /\brn\b/i.test(lt) ? "RN" : null;
+  out.issue_date = coercePaystubDate(obj["issue_date"]);
+  out.expiry = coercePaystubDate(obj["expiry"] ?? obj["expiration_date"]);
+  out.state = coerceAiText(obj["state"]);
+  out.raw_text = coerceAiText(obj["raw_text"]);
+  return out;
+}
+
 // --- Schedule-photo mode (Nov 5, 2026) ---
 // The schedule upload sends photos of a staff schedule; the model
 // returns only shifts for the schedule name. A row is kept only when

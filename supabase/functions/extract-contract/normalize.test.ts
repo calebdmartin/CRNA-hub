@@ -38,6 +38,7 @@ Deno.test("normalizeAiSchedule: non-object input yields no shifts", () => {
 
 // ---------- Pay-stub mode (Nov 5, 2026) ----------
 import { normalizeAiPaystub } from "./normalize.ts";
+import { normalizeAiPortalCheck } from "./normalize.ts";
 
 Deno.test("normalizeAiPaystub: full stub normalises dates, frequency and amounts", () => {
   const out = normalizeAiPaystub({
@@ -130,4 +131,46 @@ Deno.test("normalizeAiRule: junk and zeroes become null, never $0", () => {
   assertEquals(out.flat_rate, null);
   assertEquals(out.segments, []);
   assertEquals(normalizeAiRule(null).clarifying_question, null);
+});
+
+Deno.test("normalizeAiPortalCheck: NBCRNA page normalises status, period, and MAC progress", () => {
+  const out = normalizeAiPortalCheck({
+    status: "Certified",
+    number: "126402",
+    period_start: "May 1, 2023",
+    period_end: "2027-04-30",
+    class_a: 103,
+    class_b: 2,
+    mac_ed: 60,
+    mac_dev: 40,
+    raw_text: "NBCRNA Certification Record",
+  });
+  assertEquals(out.status, "Certified");
+  assertEquals(out.number, "126402");
+  assertEquals(out.period_start, "2023-05-01");
+  assertEquals(out.period_end, "2027-04-30");
+  assertEquals(out.class_a, 103);
+  assertEquals(out.mac_ed, 60);
+  assertEquals(out.mac_dev, 40);
+  assertEquals(out.license_type, null);
+});
+
+Deno.test("normalizeAiPortalCheck: license page coerces type and dates; junk is null, never invented", () => {
+  const out = normalizeAiPortalCheck({
+    status: "Active",
+    license_number: "RN86131",
+    license_type: "APRN-CRNA",
+    issue_date: "07/02/2013",
+    expiry: "June 30, 2028",
+    state: "West Virginia",
+  });
+  assertEquals(out.number, "RN86131");
+  assertEquals(out.license_type, "APRN");
+  assertEquals(out.issue_date, "2013-07-02");
+  assertEquals(out.expiry, "2028-06-30");
+  const empty = normalizeAiPortalCheck({ status: 42, mac_ed: "abc", period_start: "not a date" });
+  assertEquals(empty.status, null);
+  assertEquals(empty.mac_ed, null);
+  assertEquals(empty.period_start, null);
+  assertEquals(normalizeAiPortalCheck(null).status, null);
 });
