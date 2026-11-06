@@ -930,6 +930,33 @@ export function decideImportEvent(opts: {
   return "create";
 }
 
+// Fallback match for a dedicated-calendar event whose paired shift
+// id is NOT in this sync's local payload (the Nov 6, 2026 false
+// pending deletions): the same shift is often present under a NEW
+// id — re-imported after an earlier sync's response was lost — while
+// the dedicated calendar's event and its calendar_sync_map row still
+// point at the old id. Matching on date + facility + type lets the
+// sync re-link the pairing to the shift that is actually here;
+// without it, the sync flagged the shift "no longer on this device"
+// on every run and the flags never cleared, even though the event
+// was still on the user's calendar the whole time. A candidate
+// already handled in this sync, or already paired to another event,
+// is never stolen. Pure, so the sync engine and the tests agree.
+export function findFallbackLocalShift<
+  T extends { id: string; date: string; facility: string; type: string },
+>(
+  localShifts: T[],
+  ev: { date: string; facility: string; type: string },
+  handledLocal: Set<string>,
+  pairedShiftIds: Set<string>,
+): T | undefined {
+  if (!ev.date) return undefined;
+  return localShifts.find((s) =>
+    s.date === ev.date && s.facility === ev.facility && s.type === ev.type &&
+    !handledLocal.has(s.id) && !pairedShiftIds.has(s.id)
+  );
+}
+
 // Which bucket a held/skipped import event lands in, for the sync
 // summary and the suggestion pass (Bug 2, Nov 6, 2026). Pure, so the
 // import loop and the tests agree:

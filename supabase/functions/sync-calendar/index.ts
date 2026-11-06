@@ -220,6 +220,7 @@ import {
   chunkArray,
   decideImportEvent,
   FacilitySuggestion,
+  findFallbackLocalShift,
   groupFacilitySuggestions,
   heldEventBucket,
   decryptSecret,
@@ -859,6 +860,10 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   // 2a. Provider-side deletions reported by id only (Apple
   // sync-collection 404s). The href ends in "<shift id>.ics" for events
   // this sync created, which is how the href maps back to a shift.
+  // These are explicit deletion reports inside the fetched batch —
+  // the only absence-based evidence a pending deletion may rest on.
+  // An event that simply does not appear in an incremental batch is
+  // never treated as deleted (see the fallback re-link in step 2).
   for (const href of fetched.deletedIds ?? []) {
     const base = href.split("/").pop() ?? "";
     const shiftId = base.replace(/\.ics$/i, "");
@@ -901,7 +906,38 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     if (!ev.date) continue;
     const mapRow = mapByEvent.get(ev.providerEventId)
       ?? (ev.shiftId ? mapByShift.get(ev.shiftId) : undefined);
-    const local = mapRow ? localById.get(String(mapRow.shift_id)) : undefined;
+    let local = mapRow ? localById.get(String(mapRow.shift_id)) : undefined;
+    // Fallback re-link before ANY deletion flag (Nov 6, 2026): the
+    // paired shift id is absent from this sync's local payload, but
+    // the same shift (date + facility + type) is here under a new id
+    // — re-imported after an earlier sync's response was lost, while
+    // this event and its map row kept the old id. Re-pair the map row
+    // to the shift that is actually here instead of flagging a false
+    // "no longer on this device" pending deletion. A pending deletion
+    // may only be flagged on evidence inside this fetched batch (the
+    // event itself, present or explicitly cancelled/deleted below) —
+    // never on an event's mere absence from an incremental batch, and
+    // never when a fallback match proves the shift is still here.
+    if (mapRow && !local) {
+      const fallback = findFallbackLocalShift(
+        localShifts,
+        ev,
+        handledLocal,
+        new Set(mapByShift.keys()),
+      );
+      if (fallback) {
+        const oldShiftId = String(mapRow.shift_id);
+        await dropMap(oldShiftId);
+        const relinked = { ...mapRow, shift_id: fallback.id };
+        await saveMap(relinked);
+        mapByShift.delete(oldShiftId);
+        mapByShift.set(fallback.id, relinked as Conn);
+        mapByEvent.set(ev.providerEventId, relinked as Conn);
+        syncedShiftIds.delete(oldShiftId);
+        syncedShiftIds.add(fallback.id);
+        local = fallback;
+      }
+    }
     if (ev.cancelled) {
       if (local) {
         if (autoDelete) {

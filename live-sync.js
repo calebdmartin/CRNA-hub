@@ -397,10 +397,19 @@ function liveSyncApplyChanges(provider, data) {
       }
     }
   }
+  // Pending deletions are recomputed by the server on EVERY sync
+  // from current state, so the stored list for this provider is
+  // REPLACED, never union-merged (Nov 6, 2026 fix). The old add-only
+  // behaviour meant a flag raised by one sync — e.g. while a shift
+  // was mid-re-import under a new id — stayed on screen forever: no
+  // re-sync could clear it, even though the shift was still on the
+  // user's calendar the whole time. A "no longer on this device"
+  // flag for a shift that IS on this device now is stale by
+  // definition and is dropped on sight.
+  liveSyncState.pending = liveSyncState.pending.filter((p) => p.provider !== provider);
   (data.pendingDeletions || []).forEach((p) => {
-    if (!liveSyncState.pending.some((q) => q.provider === p.provider && q.shiftId === p.shiftId)) {
-      liveSyncState.pending.push({ provider: p.provider, shiftId: p.shiftId, date: p.date || '', facility: p.facility || '', type: p.type || '', localMissing: !!p.localMissing });
-    }
+    if (p.localMissing && db.shifts.some((x) => x.id === p.shiftId)) return;
+    liveSyncState.pending.push({ provider: p.provider, shiftId: p.shiftId, date: p.date || '', facility: p.facility || '', type: p.type || '', localMissing: !!p.localMissing });
     liveSyncSetShiftState(p.provider || provider, p.shiftId, 'pending-deletion');
   });
   // Per-shift calendar state from this sync's response (server-derived
@@ -707,6 +716,39 @@ async function liveSyncResolvePending(entry, decision) {
   render();
 }
 
+async function liveSyncKeepAllPending() {
+  const entries = liveSyncState.pending.slice();
+  if (!entries.length) return;
+  // Bulk "Keep all — these are still on my calendar": clears every
+  // flag and deletes NOTHING anywhere. Each pairing is dropped
+  // server-side WITHOUT deleting the provider event
+  // (resolve-deletion with no deleteProvider), so the stale pairing
+  // that raised the flag cannot re-flag it; the shifts stay in the
+  // app, tracked and present, and re-link or re-create on the next
+  // sync. This is not "Stop tracking it" — that drops one shift's
+  // tracking; this keeps them all.
+  for (const p of entries) {
+    try {
+      await liveSyncPost('sync-calendar', { action: 'resolve-deletion', provider: p.provider, shiftId: p.shiftId });
+    } catch (e) {
+      alert('Could not clear those flags: ' + e.message);
+      return;
+    }
+    // A local shift matching a cleared flag — by id, or by the
+    // flag's date + facility + type when it was re-imported under a
+    // new id — is present: clear its pending-deletion state.
+    db.shifts.forEach((x) => {
+      if (x.id === p.shiftId || (p.date && x.date === p.date && x.facility === p.facility && x.type === p.type)) {
+        liveSyncSetShiftState(p.provider, x.id, 'not-synced');
+      }
+    });
+  }
+  liveSyncState.pending = [];
+  liveSyncStateSave();
+  persist();
+  render();
+}
+
 function liveSyncAction(action, entry) {
   if (action === 'live-connect') return liveSyncConnect(entry);
   if (action === 'live-disconnect') return liveSyncDisconnect(entry);
@@ -724,6 +766,7 @@ function liveSyncAction(action, entry) {
   }
   if (action === 'live-confirm-delete') return liveSyncResolvePending(entry, 'delete');
   if (action === 'live-keep') return liveSyncResolvePending(entry, 'keep');
+  if (action === 'live-keep-all') return liveSyncKeepAllPending();
 }
 
 function liveSyncProviderCard(provider) {
@@ -824,6 +867,9 @@ function liveSyncPanelHTML() {
     html += '<div class="toolbar"><button type="button" class="secondary tiny" data-action="live-refresh">Refresh status &amp; log</button></div>';
     if (liveSyncState.pending.length) {
       html += '<h3>Pending deletions — your confirmation needed</h3><p class="muted">Gone from your calendar — nothing is deleted here until you say so.</p>';
+      if (liveSyncState.pending.length > 1) {
+        html += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-keep-all">Keep all — these are still on my calendar</button></div>';
+      }
       liveSyncState.pending.forEach((p) => {
         const key = p.provider + '|' + p.shiftId;
         html += '<div class="item"><div class="item-title">' + escapeHTML(p.date || '') + ' · ' + escapeHTML(p.facility || '') + ' · ' + escapeHTML(p.type || '') + '</div><div class="muted">' + escapeHTML(liveSyncLabel(p.provider)) + (p.localMissing ? ' · shift no longer on this device — delete it from the calendar, or stop tracking it' : ' · deleted in the calendar') + '</div><div class="item-actions"><button type="button" class="tiny danger" data-action="live-confirm-delete" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Delete from calendar' : 'Delete here too') + '</button><button type="button" class="tiny secondary" data-action="live-keep" data-id="' + escapeHTML(key) + '">' + (p.localMissing ? 'Stop tracking it' : 'Keep here') + '</button></div></div>';

@@ -28,6 +28,7 @@ import {
   chunkArray,
   decideImportEvent,
   decideStaleImportRow,
+  findFallbackLocalShift,
   groupFacilitySuggestions,
   heldEventBucket,
   importStatusForDate,
@@ -475,6 +476,54 @@ Deno.test("suggestion address comes only from an address-like location", () => {
   assertEquals(suggestionAddressForLocation("Charleston Area Medical Center", "CAMC"), "");
   assertEquals(suggestionAddressForLocation("CAMC", "CAMC"), "");
   assertEquals(suggestionAddressForLocation("", "CAMC"), "");
+});
+
+Deno.test("findFallbackLocalShift: a re-imported shift under a new id re-links instead of flagging", () => {
+  // Caleb's case (Nov 6, 2026): the dedicated-calendar event's map row
+  // points at an old shift id, but the same Holzer shift is on the
+  // device under a new id — past (2025), near (2026), and future
+  // (2027) dates alike. The fallback must find it on date + facility
+  // + type so the sync re-pairs instead of flagging a deletion.
+  const locals = [
+    { id: "new-1", date: "2027-03-29", facility: "Holzer", type: "8-hour day" },
+    { id: "new-2", date: "2026-12-16", facility: "Holzer", type: "24-hour call" },
+    { id: "new-3", date: "2025-11-03", facility: "Holzer", type: "8-hour day" },
+  ];
+  const paired = new Set(["old-1", "old-2", "old-3"]);
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2027-03-29", facility: "Holzer", type: "8-hour day" }, new Set(), paired)?.id,
+    "new-1",
+  );
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2026-12-16", facility: "Holzer", type: "24-hour call" }, new Set(), paired)?.id,
+    "new-2",
+  );
+  // No local match at all: undefined — the caller may then flag on
+  // the event's own evidence (present/cancelled in this batch).
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2027-03-04", facility: "Holzer", type: "8-hour day" }, new Set(), paired),
+    undefined,
+  );
+  // Same date + facility but a different type is a different shift.
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2027-03-29", facility: "Holzer", type: "Second call" }, new Set(), paired),
+    undefined,
+  );
+  // A candidate already handled in this sync, or already paired to
+  // another event, is never stolen.
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2027-03-29", facility: "Holzer", type: "8-hour day" }, new Set(["new-1"]), paired),
+    undefined,
+  );
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "2027-03-29", facility: "Holzer", type: "8-hour day" }, new Set(), new Set(["new-1"])),
+    undefined,
+  );
+  // Undated events never match.
+  assertEquals(
+    findFallbackLocalShift(locals, { date: "", facility: "Holzer", type: "8-hour day" }, new Set(), paired),
+    undefined,
+  );
 });
 
 Deno.test("shiftSyncStateFor: pending deletion wins, paired is synced, the rest is not-synced", () => {
