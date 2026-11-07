@@ -342,14 +342,28 @@ function liveSyncApplyChanges(provider, data) {
   changes.forEach((ch) => {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
-      if (db.shifts.some((x) => x.date === s.date && x.facility === s.facility && x.type === s.type)) return;
+      // Cross-source dedupe (Nov 6, 2026): the same shift may already
+      // be here from QGenda, an upload, or a manual add — under the
+      // shared identity rule (date + facility + type) it merges into
+      // that ONE record (sources linked, richest data wins, status
+      // never downgrades) instead of landing as a second copy. A
+      // create carrying an id we already hold merges the same way.
+      const srcIn = s.source || ('calendar-' + provider);
+      const recIn = { id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: srcIn, sources: [srcIn], status: liveSyncImportStatusForDate(s.date), incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null };
+      const byIdIn = db.shifts.find((x) => x.id === s.id);
+      const twinIn = !byIdIn && typeof findSameShift === 'function' ? findSameShift(recIn, db.shifts) : null;
+      if (byIdIn || twinIn) {
+        if (typeof mergeShiftInto === 'function') mergeShiftInto(byIdIn || twinIn, recIn);
+        updated++;
+        return;
+      }
       // Imported shifts arrive with source 'apple-import' (and a note
       // naming the calendar they came from); shifts from the app-owned
       // calendar carry no source and default to 'calendar-<provider>'.
       // Status: past imports arrive confirmed (Bug 1, Nov 6, 2026) —
       // re-derived from the local date here (see above); the server
       // stamps the same rule into the payload.
-      db.shifts.push({ id: s.id, date: s.date, facility: s.facility, type: s.type, pay: s.pay ? String(s.pay) : '', note: s.note || '', source: s.source || ('calendar-' + provider), status: liveSyncImportStatusForDate(s.date), incomplete: !String(s.pay || '').trim(), updatedAt: s.updatedAt || null });
+      db.shifts.push(recIn);
       // Not on the app-owned calendar yet: an imported shift reaches
       // it only on the next sync, once the browser sends it back as a
       // local shift. The shiftSync application below overrides this
@@ -370,11 +384,29 @@ function liveSyncApplyChanges(provider, data) {
       if (s.pay) { x.pay = String(s.pay); x.incomplete = false; }
       x.note = s.note || '';
       x.source = s.source || x.source || ('calendar-' + provider); x.updatedAt = s.updatedAt || x.updatedAt;
+      if (typeof shiftSourcesList === 'function') { const sl = shiftSourcesList(x); const ns = s.source || ('calendar-' + provider); if (!sl.includes(ns)) { sl.push(ns); x.sources = sl; } }
       updated++;
     } else if (ch.action === 'delete' && ch.shiftId) {
-      db.shifts = db.shifts.filter((x) => x.id !== ch.shiftId);
-      liveSyncDropShiftState(ch.shiftId);
-      deleted++;
+      // Source-aware delete (cross-source dedupe, Nov 6, 2026): if
+      // another source still shows this shift (QGenda, an upload, the
+      // user's own entry), the record stays — only this provider's
+      // source is unlinked, and its calendar state is dropped so the
+      // surviving record can re-pair cleanly. The record is deleted
+      // only when the removing source was its last one.
+      const rec = db.shifts.find((x) => x.id === ch.shiftId);
+      const tags = ['calendar-' + provider, provider + '-import'];
+      const srcs = rec && typeof shiftSourcesList === 'function' ? shiftSourcesList(rec) : [];
+      const others = srcs.filter((v) => !tags.includes(v));
+      if (rec && others.length) {
+        rec.sources = others;
+        if (tags.includes(rec.source)) rec.source = others[0];
+        liveSyncSetShiftState(provider, rec.id, 'not-synced');
+        updated++;
+      } else {
+        db.shifts = db.shifts.filter((x) => x.id !== ch.shiftId);
+        liveSyncDropShiftState(ch.shiftId);
+        deleted++;
+      }
     }
   });
   // Remember the last Apple import result so the panel can say
