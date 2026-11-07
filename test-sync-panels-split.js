@@ -204,8 +204,8 @@ function segments(html) {
   t('onboarding step 2 in progress: live panel expands so the user can act',
     sandbox.__step2.includes('<details class="panel collapse-panel" id="live-sync-panel" open>'));
 
-  t('service worker cache bumped to v63',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v63'));
+  t('service worker cache bumped to v64',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v64'));
 
   console.log(failures === 0 ? 'sync-panels-split test done: all passed' : 'sync-panels-split test done: FAILURES=' + failures);
 })();

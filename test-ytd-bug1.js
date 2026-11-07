@@ -190,13 +190,13 @@ run(`
   globalThis.__after = yearIncomeSplit(${year}, '${todayStr}');
   globalThis.__dashAfter = dashboard();
 `);
-t('bug reproduced: all past priced shifts proposed -> C YTD $0, S YTD $0, P YTD holds everything',
-  sandbox.__before.c.ytd === 0 && sandbox.__before.s.ytd === 0 &&
+t('bug reproduced: all past priced shifts proposed -> C YTD $0, P YTD holds everything',
+  sandbox.__before.c.ytd === 0 &&
   sandbox.__before.p.ytd === 7250);
 t('bulk confirm counts only the past proposed shifts in the year',
   sandbox.__pastN === 4 && sandbox.__marked === 4);
 t('bulk confirm: C YTD becomes non-zero (past priced work now confirmed), P unchanged',
-  sandbox.__after.c.ytd === 5125 && sandbox.__after.s.ytd === 5125 &&
+  sandbox.__after.c.ytd === 5125 &&
   sandbox.__after.p.ytd === 7250 && sandbox.__after.c.predicted === 5125);
 t('bulk confirm: unpriced past shift stays excluded (never $0), W-2 day stays excluded',
   sandbox.__after.unpriced === 1 && sandbox.__after.w2Salary === 1);
@@ -218,11 +218,11 @@ t('bulk confirm reports what it did',
 run(`
   globalThis.__csp = incomeCSPTableHTML(${year}, yearIncomeSplit(${year}, '${todayStr}'));
 `);
-t('P column renders in the C/S/P table (all three headers present)',
+t('P column renders in the C/P table (both headers present, no S column)',
   sandbox.__csp.includes('C — Confirmed only') &&
-  sandbox.__csp.includes('S — Submitted-inclusive') &&
+  !sandbox.__csp.includes('S — Submitted-inclusive') &&
   sandbox.__csp.includes('P — Proposed-inclusive'));
-t('mobile CSS lets the C/S/P table fit the panel instead of pushing P off-screen',
+t('mobile CSS lets the C/P table fit the panel instead of pushing P off-screen',
   cssSrc.includes('.table-scroll .csp-table{min-width:0}') &&
   cssSrc.includes('.csp-table th{white-space:normal}'));
 t('paystub disclaimer kept on the C/S/P table',

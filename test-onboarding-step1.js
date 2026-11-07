@@ -151,8 +151,8 @@ run(`
   db.settings.employmentType = '';
   globalThis.__unsetSplit = yearIncomeSplit(2026, '2026-11-05');
 `);
-t('W-2 only: no shift is billable — C/S/P are $0, salary never double-counted',
-  sandbox.__w2split.c.predicted === 0 && sandbox.__w2split.s.predicted === 0 &&
+t('W-2 only: no shift is billable — C/P are $0, salary never double-counted',
+  sandbox.__w2split.c.predicted === 0 &&
   sandbox.__w2split.p.predicted === 0 && sandbox.__w2split.w2Salary === 1 &&
   sandbox.__w2month.c === 0);
 t('1099: priced shifts count, W-2 salary day excluded even with $5000 stored',

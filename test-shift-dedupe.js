@@ -78,7 +78,7 @@ t('wiring: approvals + CSV + contract + manual add enter via addShiftDeduped',
 t('wiring: cloud merge collapses + tombstones absorbed ids; boot runs the pass',
   appSrc.includes("dedupeShiftsInPlace((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); })") &&
   appSrc.includes('const bootDedupe=dedupeShiftsInPlace()'));
-t('service worker cache bumped to v63', swSrc.includes('crna-hub-shell-v63'));
+t('service worker cache bumped to v64', swSrc.includes('crna-hub-shell-v64'));
 
 // ---------- Setup: Holzer saved as a facility ----------
 run(`
@@ -123,10 +123,9 @@ t('schedule-upload arrival merges too — one shift, three sources',
   run(`db.shifts.length`) === 1 && run(`shiftSourcesList(db.shifts[0]).length`) === 3 &&
   run(`shiftSourcesList(db.shifts[0]).includes('schedule-import')`));
 
-// Income: priced ONCE in C/S/P (past + confirmed -> C year-to-date).
-t('C/S/P counts the triple-sourced shift once ($2,125, not $6,375)',
+// Income: priced ONCE in C/P (past + confirmed -> C year-to-date).
+t('C/P counts the triple-sourced shift once ($2,125, not $6,375)',
   run(`yearIncomeSplit(2026).c.ytd`) === 2125 &&
-  run(`yearIncomeSplit(2026).s.ytd`) === 2125 &&
   run(`yearIncomeSplit(2026).p.ytd`) === 2125 &&
   run(`monthIncomeSplit('2026-11').total`) === 1);
 
