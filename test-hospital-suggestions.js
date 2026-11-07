@@ -198,8 +198,8 @@ run(`
 t('adding the facility clears its suggestion', sandbox.__afterSave.suggestions === 0 && sandbox.__afterSave.facilities.includes('CAMC'));
 t('next sync imports the held shifts once the facility exists',
   sandbox.__camcShifts.length === 2);
-t('imported shifts arrive confirmed when past, proposed when future (Bug 1)',
-  run(`db.shifts.filter(x=>x.facility==='CAMC').every(x => x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`));
+t('imported shifts arrive confirmed, past and future (status model Nov 6, 2026)',
+  run(`db.shifts.filter(x=>x.facility==='CAMC').every(x => x.status === 'confirmed')`));
 t('priced shift carries its pay; unpriced shift stays incomplete, never $0',
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-1').pay === '2000' &&
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-2').pay === '' &&

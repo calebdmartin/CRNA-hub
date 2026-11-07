@@ -15,7 +15,7 @@
 .onboard-steps{list-style:none;margin:0;padding:0}.onboard-step{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid #e7edf3}.onboard-step:last-child{border-bottom:0}.onboard-check{font-size:22px;line-height:1.2;color:#0f7f8a;font-weight:700;flex:0 0 auto}.onboard-step.done .onboard-check{color:#22744c}
 
 
-/* Confirmed / submitted / proposed income table (Dashboard + Saved shifts) */
+/* Confirmed / proposed income table (Dashboard + Saved shifts) */
 .csp-table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
 .csp-table th,.csp-table td{border-bottom:1px solid #e7edf3;padding:8px 6px;text-align:left;vertical-align:top}
 .csp-table th:first-child,.csp-table td:first-child{color:#385b72}

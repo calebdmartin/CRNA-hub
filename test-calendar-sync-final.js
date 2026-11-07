@@ -252,10 +252,10 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
   `);
   t('imported shifts created once (dedupe: second identical apply adds nothing)',
     sandbox.__a1.created === 3 && sandbox.__a2.created === 0 && sandbox.__shifts.length === 4);
-  t('imported shifts arrive confirmed when past, proposed when future (Bug 1)',
-    run(`db.shifts.filter(x => ['s0','s1','s2'].includes(x.id)).every(x => x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
+  t('imported shifts arrive confirmed, past and future (status model Nov 6, 2026)',
+    run(`db.shifts.filter(x => ['s0','s1','s2'].includes(x.id)).every(x => x.status === 'confirmed')`) &&
     run(`db.shifts.find(x => x.id === 's0').status`) === 'confirmed' &&
-    run(`db.shifts.find(x => x.id === 's1').status`) === 'proposed');
+    run(`db.shifts.find(x => x.id === 's1').status`) === 'confirmed');
   t('priced shift carries pay; unpriced shift stays incomplete with blank pay — never $0',
     sandbox.__shifts.find((x) => x.id === 's1').pay === '2125' &&
     sandbox.__shifts.find((x) => x.id === 's2').pay === '' &&
@@ -298,8 +298,8 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     !!syncCall && syncCall.body.body.facilities.some((f) => f.name === 'Holzer'));
   t('after the sync, the repair flag is consumed (a normal sync never re-imports a deleted shift)',
     run(`liveSyncState.repairImport`) === false);
-  t('stubbed sync applied the canned import: past/future status rule holds, pending deletion flagged',
-    run(`db.shifts.some(x => x.id === 'shift-new-1' && x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
+  t('stubbed sync applied the canned import: sourced-confirmed status rule holds, pending deletion flagged',
+    run(`db.shifts.some(x => x.id === 'shift-new-1' && x.status === 'confirmed')`) &&
     run(`liveSyncState.pending.some(p => p.shiftId === 'shift-old-1')`));
 
   // --- 9. Two-way push: confirmed shift on the calendar, edit updates,

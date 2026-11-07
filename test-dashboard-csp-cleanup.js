@@ -2,7 +2,7 @@
 // The highlighted explanation + disclaimer paragraphs under the
 // Income C/S/P table are hidden from the default Dashboard view:
 // the table alone shows, the explanation and the paystub disclaimer
-// live behind a collapsed "What do C, S and P mean?" toggle, and the
+// live behind a collapsed "What do C and P mean?" toggle, and the
 // disclaimer also appears as small print on the Account tab.
 const fs = require('fs');
 const path = require('path');
@@ -60,22 +60,22 @@ const dash = sandbox.__dash, table = sandbox.__table;
 // Split the rendered table HTML at the toggle: everything before
 // <details is the default view; the explanation must not be there.
 const beforeToggle = table.split('<details')[0];
-t('C/S/P table still renders with all three columns and both rows',
-  table.includes('C — Confirmed only') && table.includes('S — Submitted-inclusive') &&
+t('C/P table still renders with both columns and both rows (S eliminated Nov 6, 2026)',
+  table.includes('C — Confirmed only') && !table.includes('S — Submitted-inclusive') &&
   table.includes('P — Proposed-inclusive') && table.includes('Year to date') && table.includes('Predicted 2026 annual'));
 t('default view (before the toggle) has NO explanation paragraph and NO disclaimer paragraph',
   !beforeToggle.includes('C is confirmed income you can plan on') &&
   !beforeToggle.includes('Income figures are estimates') &&
   !beforeToggle.includes('Priced shifts in 2026'));
-t('a collapsed "What do C, S and P mean?" toggle exists and is not open by default',
-  table.includes('<details class="csp-info"><summary>What do C, S and P mean?</summary>') &&
+t('a collapsed "What do C and P mean?" toggle exists and is not open by default',
+  table.includes('<details class="csp-info"><summary>What do C and P mean?</summary>') &&
   !/<details[^>]*\sopen[\s>]/.test(table));
-t('inside the toggle: the C/S/P explanation, the priced-shift counts, and the disclaimer',
+t('inside the toggle: the C/P explanation, the priced-shift counts, and the disclaimer',
   table.includes('C is confirmed income you can plan on') &&
-  table.includes('Priced shifts in 2026: 1 confirmed/completed, 0 submitted, 1 proposed') &&
+  table.includes('Priced shifts in 2026: 1 confirmed/completed, 1 proposed') &&
   table.includes('Income figures are estimates from your own rates and shifts — always double-check them against your actual paystubs. CRNA Hub is not liable for mistakes.'));
 t('Dashboard default flow shows the table and the toggle, disclaimer only inside it',
-  dash.includes('What do C, S and P mean?') &&
+  dash.includes('What do C and P mean?') &&
   dash.split('<details')[0].includes('C — Confirmed only') === false || dash.includes('csp-table'));
 t('disclaimer also lives as small print on the Account tab (backup section)',
   sandbox.__acct.includes('Income figures are estimates from your own rates and shifts') &&

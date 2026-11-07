@@ -150,8 +150,8 @@ t('saved grid shifts carry their code as the type, unpriced + incomplete',
   run(`db.shifts.map(x => x.date.slice(5) + ' ' + x.type).join('|')`) ===
     '12-01 5**|12-02 5*|12-03 5**|12-04 5*|12-05 7' &&
   run(`db.shifts.every(x => x.pay === '' && x.incomplete === true && x.source === 'schedule-import-ai')`));
-t('saved grid shifts get the standard import status for their date',
-  run(`db.shifts.every(x => x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`));
+t('saved grid shifts arrive confirmed (sourced — status model Nov 6, 2026)',
+  run(`db.shifts.every(x => x.status === 'confirmed')`));
 
 // ---------- Honest zero-yield: a grid nobody could read ----------
 (async () => {

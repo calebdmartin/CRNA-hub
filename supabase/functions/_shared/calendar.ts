@@ -616,24 +616,17 @@ function facilityLikeName(s: string): boolean {
   return true;
 }
 
-// Import status (Bug 1, Nov 6, 2026): a shift dated before today that
-// arrives from a calendar/schedule import already happened, so it
-// arrives as 'confirmed', not 'proposed' — otherwise a user whose whole
-// history imported as proposed sees $0 in Confirmed (C) and Submitted
-// (S) year-to-date while Proposed (P) holds everything. Future shifts,
-// and today's shift (not over yet), stay 'proposed'. An invalid or
-// missing date stays 'proposed': never silently confirm a shift with
-// no date. `today` is an ISO 'YYYY-MM-DD' date; when omitted it
-// defaults to the server's current UTC date — the browser re-derives
-// the same rule from the user's local date when it stores the shift,
-// so the local date wins on the device.
+// Import status (Nov 6, 2026 status model — supersedes the Bug 1
+// date rule): a shift arriving from a calendar/schedule source is on
+// a real schedule, so it arrives 'confirmed' WHATEVER its date —
+// 'submitted' no longer exists and future sourced shifts are real
+// too. An invalid or missing date stays 'proposed': never confirm a
+// shift with no date. The `today` parameter is kept for signature
+// compatibility with existing callers and is no longer used.
 export function importStatusForDate(date: string, today = ""): "confirmed" | "proposed" {
   const d = String(date || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return "proposed";
-  const t = /^\d{4}-\d{2}-\d{2}$/.test(today)
-    ? today
-    : new Date().toISOString().slice(0, 10);
-  return d < t ? "confirmed" : "proposed";
+  return "confirmed";
 }
 
 export function parseWorkShiftEvent(

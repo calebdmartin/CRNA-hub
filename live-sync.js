@@ -314,31 +314,27 @@ function liveSyncFacilityKnown(name) {
   return (db.facilities || []).some((g) => String(g.name || '').trim().toLowerCase() === String(name || '').trim().toLowerCase());
 }
 
-// Import status (Bug 1, Nov 6, 2026): a shift dated before today
-// (local date) already happened, so it arrives 'confirmed'; today and
-// future shifts stay 'proposed'; a missing/invalid date stays
-// 'proposed'. The server stamps the same rule into the shift it sends
-// (see importStatusForDate in supabase/functions/_shared/calendar.ts),
-// but the browser re-derives it from the local date when storing, so
-// the local date wins on the device — matching the year-to-date split,
-// which is also local-date based. A stored status is never rewritten
-// by an update: only creates are stamped.
-function liveSyncLocalDate(d) { const x = d || new Date(); return [x.getFullYear(), String(x.getMonth() + 1).padStart(2, '0'), String(x.getDate()).padStart(2, '0')].join('-'); }
+// Import status (Nov 6, 2026 status model — supersedes the Bug 1
+// date rule): a shift arriving from a calendar sync is on a real
+// schedule, so it arrives 'confirmed' whatever its date; a missing/
+// invalid date stays 'proposed'. The server stamps the same rule into
+// the shift it sends (see importStatusForDate in
+// supabase/functions/_shared/calendar.ts). A stored status is never
+// rewritten by an update: only creates are stamped.
 function liveSyncImportStatusForDate(date) {
   const d = String(date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return 'proposed';
-  return d < liveSyncLocalDate(new Date()) ? 'confirmed' : 'proposed';
+  return 'confirmed';
 }
 
 function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
   let created = 0, updated = 0, deleted = 0;
   const suggestions = [];
-  // Past-shift rule (Bug 1, shared with Bug 2): a shift dated before
-  // today already happened, so it arrives confirmed, not proposed.
-  // Today and future shifts stay proposed until the user moves them
-  // along. liveSyncImportStatusForDate (above) derives it from the
-  // local date — one implementation, not two.
+  // Sourced-status rule (Nov 6, 2026 status model): a shift arriving
+  // from a calendar sync is on a real schedule, so it arrives
+  // confirmed whatever its date — liveSyncImportStatusForDate (above),
+  // one implementation, not two.
   changes.forEach((ch) => {
     if (ch.action === 'create' && ch.shift) {
       const s = ch.shift;
@@ -360,9 +356,9 @@ function liveSyncApplyChanges(provider, data) {
       // Imported shifts arrive with source 'apple-import' (and a note
       // naming the calendar they came from); shifts from the app-owned
       // calendar carry no source and default to 'calendar-<provider>'.
-      // Status: past imports arrive confirmed (Bug 1, Nov 6, 2026) —
-      // re-derived from the local date here (see above); the server
-      // stamps the same rule into the payload.
+      // Status: sync imports arrive confirmed (Nov 6, 2026 status
+      // model — see above); the server stamps the same rule into the
+      // payload.
       db.shifts.push(recIn);
       // Not on the app-owned calendar yet: an imported shift reaches
       // it only on the next sync, once the browser sends it back as a

@@ -2,7 +2,7 @@
 // 2026, branch muse/credentialing). Run: node test-schedule-photo-tips.js
 //
 // Caleb asked for the grid-photo instruction to live in the app as a
-// dropdown like the Dashboard's "What do C, S and P mean?" toggle.
+// dropdown like the Dashboard's "What do C and P mean?" toggle.
 // Inside the Upload a schedule panel there is now a collapsed-by-
 // default <details class="csp-info"> — same element, class, and
 // interaction as the C/S/P toggle — labeled "Taking a photo of a
@@ -78,9 +78,9 @@ const upload = iU >= 0 ? html.slice(iU) : '';
 const TOGGLE = '<details class="csp-info"><summary>Taking a photo of a paper schedule?</summary>';
 t('photo tips toggle exists inside the Upload a schedule panel', upload.includes(TOGGLE));
 t('toggle is collapsed by default (no open attribute on the details)', upload.includes(TOGGLE) && !upload.includes('<details class="csp-info" open'));
-t('toggle uses the exact C/S/P pattern (details.csp-info + summary)',
+t('toggle uses the exact C/P pattern (details.csp-info + summary)',
   upload.includes(TOGGLE) &&
-  fs.readFileSync(R + 'app.js', 'utf8').includes('<details class="csp-info"><summary>What do C, S and P mean?</summary>'));
+  fs.readFileSync(R + 'app.js', 'utf8').includes('<details class="csp-info"><summary>What do C and P mean?</summary>'));
 t('all three tip lines ship, one idea per line',
   upload.includes('<p class="muted">A closer, straight-on photo reads best.</p>') &&
   upload.includes('<p class="muted">Show the whole grid — the dates across the top and your name row.</p>') &&
@@ -89,5 +89,5 @@ t('tips sit before the upload form so they are seen before choosing a file',
   upload.indexOf(TOGGLE) >= 0 && upload.indexOf(TOGGLE) < upload.indexOf('id="scheduleForm"'));
 t('toggle appears nowhere outside the upload panel',
   !html.slice(0, iU).includes('Taking a photo of a paper schedule?'));
-t('service worker cache bumped to v62', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v62'));
+t('service worker cache bumped to v63', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v63'));
 console.log(failures ? failures + ' FAILURES' : 'ALL PASS');

@@ -141,8 +141,8 @@ t('(b) next sync imports the held past shifts once the facility exists',
   sandbox.__pastCamc.length === 5);
 t('(b) past CAMC shifts arrive confirmed (already happened), never proposed',
   sandbox.__pastCamc.every((x) => x.status === 'confirmed'));
-t('(b) future CAMC shift still arrives proposed',
-  sandbox.__futureCamc.length === 1 && sandbox.__futureCamc[0].status === 'proposed');
+t('(b) future CAMC shift arrives confirmed (status model Nov 6, 2026: sourced = confirmed)',
+  sandbox.__futureCamc.length === 1 && sandbox.__futureCamc[0].status === 'confirmed');
 t('(b) day shifts carry the screenshot rates ($2,000 / $2,500 / $3,000)',
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-8').pay === '2000' &&
   sandbox.__camcShifts.find((x) => x.id === 'shift-camc-10').pay === '2500' &&

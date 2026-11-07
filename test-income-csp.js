@@ -1,4 +1,4 @@
-// CRNA Hub — tests for the confirmed / submitted / proposed (C/S/P)
+// CRNA Hub — tests for the confirmed / proposed (C/P)
 // income split + Monthly Income Goal + 5-step onboarding (Nov 5, 2026,
 // branch muse/credentialing). Run: node test-income-csp.js
 //
@@ -6,7 +6,7 @@
 //   * C/S/P totals: C = confirmed (+ completed), S = C + submitted,
 //     P = S + proposed; rejected/canceled count in no total; YTD and
 //     predicted-annual for each; legacy ytd/predicted fields stay P.
-//   * Unpriced shifts excluded from all three totals and counted
+//   * Unpriced shifts excluded from both totals and counted
 //     (never $0); W-2 salary days (Off / PTO) excluded from all three
 //     even with a pay value stored, and counted.
 //   * Missing/unknown status defaults to proposed, never confirmed.
@@ -101,36 +101,36 @@ run(`
   globalThis.__split27 = yearIncomeSplit(2027, '2026-11-05');
 `);
 const sp = sandbox.__split, sp27 = sandbox.__split27;
-// C: past 2125+2000=4125, future 2125 -> predicted 6250
-t('C = confirmed (+completed) only: YTD 4125, predicted 6250',
-  sp.c.ytd === 4125 && sp.c.predicted === 6250 && sp.c.future === 2125);
-// S: past 4125+3000=7125, future 2125+3000=5125 -> predicted 12250
-t('S = submitted-inclusive: YTD 7125, predicted 12250',
-  sp.s.ytd === 7125 && sp.s.predicted === 12250);
+// Status model (Nov 6, 2026): the two stored 'submitted' rows (s4/s5)
+// normalize to confirmed inside the engine — C: past 2125+2000+3000=7125,
+// future 2125+3000=5125 -> predicted 12250. There is no S bucket.
+t('C = confirmed (+completed, +migrated submitted): YTD 7125, predicted 12250',
+  sp.c.ytd === 7125 && sp.c.predicted === 12250 && sp.c.future === 5125 && !('s' in sp));
 // P: past 7125+2000=9125, future 5125+2000+1000(status-less)=8125 -> predicted 17250
 t('P = proposed-inclusive: YTD 9125, predicted 17250 (status-less shift counts as proposed)',
   sp.p.ytd === 9125 && sp.p.predicted === 17250);
 t('rejected/canceled ($5000 each) count in no total',
-  sp.p.predicted === 17250 && sp.c.predicted === 6250);
-t('unpriced shifts excluded from all three totals and counted (3: two blank-pay + one $0-pay)',
+  sp.p.predicted === 17250 && sp.c.predicted === 12250);
+t('unpriced shifts excluded from both totals and counted (3: two blank-pay + one $0-pay)',
   sp.unpriced === 3 && sp.unpricedFuture === 3);
-t('W-2 salary days with a stored $5000 pay, and with no pay, excluded from all three, counted separately',
-  sp.w2Salary === 2 && sp.w2SalaryPriced === 1 && sp.c.ytd === 4125);
+t('W-2 salary days with a stored $5000 pay, and with no pay, excluded from both, counted separately',
+  sp.w2Salary === 2 && sp.w2SalaryPriced === 1 && sp.c.ytd === 7125);
 t('$0 pay is unpriced, never a priced $0 shift: C and P unchanged by the $0 confirmed shift',
-  sp.c.predicted === 6250 && sp.p.predicted === 17250);
+  sp.c.predicted === 12250 && sp.p.predicted === 17250);
 t('legacy ytd/predicted fields stay mapped to P',
   sp.ytd === sp.p.ytd && sp.predicted === sp.p.predicted && sp.futureGross === sp.p.future);
 t('year scoping: 2027 confirmed shift not in 2026 totals; 2027 C predicted is 2125',
   sp27.c.predicted === 2125 && sp27.c.ytd === 0);
 
 // ---------- Month split (explicit 2026-11 prefix, deterministic) ----------
-// November 2026 priced billable: C = 2125 (Nov 10 confirmed; the $0
-// confirmed shift and the unpriced confirmed shift add nothing), S =
-// 2125 + 3000 submitted, P = S + 2000 + 2000 + 1000 proposed.
+// November 2026 priced billable: C = 2125 (Nov 10 confirmed) + 3000
+// (Nov 12, stored 'submitted' -> migrated to confirmed); the $0
+// confirmed shift and the unpriced confirmed shift add nothing.
+// P = C + 2000 + 2000 + 1000 proposed.
 run(`globalThis.__monthNov = monthIncomeSplit('2026-11');`);
 const mn = sandbox.__monthNov;
-t('month split 2026-11: C 2125, S 5125, P 10125',
-  mn.c === 2125 && mn.s === 5125 && mn.p === 10125);
+t('month split 2026-11: C 5125, P 10125 (no S bucket)',
+  mn.c === 5125 && mn.p === 10125 && !('s' in mn));
 t('month split 2026-11: unpriced 3 (W-2 day with no pay excluded), W-2 days 2',
   mn.unpriced === 3 && mn.w2Salary === 2);
 
@@ -168,18 +168,18 @@ t('normalizeShiftStatus: case-insensitive, unknown/missing -> proposed',
 run(`setShiftStatus('s7', 'confirmed'); globalThis.__split2 = yearIncomeSplit(2026, '2026-11-05');`);
 const sp2 = sandbox.__split2;
 t('status change re-prices: proposed->confirmed moves $2000 into C, P unchanged',
-  sp2.c.predicted === 8250 && sp2.s.predicted === 14250 && sp2.p.predicted === 17250);
+  sp2.c.predicted === 14250 && sp2.p.predicted === 17250);
 run(`setShiftStatus('s7', 'nonsense'); globalThis.__split3 = yearIncomeSplit(2026, '2026-11-05');`);
 t('invalid status change normalizes back to proposed',
-  sandbox.__split3.c.predicted === 6250 && sandbox.__split3.p.predicted === 17250);
+  sandbox.__split3.c.predicted === 12250 && sandbox.__split3.p.predicted === 17250);
 run(`setShiftStatus('s7', 'proposed');`); // restore fixture
 
 // ---------- Creation paths stamp the import status (static + submitEntry) ----------
-t('CSV import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+t('CSV import stamps sourced shifts confirmed, any date (status model)',
   appSrc.includes("status:importStatusForDate(r[0]),note:'CSV import'"));
-t('calendar (.ics) import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+t('calendar (.ics) import stamps sourced shifts confirmed, any date (status model)',
   appSrc.includes("status:importStatusForDate(r.date),source:r.source"));
-t('contract import stamps past shifts confirmed, future shifts proposed (Bug 1)',
+t('contract import stamps sourced shifts confirmed, any date (status model)',
   appSrc.includes("status:importStatusForDate(r.date),source:r.source||'extracted-from-contract'"));
 t('submitEntry normalizes shift status on save',
   appSrc.includes("if(kind==='shifts')record.status=normalizeShiftStatus(record.status);"));
@@ -221,9 +221,9 @@ run(`
   selected = '2026-11-06';
   globalThis.__saved = globalThis.__saved + dayViewHTML();
 `);
-t('Dashboard shows C/S/P table with YTD + predicted-annual labels',
+t('Dashboard shows C/P table with YTD + predicted-annual labels',
   sandbox.__dash.includes('C — Confirmed only') &&
-  sandbox.__dash.includes('S — Submitted-inclusive') &&
+  !sandbox.__dash.includes('S — Submitted-inclusive') &&
   sandbox.__dash.includes('P — Proposed-inclusive') &&
   sandbox.__dash.includes('Year to date') && sandbox.__dash.includes('Predicted 2026 annual'));
 t('Dashboard keeps the paystub disclaimer and has no income-goal panel',
@@ -237,36 +237,36 @@ t('Day view carries the per-shift status changer + W-2 label (moved from the rem
   sandbox.__saved.includes('data-action="delete-shifts" data-id="s1"') &&
   sandbox.__saved.includes('W-2 salary day — excluded from income totals'));
 t('Dashboard income table is scoped to the current year (year scoping lives with the table now)',
-  sandbox.__dash.includes('Income · 2026 — confirmed vs submitted vs proposed'));
+  sandbox.__dash.includes('Income · 2026 — confirmed vs proposed'));
 run(`globalThis.__form = shiftFormHTML();`);
-t('shift form offers the status select, defaulting new shifts to proposed',
+t('shift form (add) asks Confirmed or proposed?, defaulting to proposed',
   sandbox.__form.includes('name="status"') && sandbox.__form.includes('value="proposed" selected'));
 
-// ---------- Assistant answers use the same C/S/P split ----------
+// ---------- Assistant answers use the same C/P split ----------
 run(`
   globalThis.__ansYear = answerQuestion('What is my income this year?');
   globalThis.__ansMonth = answerQuestion("What's my projected income this month?");
-  globalThis.__ansCSP = answerQuestion('What is my C/S/P forecast?');
+  globalThis.__ansCSP = answerQuestion('What is my C/P forecast?');
 `);
-t('assistant year answer quotes C, S and P (not one combined total)',
+t('assistant year answer quotes C and P (not one combined total)',
   sandbox.__ansYear.includes('C (confirmed only)') &&
-  sandbox.__ansYear.includes('S (submitted-inclusive') &&
+  !sandbox.__ansYear.includes('submitted') &&
   sandbox.__ansYear.includes('P (proposed-inclusive'));
-t('assistant month answer quotes C, S and P',
+t('assistant month answer quotes C and P',
   sandbox.__ansMonth.includes('C (confirmed only)') &&
-  sandbox.__ansMonth.includes('S (submitted-inclusive)') &&
+  !sandbox.__ansMonth.includes('submitted') &&
   sandbox.__ansMonth.includes('P (proposed-inclusive)'));
-t('assistant C/S/P question answers with live totals, not "planned feature"',
+t('assistant C/P question answers with live totals, not "planned feature"',
   sandbox.__ansCSP.includes('C (confirmed only)') &&
   !sandbox.__ansCSP.includes('planned feature'));
 run(`globalThis.__summary = buildAssistantSummary();`);
-t('live-model summary carries c/s/p year totals and confirmed month total',
-  sandbox.__summary.year.c && sandbox.__summary.year.s && sandbox.__summary.year.p &&
+t('live-model summary carries c/p year totals and confirmed month total',
+  sandbox.__summary.year.c && !sandbox.__summary.year.s && sandbox.__summary.year.p &&
   typeof sandbox.__summary.month.confirmed === 'number' &&
   sandbox.__summary.month.monthlyIncomeGoal === 0);
 t('no "does not yet track" / "planned, not live" income copy remains',
   !appSrc.includes('does not yet track confirmed vs. submitted vs. proposed') &&
-  !appSrc.includes('the C/S/P split is a planned feature'));
+  !appSrc.includes('the C/P split is a planned feature'));
 
 // ---------- Onboarding: 5 steps, facilities & contracts merged ----------
 run(`

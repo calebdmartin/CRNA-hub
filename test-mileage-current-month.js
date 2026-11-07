@@ -171,7 +171,7 @@ const t = (name, cond) => {
   const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   t('clear action is wired in the actions handler', appSrc.includes("action==='mileage-clear-backlog'"));
   t('cleared confirmation line present', appSrc.includes('older trip') && appSrc.includes('count toward mileage'));
-  t('service worker cache bumped to v62', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v62'));
+  t('service worker cache bumped to v63', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v63'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

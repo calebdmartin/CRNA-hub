@@ -142,9 +142,9 @@ run(`
   globalThis.__before = db.shifts.length;
   approveScheduleImport();
 `);
-t('approve adds only the 2 matched rows as schedule-import shifts, past confirmed / future proposed (Bug 1)',
+t('approve adds only the 2 matched rows as schedule-import shifts, all confirmed (status model Nov 6, 2026)',
   run(`db.shifts.length`) === 2 &&
-  run(`db.shifts.every(x => x.source === 'schedule-import' && x.status === (x.date < localDate(new Date()) ? 'confirmed' : 'proposed'))`) &&
+  run(`db.shifts.every(x => x.source === 'schedule-import' && x.status === 'confirmed')`) &&
   run(`db.shifts.map(x => x.date).join(',')`) === '2026-11-10,2026-11-12');
 t('approve checks step 2 off and records the imported file',
   run(`db.settings.scheduleImported`) === true &&

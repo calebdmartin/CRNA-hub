@@ -103,11 +103,11 @@ const lastYearStr = `${year - 1}-06-15`;
 t('importStatusForDate: past -> confirmed',
   run(`importStatusForDate('${pastStr}')`) === 'confirmed' &&
   run(`importStatusForDate('${pastStr}', '${todayStr}')`) === 'confirmed');
-t('importStatusForDate: today stays proposed (shift not over yet)',
-  run(`importStatusForDate('${todayStr}')`) === 'proposed' &&
-  run(`importStatusForDate('${todayStr}', '${todayStr}')`) === 'proposed');
-t('importStatusForDate: future -> proposed',
-  run(`importStatusForDate('${futureStr}')`) === 'proposed');
+t('importStatusForDate: today arrives confirmed (status model Nov 6, 2026: sourced = confirmed, any date)',
+  run(`importStatusForDate('${todayStr}')`) === 'confirmed' &&
+  run(`importStatusForDate('${todayStr}', '${todayStr}')`) === 'confirmed');
+t('importStatusForDate: future -> confirmed (supersedes the Bug 1 date rule)',
+  run(`importStatusForDate('${futureStr}')`) === 'confirmed');
 t('importStatusForDate: missing/invalid date -> proposed, never silently confirmed',
   run(`importStatusForDate('')`) === 'proposed' &&
   run(`importStatusForDate('not-a-date')`) === 'proposed' &&
@@ -127,13 +127,13 @@ run(`
   approveScheduleImport();
   globalThis.__sched = db.shifts.slice();
 `);
-t('schedule import: past row arrives confirmed, future and today rows arrive proposed',
+t('schedule import: past, future and today rows all arrive confirmed (status model Nov 6, 2026)',
   sandbox.__sched.find((x) => x.date === pastStr).status === 'confirmed' &&
-  sandbox.__sched.find((x) => x.date === futureStr).status === 'proposed' &&
-  sandbox.__sched.find((x) => x.date === todayStr).status === 'proposed');
+  sandbox.__sched.find((x) => x.date === futureStr).status === 'confirmed' &&
+  sandbox.__sched.find((x) => x.date === todayStr).status === 'confirmed');
 t('schedule import approve no longer says all added shifts are proposed',
   !appSrc.includes('All added shifts are proposed until you confirm them.') &&
-  appSrc.includes('Past shifts arrive confirmed (they already happened)'));
+  appSrc.includes('Imported shifts arrive confirmed — they are on a real schedule.'));
 
 // ---------- 3. Live-sync apply: past confirmed, future proposed, updates never restamp ----------
 run(`
@@ -150,8 +150,8 @@ run(`
 `);
 t('live sync: past create arrives confirmed even with no server status',
   sandbox.__syncShifts.find((x) => x.id === 'past-1').status === 'confirmed');
-t('live sync: future create arrives proposed',
-  sandbox.__syncShifts.find((x) => x.id === 'future-1').status === 'proposed');
+t('live sync: future create arrives confirmed (status model Nov 6, 2026)',
+  sandbox.__syncShifts.find((x) => x.id === 'future-1').status === 'confirmed');
 t('live sync: local date wins over a stale server-proposed stamp on a past shift',
   sandbox.__syncShifts.find((x) => x.id === 'past-stale').status === 'confirmed');
 run(`
