@@ -3,17 +3,17 @@
 // friend meant his data was still on screen. The Account tab now has a
 // second, separate option next to Sign out:
 //   * "Sign out & clear this device" — confirms first, downloads the
-//     JSON backup (shifts/facilities/mileage live ONLY on the device,
-//     so the clear must stay recoverable), then signs out and wipes
+//     JSON backup anyway (belt and suspenders), then signs out and wipes
 //     every user store on the device: the database, the cloud session
 //     markers, the in-progress portal check, the live-sync state
 //     (pending deletions, tombstones, sync log) and all in-memory
 //     previews/prompts — landing on the fresh signed-out state.
 //   * The cloud account is never touched: the only network call is the
 //     auth logout — no REST reads/writes, no DELETEs — so signing back
-//     in re-runs the automatic merge and the credential records come
-//     back with no duplicates; on-device-only records come back from
-//     the downloaded backup via Restore.
+//     in re-runs the automatic merge and the records come back with
+//     no duplicates (since the full cloud sync build, that includes
+//     shifts, facilities, mileage, and pay stubs — the downloaded
+//     backup via Restore remains as a fallback).
 //   * Plain Sign out is unchanged: data stays on the device.
 // Run: node test-signout-clear-device.js
 const fs = require('fs');
@@ -139,11 +139,11 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('cloud account untouched by the clear: no REST calls, no DELETEs (auth logout only)',
     fetchCalls.every(c => !c.url.includes('/rest/v1/') && c.method !== 'DELETE'));
 
-  // ---------- 4. A backup downloaded first, so the clear is recoverable ----------
+  // ---------- 4. A backup downloaded first, so the clear stays recoverable ----------
   t('a backup file was downloaded before clearing', !!lastBlob);
   const backupText = lastBlob ? await lastBlob.text() : '';
   const backup = backupText ? JSON.parse(backupText) : {};
-  t('backup holds the on-device-only records (shift, facility, mileage)',
+  t('backup holds the records (shift, facility, mileage)',
     !!backup.shifts && backup.shifts.some(x => x.id === 'shift-1') && backup.facilities.some(x => x.id === 'fac-1') && backup.mileage.some(x => x.id === 'mi-1'));
 
   // ---------- 5. Sign back in: the cloud merge restores credentials, no dupes ----------
@@ -164,7 +164,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('applying the merge twice creates no duplicates',
     run(`db.licenses.filter(x => x.id === 'lic-1').length`) === 1 && run(`db.nbcrnaCE.filter(x => x.id === 'ce-1').length`) === 1);
 
-  // ---------- 6. On-device-only records come back from the backup ----------
+  // ---------- 6. Records also come back from the backup ----------
   await run(`restoreBackup({ target: { files: [{ text: async () => ${JSON.stringify(backupText)} }] } })`);
   t('restore brings back the shifts, facilities, and mileage from the backup',
     run(`db.shifts.some(x => x.id === 'shift-1') && db.facilities.some(x => x.id === 'fac-1') && db.mileage.some(x => x.id === 'mi-1')`) === true);
@@ -179,5 +179,5 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('plain sign out ends the session', run(`cloudSession`) === null);
   t('plain sign out leaves the data on the device (database and portal state intact)',
     store.has('crna-hub-v2') && JSON.parse(store.get('crna-hub-v2')).shifts.some(x => x.id === 'shift-1') && store.has('crna-hub-portal-check'));
-  t('service worker cache bumped to v56', swSrc.includes('crna-hub-shell-v56'));
+  t('service worker cache bumped to v57', swSrc.includes('crna-hub-shell-v57'));
 })().catch(e => { console.error('ERROR', e); process.exitCode = 1; });

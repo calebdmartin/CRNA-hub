@@ -288,8 +288,8 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
   t('upload a schedule: an in-flight preview keeps it open',
     sandbox.__schedBusy.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>'));
 
-  t('service worker cache bumped to v56',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v56'));
+  t('service worker cache bumped to v57',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v57'));
 
   console.log(failures === 0 ? 'account-collapse test done: all passed' : 'account-collapse test done: FAILURES=' + failures);
 })();

@@ -102,7 +102,7 @@ t('Account small print carries NO version line (Nov 6 sweep: build stamp removed
   !pages.Account.includes('cache v'));
 t('build stamp is gone entirely from the app',
   run(`typeof BUILD_STAMP`) === 'undefined' && !appSrc.includes('checkAppUpdate'));
-t('service worker cache bumped to v56', swSrc.includes("crna-hub-shell-v56"));
+t('service worker cache bumped to v57', swSrc.includes("crna-hub-shell-v57"));
 
 // ---------- 4. Contract upload still works end to end (pasted text) ----------
 (async () => {
