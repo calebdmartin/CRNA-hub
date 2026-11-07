@@ -23,6 +23,12 @@
 //     both. The actual builds no forward rule: later periods stay
 //     pure shift calculations. A stub for a period with no recorded
 //     shifts still records its actual for that period.
+//   * ONE HEADLINE PER MONTH (Caleb, Nov 7, 2026): the calendar banner,
+//     the Dashboard card, and the assistant all use monthHeadline() —
+//     with a pay schedule, the headline is the PAYCHECK basis (what
+//     lands in the month: Nov 2026 = $39,832.50), NOT the worked sum
+//     ($39,825); unscheduled work adds its worked sum once; no schedule
+//     at all keeps the worked basis.
 // Covers, without any live API call (fetch is stubbed; no network):
 //   * Frequency normalisation (weekly / biweekly / semi-monthly /
 //     monthly, incl. "every 2 weeks" / "twice a month"); unknown -> ''.
@@ -307,6 +313,11 @@ run(`
   globalThis.__pcRecon = reconciledYearSplit(2026, '2026-11-06');
   globalThis.__pcCSP = incomeCSPHTML(2026, reconciledYearSplit(2026, '2026-11-06'));
   globalThis.__pcUpHTML = paystubUpcomingHTML();
+  globalThis.__pcHeadNov = monthHeadline('2026-11');
+  globalThis.__pcHeadDec = monthHeadline('2026-12');
+  globalThis.__decOccSum = paystubOccurrencesInMonth('2026-12').reduce((s, o) => { const a = paystubOccurrenceAmount(o); return a == null ? s : s + a; }, 0);
+  month = new Date(2026, 11, 1);
+  globalThis.__pcCalDec = calendar();
   month = new Date(2026, 10, 1);
   globalThis.__pcCal = calendar();
   globalThis.__pcClaims = (() => { const c = paystubShiftClaims(); const seen = new Set(); let dup = false;
@@ -335,10 +346,23 @@ t('the paycheck is status-blind: the same data with every shift confirmed yields
   run(`db.shifts.forEach((x) => x.status = 'confirmed'); globalThis.__allConf = paystubOccurrences(db.payStubs[0], '2026-11-01', '2026-12-31'); db.shifts.forEach((x) => { if (['n5','n6','n7','n8','n9','n10','n11'].includes(x.id)) x.status = 'proposed'; }); globalThis.__allConf.find((x) => x.date === '2026-11-24').total`) === 27075);
 t('no double-claiming: every shift is claimed by exactly one stub and lands in exactly one occurrence window',
   sandbox.__pcClaims.dup === false && sandbox.__pcClaims.claimed.size === 22);
-t('November calendar: 17 shifts · $39,825.00 month total, Nov 24 chip est. $27,075.00, Nov 10 chip actual $12,757.50, paycheck total $39,832.50',
-  sandbox.__pcCal.includes('17 shifts') && sandbox.__pcCal.includes('$39,825.00 expected gross this month') &&
-  sandbox.__pcCal.includes('est. $27,075.00') && sandbox.__pcCal.includes('actual $12,757.50') &&
-  sandbox.__pcCal.includes('$39,832.50 paycheck total'));
+t('November calendar: banner carries the ONE headline — $39,832.50 paycheck basis; the worked $39,825 appears nowhere; chips unchanged',
+  sandbox.__pcCal.includes('month-banner') && sandbox.__pcCal.includes('November 2026') &&
+  sandbox.__pcCal.includes('Expected gross <strong>$39,832.50</strong>') &&
+  sandbox.__pcCal.includes('incl. actual from pay stub') &&
+  !sandbox.__pcCal.includes('$39,825') &&
+  sandbox.__pcCal.includes('17 shifts') && sandbox.__pcCal.includes('Tap a day to see its shifts') &&
+  sandbox.__pcCal.includes('est. $27,075.00') && sandbox.__pcCal.includes('actual $12,757.50'));
+t('monthHeadline: November is paycheck-basis $39,832.50 (actual $12,757.50 + Nov 24 est $27,075), worked remainder $0',
+  sandbox.__pcHeadNov.gross === 39832.50 && sandbox.__pcHeadNov.scheduled === true &&
+  sandbox.__pcHeadNov.anyActual === true && sandbox.__pcHeadNov.paycheckTotal === 39832.50 &&
+  sandbox.__pcHeadNov.worked === 0 && sandbox.__pcHeadNov.paychecks === 2);
+t('monthHeadline: December equals the sum of its own paycheck occurrences (Dec 8 + Dec 22), not a worked-basis figure',
+  sandbox.__pcHeadDec.gross === sandbox.__decOccSum && sandbox.__pcHeadDec.gross === 12750 &&
+  sandbox.__pcHeadDec.scheduled === true && sandbox.__pcHeadDec.anyActual === false);
+t('December banner follows the viewed month and carries the same paycheck-basis headline',
+  sandbox.__pcCalDec.includes('month-banner') && sandbox.__pcCalDec.includes('December 2026') &&
+  sandbox.__pcCalDec.includes('Expected gross <strong>' + run(`currency(globalThis.__decOccSum)`) + '</strong>'));
 t('reconciliation record: actual 12,757.50 replaces shift sum 11,500 -> delta +1,257.50',
   sandbox.__pcRec.length === 1 &&
   sandbox.__pcRec[0].actual === 12757.50 && sandbox.__pcRec[0].shiftSum === 11500 &&
@@ -363,6 +387,34 @@ t('upcoming panel: Nov 10 actual from pay stub; Nov 24 headline is the full $27,
   sandbox.__pcUpHTML.includes('Estimated $27,075.00 gross') &&
   sandbox.__pcUpHTML.includes('includes $17,700.00 from proposed shifts') &&
   !sandbox.__pcUpHTML.includes('$12,757.50 net'));
+// ---------- Month headline: partial coverage + no schedule (Nov 7) ----------
+// One voice per month (Caleb, Nov 7, 2026): with a pay schedule, the
+// headline is what LANDS in the month; facilities with no schedule
+// still count their worked shifts, once; with no schedule at all the
+// headline is the worked sum, as it always was.
+run(`
+  db.facilities = [{id:'f1', name:'Holzer'}, {id:'f2', name:'CAMC'}];
+  db.shifts.push(
+    {id:'c1', date:'2026-11-18', facility:'CAMC', type:'8-hour day', pay:'2000', status:'confirmed'},
+    {id:'c2', date:'2026-11-19', facility:'CAMC', type:'8-hour day', pay:'2000', status:'confirmed'}
+  );
+  globalThis.__partHead = monthHeadline('2026-11');
+  month = new Date(2026, 10, 1);
+  globalThis.__partCal = calendar();
+  db.shifts = db.shifts.filter((x) => x.id !== 'c1' && x.id !== 'c2');
+  db.payStubs = [];
+  globalThis.__noSchedHead = monthHeadline('2026-11');
+  globalThis.__noSchedCal = calendar();
+  db.payStubs = [{id:'pc', agency:'Premier Anesthesia Group, PC', facility:'Holzer', frequency:'biweekly', periodStart:'2026-10-19', periodEnd:'2026-11-01', payDate:'2026-11-10', gross:'12757.50', net:'12757.50', source:'ai-vision'}];
+`);
+t('partial coverage: unscheduled CAMC shifts add their worked sum ONCE on top of the paycheck basis ($39,832.50 + $4,000)',
+  sandbox.__partHead.gross === 43832.50 && sandbox.__partHead.partial === true &&
+  sandbox.__partHead.worked === 4000 && sandbox.__partHead.paycheckTotal === 39832.50 &&
+  sandbox.__partCal.includes('Expected gross <strong>$43,832.50</strong>'));
+t('no pay schedule at all: the headline falls back to the worked basis ($39,825) in the same banner, no stub qualifier',
+  sandbox.__noSchedHead.scheduled === false && sandbox.__noSchedHead.gross === 39825 &&
+  sandbox.__noSchedCal.includes('Expected gross <strong>$39,825.00</strong>') &&
+  !sandbox.__noSchedCal.includes('incl. actual from pay stub'));
 // An unpriced shift inside a period flags that check, never $0-fills it,
 // and a stub naming a facility never claims another facility's shifts.
 run(`
