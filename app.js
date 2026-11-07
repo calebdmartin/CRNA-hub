@@ -2708,6 +2708,20 @@ function qgendaFeedHTML(){
   // screen instead of hidden behind the header.
   return collapsePanelHTML('qgenda-panel','QGenda',inner,!!qgendaStatusError);
 }
+// QGenda errors reach the user as plain next steps, never as raw
+// server codes (function_not_allowed, qgenda_failed, …). The code is
+// logged to the console for support; the banner says what to do.
+function qgendaFriendlyError(err,phase){
+  const code=String((err&&err.data&&err.data.error)||(err&&err.message)||'');
+  try{console.warn('[qgenda] '+phase+' failed:',code)}catch(e){}
+  const saved=phase==='save'?' Nothing was saved.':'';
+  if(code==='invalid_feed_url'||code==='feed_not_ics'||code==='feed_redirected')return 'That link did not return a QGenda calendar feed — copy “Your Subscription URL” from the Sync button in QGenda and try again.'+saved;
+  if(code==='feed_unreachable')return 'QGenda did not answer just now — try again in a minute.'+saved;
+  if(code==='not_signed_in')return 'Sign in on the Account tab first — the feed URL lives on your signed-in account, never on this device.'+saved;
+  if(code==='not_connected')return 'Connect your QGenda feed first, then check it.';
+  if(code==='missing_url')return 'Paste your QGenda Subscription URL first (Sync button in app.qgenda.com).';
+  return 'Something went wrong on our side just now — try again in a little while.'+saved;
+}
 async function saveQgendaFeed(e){
   e.preventDefault(); qgendaStatusError='';
   const url=String(($('f_qgendaUrl')?$('f_qgendaUrl').value:'')||'').trim();
@@ -2720,7 +2734,7 @@ async function saveQgendaFeed(e){
     db.settings=db.settings||{}; db.settings.qgendaConnected=true; db.settings.qgendaMasked=String((data&&data.masked)||'');
     qgendaStatusError=''; persist(); render();
     await fetchQgendaFeed();
-  }catch(err){qgendaStatusError='Could not connect the QGenda feed: '+String((err&&err.data&&err.data.message)||(err&&err.message)||err)+' Nothing was saved.'; render()}
+  }catch(err){qgendaStatusError=qgendaFriendlyError(err,'save'); render()}
 }
 async function fetchQgendaFeed(){
   if(!SUPABASE_CONFIGURED||!cloudSession){qgendaStatusError='Sign in on the Account tab first.';render();return}
@@ -2740,7 +2754,7 @@ async function fetchQgendaFeed(){
     schedulePreview={fileName:'QGenda feed',source:'qgenda-feed',matchedName:name,rows,noNamesInFile:false,ai:false};
     db.settings=db.settings||{}; db.settings.qgendaConnected=true; if(data.masked)db.settings.qgendaMasked=String(data.masked);
     persist(); render();
-  }catch(err){qgendaStatusError='Could not check the QGenda feed: '+String((err&&err.data&&err.data.message)||(err&&err.message)||err); render()}
+  }catch(err){qgendaStatusError=qgendaFriendlyError(err,'fetch'); render()}
 }
 async function disconnectQgendaFeed(){
   if(!confirm('Disconnect the QGenda feed? The stored URL is deleted from the server. Shifts already imported stay.'))return;

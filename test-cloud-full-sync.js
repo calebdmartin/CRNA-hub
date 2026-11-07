@@ -115,8 +115,8 @@ const canonRec = (x) => { const c = Object.assign({}, x); delete c.updatedAt; re
 const sess = (tok, uid) => ({ access_token: tok, refresh_token: 'ref', expires_at: Math.floor(Date.now() / 1000) + 3600, email: uid + '@example.com', user_id: uid });
 
 (async () => {
-  t('precondition: Supabase configured, cache v59',
-    run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v59'));
+  t('precondition: Supabase configured, cache v60',
+    run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v60'));
   t('source: full-sync tables and tombstones are wired',
     appSrc.includes("'/rest/v1/shifts'") && appSrc.includes("'/rest/v1/facilities'") &&
     appSrc.includes("'/rest/v1/mileage_trips'") && appSrc.includes("'/rest/v1/pay_stubs'") &&

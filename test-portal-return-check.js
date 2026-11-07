@@ -262,8 +262,8 @@ t('canned portal answer is one short line pointing at the check step',
     idx.includes('normalizeAiPortalCheck') && norm.includes('export function normalizeAiPortalCheck'));
 
   // --- 12. Cache bumped for the shell change.
-  t('service worker cache bumped to v59',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v59'));
+  t('service worker cache bumped to v60',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v60'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

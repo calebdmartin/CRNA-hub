@@ -11,16 +11,21 @@
 // reachable" on such devices even when the function is live.
 //
 // Security notes:
-// - This is NOT an open proxy. Only six allowlisted functions are
+// - This is NOT an open proxy. Only seven allowlisted functions are
 //   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync,
-//   extract-contract, assistant-chat), and only allowlisted actions:
+//   extract-contract, assistant-chat, qgenda-feed), and only
+//   allowlisted actions:
 //   sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
 //   set-auto-delete/resolve-deletion, the OAuth "start" action for
 //   google-auth/outlook-auth, and portal-sync config/status/
 //   verify-nbcrna/verify-license (the former connect-aana action was
 //   deleted Nov 5, 2026 — audit F9 — and is rejected here),
-//   extract-contract extract-contract, and assistant-chat chat.
+//   extract-contract extract-contract, assistant-chat chat, and
+//   qgenda-feed status/save/fetch/disconnect (the QGenda subscription
+//   feed connect — added Nov 6, 2026 after the missing entry made every
+//   QGenda connect fail here with function_not_allowed even though the
+//   Edge Function itself was live).
 //   Everything else is rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client
 //   key already embedded in supabase-config.js), plus the user's own
@@ -58,6 +63,11 @@ const FUNCTIONS = {
   // plus a minimal structured summary of the user's records — never
   // facility notes/codes, documents, or patient information.
   'assistant-chat': new Set(['chat']),
+  // QGenda subscription feed (Account tab QGenda panel): the pasted
+  // feed URL is stored encrypted by the Edge Function; the proxy only
+  // forwards the four feed actions with the user's token, like the
+  // rest. POST only, no public/token-less action.
+  'qgenda-feed': new Set(['status', 'save', 'fetch', 'disconnect']),
 };
 
 function bad(res, code, status) {
