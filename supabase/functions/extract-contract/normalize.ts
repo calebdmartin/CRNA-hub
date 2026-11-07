@@ -335,6 +335,14 @@ export interface AiScheduleShift {
   code: string;
   name: string;
   pay: string;
+  // Grid reliability (Nov 6, 2026): for a grid cell, `column` is the
+  // 1-based position of its column and `anchored` says whether the
+  // date below was re-derived from that column's header date (the
+  // anchoring step in normalizeAiScheduleRead) instead of trusting
+  // the model's own date guess. List rows: column null, anchored
+  // false (not applicable — their dates come from the row itself).
+  column: number | null;
+  anchored: boolean;
 }
 
 const SCHEDULE_MONTHS: Record<string, number> = {
@@ -370,10 +378,32 @@ function coerceScheduleDate(v: unknown): string {
   return "";
 }
 
-export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
-  const shifts = (raw as Record<string, unknown>)["shifts"];
-  if (!Array.isArray(shifts)) return [];
+// Full schedule read (Nov 6, 2026 reliability pass): returns the
+// shifts PLUS the grid header dates the model transcribed, and —
+// for grid cells — re-derives every date from its COLUMN's header
+// date (date anchoring). Caleb ran the same grid photo three times
+// and got three different answers: the model would pair a correct
+// code with the neighboring column's date (off-by-one drift) or
+// bleed a cell in from the row below. A column position is a much
+// easier thing for the model to report than a date, and the header
+// row is read once, as a list — so the anchored date (header[column])
+// replaces the model's free-floating date guess wherever the header
+// was actually read. Cells whose column has no readable header keep
+// the model's date with anchored=false, and the client flags them
+// "check this one" in the preview instead of trusting them silently.
+export function normalizeAiScheduleRead(
+  raw: unknown,
+): { shifts: AiScheduleShift[]; headerDates: string[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { shifts: [], headerDates: [] };
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawHeader = obj["header_dates"];
+  const headerDates: string[] = Array.isArray(rawHeader)
+    ? rawHeader.map((h) => coerceScheduleDate(h))
+    : [];
+  const shifts = obj["shifts"];
+  if (!Array.isArray(shifts)) return { shifts: [], headerDates };
   const out: AiScheduleShift[] = [];
   for (const item of shifts) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
@@ -382,11 +412,31 @@ export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
     const facility = coerceAiText(row["facility"]) ?? "";
     const code = coerceAiText(row["code"]) ?? "";
     // List rows need a facility; grid cells need their code instead.
-    if (!date || (!facility && !code)) continue;
-    // Grid headers never print a year, so any year the model attaches
-    // to a grid cell is a guess — the importer's rule for year-less
-    // dates is the current year.
-    if (code) date = `${new Date().getFullYear()}-${date.slice(5)}`;
+    if (!date && !code) continue;
+    if (!facility && !code) continue;
+    let column: number | null = null;
+    let anchored = false;
+    if (code) {
+      const c = row["column"];
+      if (typeof c === "number" && Number.isFinite(c)) {
+        const ci = Math.trunc(c);
+        if (ci >= 1) column = ci;
+      } else if (typeof c === "string" && /^\d+$/.test(c.trim())) {
+        column = parseInt(c.trim(), 10);
+      }
+      // Anchoring: the column's header date IS this cell's date.
+      if (column !== null && headerDates[column - 1]) {
+        date = headerDates[column - 1];
+        anchored = true;
+      }
+      if (!date) continue;
+      // Grid headers never print a year, so any year the model
+      // attaches to a grid cell is a guess — the importer's rule for
+      // year-less dates is the current year.
+      date = `${new Date().getFullYear()}-${date.slice(5)}`;
+    } else if (!date) {
+      continue;
+    }
     out.push({
       date,
       facility,
@@ -396,9 +446,15 @@ export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
       code,
       name: coerceAiText(row["name"]) ?? "",
       pay: "",
+      column,
+      anchored,
     });
   }
-  return out;
+  return { shifts: out, headerDates };
+}
+
+export function normalizeAiSchedule(raw: unknown): AiScheduleShift[] {
+  return normalizeAiScheduleRead(raw).shifts;
 }
 
 // --- Plain-language rule mode (Nov 6, 2026) ---

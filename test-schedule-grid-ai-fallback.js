@@ -114,10 +114,15 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
     ocrImageFile = async () => { globalThis.__ocrCalls++; return ''; };
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
+  // Reliability pass (later Nov 6, 2026): a grid read is now read
+  // TWICE and reconciled, so the successful path is 3 calls total —
+  // the stalled first attempt, its retry, and the confirmation read.
+  // Both landed reads agree here, so the status reports agreement
+  // instead of clearing.
   t('AI stall retries once and the AI read lands (no OCR fallback used)',
-    run(`globalThis.__aiCalls`) === 2 && run(`globalThis.__ocrCalls`) === 0 &&
+    run(`globalThis.__aiCalls`) === 3 && run(`globalThis.__ocrCalls`) === 0 &&
     run(`schedulePreview && schedulePreview.rows.filter(r=>r.match==='matched').length`) === 5 &&
-    run(`scheduleAiStatus`) === '');
+    run(`scheduleAiStatus`).includes('both reads agreed'));
 
   // ---------- Fix 2a: AI down + OCR garbage = couldn't-read, zero rows ----------
   run(`

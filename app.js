@@ -2613,7 +2613,7 @@ function applyAiToSchedulePreview(data,fileName){
     const rowName=String(sh.name||'').trim();
     const match=rowName?(scheduleNamesMatch(rowName,name)?'matched':(name?'other':'uncertain')):'uncertain';
     const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,{date,facility,type}));
-    const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(match==='other')flags.push('other person — excluded'); if(match==='uncertain')flags.push('uncertain — check to include'); if(facility&&!facilityByNameOrAlias(facility))flags.push('new facility — will be suggested, not created'); if(code)flags.push('grid code "'+code+'" — not a known shift type; saved as-is, unpriced (rename it here if you know it)');
+    const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(match==='other')flags.push('other person — excluded'); if(match==='uncertain')flags.push('uncertain — check to include'); if(facility&&!facilityByNameOrAlias(facility))flags.push('new facility — will be suggested, not created'); if(code)flags.push('grid code "'+code+'" — not a known shift type; saved as-is, unpriced (rename it here if you know it)'); if(sh.check)flags.push('check this one — '+(sh.checkReason||'the two reads of this photo disagreed here'));
     return {date,facility,type,code,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched',duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
   });
   schedulePreview={fileName,source:'schedule-import-ai',matchedName:name,rows,noNamesInFile:false,ai:true};
@@ -2659,6 +2659,53 @@ async function scheduleOcrFallback(images,fileName){
     return true;
   }catch(e){ return false }
 }
+// --- Grid double-read reconciliation (Nov 6, 2026 reliability) ---
+// Caleb ran the SAME grid photo three times and got three different
+// answers (wrong dates twice, "no shifts" once): even pinned to
+// temperature 0 server-side, a vision read of a dense grid is not
+// guaranteed identical run to run. So a grid read is done TWICE and
+// the two reads are reconciled cell by cell:
+//   both reads agree (same column, same code, same anchored date)
+//     -> solid, no flag;
+//   codes differ, dates differ, or a cell appears in only one read
+//     -> the cell is shown ONCE, flagged "check this one";
+//   a cell whose date could not be anchored to its column header
+//     -> flagged the same way.
+// Same photo -> same preview; the uncertainty is surfaced on the
+// exact cells that carry it, never hidden. List schedules are NOT
+// double-read — their behavior is unchanged.
+function scheduleReadIsGrid(data){
+  const shifts=Array.isArray(data&&data.shifts)?data.shifts:[];
+  const hdr=Array.isArray(data&&data.header_dates)?data.header_dates:[];
+  return shifts.some(s=>String(s.code||'').trim()!=='')||hdr.filter(d=>String(d||'').trim()).length>=3;
+}
+function reconcileGridReads(a,b){
+  const hdrCount=(d)=>(Array.isArray(d&&d.header_dates)?d.header_dates:[]).filter(x=>String(x||'').trim()).length;
+  const gridSeen=hdrCount(a)>=3||(b?hdrCount(b)>=3:false);
+  const keyOf=(s)=>{const c=parseInt(s&&s.column,10); if(Number.isFinite(c)&&c>0)return 'col:'+c; return 'date:'+String((s&&s.date)||'')};
+  const cells=(d)=>{const m=new Map(); for(const s of (Array.isArray(d&&d.shifts)?d.shifts:[])){ if(!String(s.code||'').trim())continue; const k=keyOf(s); if(!m.has(k))m.set(k,s);} return m;};
+  const A=cells(a),B=b?cells(b):new Map();
+  const out=[];
+  for(const k of new Set([...A.keys(),...B.keys()])){
+    const x=A.get(k),y=B.get(k);
+    if(x&&y){
+      if(String(x.code).trim()===String(y.code).trim()&&String(x.date)===String(y.date)){
+        if(x.anchored===false)out.push({...x,check:true,checkReason:'the date for this column could not be verified against the header row'});
+        else out.push({...x});
+      } else if(String(x.code).trim()!==String(y.code).trim()){
+        out.push({...x,check:true,checkReason:'the two reads disagreed on this cell'});
+      } else {
+        out.push({...x,check:true,checkReason:'the two reads disagreed on the date for this column'});
+      }
+    } else if(x){
+      out.push({...x,check:true,checkReason:b?'only one of the two reads saw this cell':'the second read did not come back, so this cell rests on a single read'});
+    } else if(y){
+      out.push({...y,check:true,checkReason:'only one of the two reads saw this cell'});
+    }
+  }
+  out.sort((p,q)=>String(p.date).localeCompare(String(q.date))||((parseInt(p.column,10)||0)-(parseInt(q.column,10)||0)));
+  return {shifts:out,gridSeen};
+}
 async function readScheduleWithAI(images){
   scheduleImportError='';
   scheduleAiStatus='Sending '+images.length+' photo(s) to AI for reading — this can take a few seconds…'; render();
@@ -2673,6 +2720,28 @@ async function readScheduleWithAI(images){
       // proxy cut mid-read (Nov 6, 2026) must not dump the user
       // straight into the on-device fallback.
       data=await callExtractSchedule(images.slice(0,4),scheduleName());
+    }
+    if(scheduleReadIsGrid(data)){
+      // Grid: read it a second time and reconcile before showing
+      // anything (see reconcileGridReads above).
+      scheduleAiStatus='That looks like a grid schedule — reading it a second time to double-check…'; render();
+      let data2=null;
+      try{ data2=await callExtractSchedule(images.slice(0,4),scheduleName()); }catch(e2){ data2=null; }
+      const rec=reconcileGridReads(data,data2);
+      if(!rec.shifts.length){
+        // Both reads empty. If a grid was plainly there (either read
+        // transcribed its header row), the honest answer is
+        // couldn't-read — not a coin flip between "some shifts" and
+        // "no shifts" on the next run, and no OCR guessing.
+        if(rec.gridSeen){ scheduleImportError=scheduleGridUnreadMessage(); scheduleAiStatus=''; schedulePreview=null; render(); return; }
+        if(await scheduleOcrFallback(images,fileName)){render();return}
+        scheduleImportError=scheduleGridUnreadMessage(); scheduleAiStatus=''; schedulePreview=null; render(); return;
+      }
+      const okGrid=applyAiToSchedulePreview({ok:true,mode:'schedule',shifts:rec.shifts},fileName);
+      if(!okGrid){ scheduleImportError=scheduleGridUnreadMessage(); scheduleAiStatus=''; schedulePreview=null; render(); return; }
+      const checked=rec.shifts.filter(s=>s.check).length;
+      scheduleAiStatus=checked?('Read twice to double-check: '+checked+' cell(s) the two reads could not agree on are flagged "check this one" in the preview.'):'Read twice to double-check — both reads agreed on every cell.';
+      scheduleImportError=''; render(); return;
     }
     const ok=applyAiToSchedulePreview(data,fileName);
     if(!ok){

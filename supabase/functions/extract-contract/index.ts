@@ -62,13 +62,23 @@ import {
   normalizeAiContract,
   normalizeAiPaystub,
   normalizeAiPortalCheck,
-  normalizeAiSchedule,
+  normalizeAiScheduleRead,
   normalizeAiRule,
   extractAiContent,
   parseAiResponseText,
 } from "./normalize.ts";
 
 const MODEL = "gpt-4o-mini";
+// Schedule reads stay on mini (Nov 6, 2026 reliability pass): the
+// stronger gpt-4o was tried live for schedule mode and was WORSE on
+// a dense grid — it pattern-completed blank cells into invented
+// shifts (14 cells where 5 exist) and returned zero on another run.
+// Mini at temperature 0 is near-deterministic; its residual grid
+// errors (row bleed on ultra-dense photos) are what the client's
+// double-read reconciliation + preview-before-save exist to catch.
+// The model choice was measured, not assumed — see the reliability
+// test header for the run data.
+const SCHEDULE_MODEL = MODEL;
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const MAX_IMAGES = 4;
 // A resized JPEG data URL is ~100-400KB of base64; 4 pages stay well
@@ -110,18 +120,19 @@ const PROMPT =
 // — no times, hours, or meanings are invented for them.
 function schedulePrompt(scheduleName: string): string {
   return (
-    "Read these photos of a staff schedule. " +
-    "Return ONLY a JSON object with these keys: shifts (an array) and raw_text. " +
+    "Read these photos of a staff schedule. This is a transcription task: copy exactly what is printed, nothing more. " +
+    "Return ONLY a JSON object with these keys: shifts (an array), header_dates (an array), and raw_text. " +
     "Include ONLY shifts for the person named '" + scheduleName + "' — match the name in any of its printed forms. " +
     "Leave out every shift that belongs to anyone else. " +
     "If no shift for that person is visible, return an empty shifts array. " +
     "Do not invent any shift. " +
-    "LIST schedules (one shift per line or row, with words like '8-hour day' or 'Second call'): each shift has date (YYYY-MM-DD), facility, type (one of: 8-hour day, 10-hour shift, 12-hour shift, 24-hour call, Second call, Other, Off / PTO), name (the person the shift belongs to, exactly as printed), and code null. " +
-    "GRID schedules (a table: people's names down the left side, dates across the top header row, and a short code in each cell): " +
-    "find the row whose name matches '" + scheduleName + "' (the row label may be just a last name), " +
-    "read the date of each column from the header row at the top (headers look like '23-Nov', '1-Dec', 'Nov 23' — when a header has no year, use the current year), " +
-    "and return one shift for each NON-BLANK cell in that row: date = that column's header date (YYYY-MM-DD), code = the cell's text EXACTLY as printed (for example '5**', '5*', '7', 'NC1'), type null, facility null, name = the row's name exactly as printed. " +
+    "LIST schedules (one shift per line or row, with words like '8-hour day' or 'Second call'): each shift has date (YYYY-MM-DD), facility, type (one of: 8-hour day, 10-hour shift, 12-hour shift, 24-hour call, Second call, Other, Off / PTO), name (the person the shift belongs to, exactly as printed), code null, column null. header_dates is an empty array for a list schedule. " +
+    "GRID schedules (a table: people's names down the left side, dates across the top header row, and a short code in each cell): work in this exact order. " +
+    "STEP 1 — header first: read the header row at the top and return header_dates as an array with ONE entry per date column, left to right, each entry the header text exactly as printed (headers look like '23-Nov', '1-Dec', 'Nov 23'). Count the columns carefully — every date column gets an entry, in order. " +
+    "STEP 2 — find the row whose name matches '" + scheduleName + "' (the row label may be just a last name). Stay strictly inside that one row's horizontal band: codes printed in the rows directly above or below belong to OTHER people, even when they look similar — never include them. " +
+    "STEP 3 — return one shift for each NON-BLANK cell in that row: column = the cell's column position (1 for the first date column, 2 for the second, and so on, matching the header_dates order), date = that column's header date (YYYY-MM-DD; when a header has no year, use the current year), code = the cell's text EXACTLY as printed (for example '5**', '5*', '7', 'NC1'), type null, facility null, name = the row's name exactly as printed. " +
     "Blank cells are not shifts — skip them. " +
+    "Before answering, re-check every cell you listed: its column number must line up under the header date you gave it, and the code must come from '" + scheduleName + "'s row only. " +
     "NEVER interpret a grid code: do not turn it into hours, times, or a shift-type name, and do not copy codes from anyone else's row."
   );
 }
@@ -304,10 +315,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: MODEL,
+          model: mode === "schedule" ? SCHEDULE_MODEL : MODEL,
           messages: [{ role: "user", content }],
           response_format: { type: "json_object" },
           max_tokens: 2000,
+          // Transcription, not creation (Nov 6, 2026 reliability
+          // pass): until now NO temperature was sent, so the API's
+          // default (1.0) applied — and the same grid photo returned
+          // three different answers across three runs. temperature 0
+          // + a fixed seed pin the read to the model's most likely
+          // transcription. (OpenAI does not promise bitwise-identical
+          // output even at temperature 0 — the grid flow additionally
+          // reads twice and reconciles; see the client.)
+          temperature: 0,
+          seed: 20261106,
         }),
         signal: ctrl.signal,
       });
@@ -354,14 +375,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
       );
     }
     if (mode === "schedule") {
-      const shifts = normalizeAiSchedule(raw);
+      const read = normalizeAiScheduleRead(raw);
       const rawText = (raw as Record<string, unknown>)["raw_text"];
       return json({
         ok: true,
         mode: "schedule",
-        shifts,
+        shifts: read.shifts,
+        // The grid header dates as transcribed (YYYY-MM-DD, "" where
+        // a header cell could not be read). The client compares the
+        // two reads' headers and cells when it reconciles a grid.
+        header_dates: read.headerDates,
         raw_text: typeof rawText === "string" ? rawText : "",
-        model: MODEL,
+        model: SCHEDULE_MODEL,
       });
     }
     if (mode === "paystub") {
