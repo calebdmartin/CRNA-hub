@@ -212,7 +212,7 @@ t('QGenda feed URL validation: real subscription URLs pass, the rest fail',
   !run(`qgendaFeedUrlLooksValid('')`));
 run(`globalThis.__qg = qgendaFeedHTML();`);
 t('QGenda panel: subscription URL, secret handling, and the sign-in fallback',
-  sandbox.__qg.includes('Your Subscription URL') &&
+  sandbox.__qg.includes('Your QGenda Subscription URL') &&
   sandbox.__qg.includes('stored encrypted on the server') &&
   sandbox.__qg.includes('never shown in full') &&
   sandbox.__qg.includes('No QGenda password is ever asked for or stored') &&
