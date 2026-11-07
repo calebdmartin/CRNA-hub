@@ -178,8 +178,8 @@ const SETTLED = `
     /function portalMonitoringHTML\(\)[\s\S]{0,900}?collapsePanelHTML\('credentials-monitoring-panel'/.test(appSrc) &&
     appSrc.includes("collapsePanelHTML('cert-documents'") &&
     appSrc.includes("'credentials-'+portalKey+'-panel'"));
-  t('service worker cache bumped to v64',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v64'));
+  t('service worker cache bumped to v65',
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v65'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();

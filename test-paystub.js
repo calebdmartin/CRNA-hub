@@ -9,9 +9,13 @@
 //     showing $12,757.50 must not make every future check $12,757.50.
 //   * Each paycheck is CALCULATED from the user's actual shifts inside
 //     that pay period (calendar / QGenda / schedule uploads), priced by
-//     the same engine as the C/P totals. Confirmed shifts make the
-//     headline estimate; proposed shifts show as an incl.-proposed
-//     figure; unpriced shifts flag the estimate incomplete, never $0.
+//     the same engine as the C/P totals. The paycheck is the period's
+//     WHOLE shift sum — confirmed and proposed alike (status is a
+//     forecast split, not a pay split; regression-locked below against
+//     Caleb's real November 2026: Nov 24 = $27,075, not the $9,375
+//     confirmed-only slice the app once showed). The proposed share is
+//     noted under the headline; unpriced shifts flag the estimate
+//     incomplete, never $0.
 //   * No fake net: paycheck displays show calculated gross only.
 //   * RECONCILIATION: the stub's own check is the ACTUAL for its
 //     period. In the Dashboard YTD figures, a stubbed (fully ended)
@@ -258,28 +262,44 @@ t('reconciliation: a stubbed period with NO recorded shifts still lands its actu
   sandbox.__reconciled.stubActuals.length === 1 &&
   sandbox.__reconciled.stubActuals[0].shiftCount === 0);
 
-// ---------- Caleb's fixture: per-period calculation + reconciliation ----------
-// Premier stub: period Oct 19 - Nov 1, 2026, paid Nov 10, actual
-// $12,757.50. His shifts in that period add up to $11,500 (predicted);
-// he worked a little more and the stub is the truth for that period.
+// ---------- Caleb's REAL November 2026 fixture (regression, Nov 6) ----------
+// His actual calendar + his actual Premier stub, replacing the earlier
+// synthetic fixture. The bug this locks down: the app showed the Nov 24
+// check as $9,375 while his forecast (and the period's true shift sum)
+// was $27,075. His Nov 6-13 shifts were still stored as "proposed"
+// (synced before the two-status model made sourced shifts confirmed),
+// and the paycheck displayed only the confirmed slice. A paycheck is
+// the whole period's pay — status is a forecast split, not a pay
+// split — so the occurrence amount is the period total, identical
+// under either status assignment. Verified by hand:
+//   Nov 2-15 period: seven 8-hour days x $2,125 = $14,875 + second
+//   calls Nov 3 $3,000, Nov 6 $3,000, Nov 8 $2,000 = $8,000 + Nov 7
+//   24-hour call $4,200 = $27,075 (11 shifts).
+//   Nov 16-29 period: five 8-hour days Nov 16-20 = $10,625.
+//   Oct 19 - Nov 1 period: Oct 22 second call $3,000 + four 8-hour
+//   days Oct 26-29 x $2,125 = $11,500 (his prediction; the stub's
+//   $12,757.50 is the actual). November month total: $39,825.
 run(`
-  db.facilities = [{id:'f1', name:'Holzer'}, {id:'f2', name:'CAMC'}];
+  db.facilities = [{id:'f1', name:'Holzer'}];
   db.payStubs = [
     {id:'pc', agency:'Premier Anesthesia Group, PC', facility:'Holzer', frequency:'biweekly', periodStart:'2026-10-19', periodEnd:'2026-11-01', payDate:'2026-11-10', gross:'12757.50', net:'12757.50', source:'ai-vision'}
   ];
+  const D = (id, date, type, pay, status) => ({id, date, facility:'Holzer', type, pay:String(pay), status:status || 'confirmed'});
+  const PROP = ['n5','n6','n7','n8','n9','n10','n11']; // Nov 6-13 as stored on Caleb's phone
+  const S = (id, date, type, pay) => D(id, date, type, pay, PROP.includes(id) ? 'proposed' : 'confirmed');
   db.shifts = [
-    {id:'a1', date:'2026-10-20', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'a2', date:'2026-10-22', facility:'Holzer', type:'8/2nd call', pay:'3000', status:'confirmed'},
-    {id:'a3', date:'2026-10-27', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'a4', date:'2026-10-29', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'a5', date:'2026-10-30', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'b1', date:'2026-11-03', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'b2', date:'2026-11-05', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'b3', date:'2026-11-12', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'b4', date:'2026-11-13', facility:'Holzer', type:'8-hour day', pay:'2125', status:'proposed'},
-    {id:'c1', date:'2026-11-17', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
-    {id:'c2', date:'2026-11-18', facility:'Holzer', type:'5**', pay:'', incomplete:true, status:'confirmed'},
-    {id:'d1', date:'2026-11-04', facility:'CAMC', type:'8-hour day', pay:'2000', status:'confirmed'}
+    S('o1','2026-10-22','Second call',3000),
+    S('o2','2026-10-26','8-hour day',2125), S('o3','2026-10-27','8-hour day',2125),
+    S('o4','2026-10-28','8-hour day',2125), S('o5','2026-10-29','8-hour day',2125),
+    S('n1','2026-11-02','8-hour day',2125), S('n2','2026-11-03','Second call',3000),
+    S('n3','2026-11-04','8-hour day',2125), S('n4','2026-11-05','8-hour day',2125),
+    S('n5','2026-11-06','Second call',3000), S('n6','2026-11-07','24-hour call',4200),
+    S('n7','2026-11-08','Second call',2000), S('n8','2026-11-10','8-hour day',2125),
+    S('n9','2026-11-11','8-hour day',2125), S('n10','2026-11-12','8-hour day',2125),
+    S('n11','2026-11-13','8-hour day',2125),
+    S('n12','2026-11-16','8-hour day',2125), S('n13','2026-11-17','8-hour day',2125),
+    S('n14','2026-11-18','8-hour day',2125), S('n15','2026-11-19','8-hour day',2125),
+    S('n16','2026-11-20','8-hour day',2125), S('n17','2026-11-30','8-hour day',2125)
   ];
   globalThis.__pcOcc = paystubOccurrences(db.payStubs[0], '2026-11-01', '2026-12-31');
   globalThis.__pcRec = paystubReconciliations();
@@ -287,59 +307,88 @@ run(`
   globalThis.__pcRecon = reconciledYearSplit(2026, '2026-11-06');
   globalThis.__pcCSP = incomeCSPHTML(2026, reconciledYearSplit(2026, '2026-11-06'));
   globalThis.__pcUpHTML = paystubUpcomingHTML();
+  month = new Date(2026, 10, 1);
+  globalThis.__pcCal = calendar();
+  globalThis.__pcClaims = (() => { const c = paystubShiftClaims(); const seen = new Set(); let dup = false;
+    for (const o of globalThis.__pcOcc) { for (const x of db.shifts) { if (c.get(x.id) === 'pc' && x.date >= o.periodStart && x.date <= o.periodEnd) { if (seen.has(x.id + '@' + o.date)) dup = true; seen.add(x.id + '@' + o.date); } } }
+    return { dup, claimed: new Set([...c.entries()].filter(([, v]) => v === 'pc').map(([k]) => k)) }; })();
 `);
 const occ = Object.fromEntries(sandbox.__pcOcc.map((x) => [x.date, x]));
-t('period derivation: Nov 10 covers Oct 19 - Nov 1; Nov 24 covers Nov 2 - Nov 15 (9-day lag preserved)',
+t('period derivation: Nov 10 covers Oct 19 - Nov 1; Nov 24 covers Nov 2 - Nov 15 (9-day lag preserved); Dec 8 covers Nov 16 - Nov 29',
   occ['2026-11-10'] && occ['2026-11-10'].periodStart === '2026-10-19' && occ['2026-11-10'].periodEnd === '2026-11-01' &&
   occ['2026-11-24'] && occ['2026-11-24'].periodStart === '2026-11-02' && occ['2026-11-24'].periodEnd === '2026-11-15' &&
   occ['2026-12-08'] && occ['2026-12-08'].periodStart === '2026-11-16' && occ['2026-12-08'].periodEnd === '2026-11-29');
 t('the stub\'s own check (Nov 10) is the ACTUAL $12,757.50, not an estimate — and its shifts summed to $11,500',
   occ['2026-11-10'].isActual === true && occ['2026-11-10'].actual === 12757.50 &&
-  occ['2026-11-10'].gross === 11500 && occ['2026-11-10'].shiftCount === 5);
-t('the NEXT check (Nov 24) is calculated from its own period shifts — $6,375 confirmed, $8,500 incl. proposed — NOT the stub amount',
+  occ['2026-11-10'].total === 11500 && occ['2026-11-10'].shiftCount === 5 &&
+  run(`paystubOccurrenceAmount(globalThis.__pcOcc.find((x) => x.date === '2026-11-10'))`) === 12757.50);
+t('REGRESSION: Nov 24 occurrence is $27,075 — the whole Nov 2 - Nov 15 period (11 shifts), even with Nov 6-13 stored as proposed',
   occ['2026-11-24'].isActual === false &&
-  occ['2026-11-24'].gross === 6375 && occ['2026-11-24'].grossWithProposed === 8500 &&
-  occ['2026-11-24'].gross !== 12757.50 && occ['2026-11-24'].shiftCount === 4);
-t('an unpriced shift in a period flags that check incomplete (Dec 8: $2,125 priced + 1 unpriced), never $0-filled',
-  occ['2026-12-08'].gross === 2125 && occ['2026-12-08'].unpriced === 1 && occ['2026-12-08'].shiftCount === 2);
-t('a period with no shifts recorded yet shows no amount (Dec 22), never the stub amount',
-  occ['2026-12-22'] && occ['2026-12-22'].shiftCount === 0 &&
-  run(`paystubOccurrenceAmount(globalThis.__pcOcc.find((x) => x.date === '2026-12-22'))`) === null);
-t('the CAMC shift is not claimed by the Holzer stub (facility named on the stub)',
-  occ['2026-11-24'].shiftCount === 4);
+  occ['2026-11-24'].total === 27075 && occ['2026-11-24'].grossWithProposed === 27075 &&
+  occ['2026-11-24'].gross === 9375 && // the confirmed slice that used to be (wrongly) displayed
+  run(`paystubOccurrenceAmount(globalThis.__pcOcc.find((x) => x.date === '2026-11-24'))`) === 27075 &&
+  occ['2026-11-24'].shiftCount === 11 && occ['2026-11-24'].unpriced === 0);
+t('Dec 8 occurrence is $10,625 — five 8-hour days Nov 16-20; Nov 21-29 hold no shifts',
+  occ['2026-12-08'].total === 10625 && occ['2026-12-08'].shiftCount === 5 &&
+  run(`paystubOccurrenceAmount(globalThis.__pcOcc.find((x) => x.date === '2026-12-08'))`) === 10625);
+t('the paycheck is status-blind: the same data with every shift confirmed yields the identical $27,075',
+  run(`db.shifts.forEach((x) => x.status = 'confirmed'); globalThis.__allConf = paystubOccurrences(db.payStubs[0], '2026-11-01', '2026-12-31'); db.shifts.forEach((x) => { if (['n5','n6','n7','n8','n9','n10','n11'].includes(x.id)) x.status = 'proposed'; }); globalThis.__allConf.find((x) => x.date === '2026-11-24').total`) === 27075);
+t('no double-claiming: every shift is claimed by exactly one stub and lands in exactly one occurrence window',
+  sandbox.__pcClaims.dup === false && sandbox.__pcClaims.claimed.size === 22);
+t('November calendar: 17 shifts · $39,825.00 month total, Nov 24 chip est. $27,075.00, Nov 10 chip actual $12,757.50, paycheck total $39,832.50',
+  sandbox.__pcCal.includes('17 shifts') && sandbox.__pcCal.includes('$39,825.00 expected gross this month') &&
+  sandbox.__pcCal.includes('est. $27,075.00') && sandbox.__pcCal.includes('actual $12,757.50') &&
+  sandbox.__pcCal.includes('$39,832.50 paycheck total'));
 t('reconciliation record: actual 12,757.50 replaces shift sum 11,500 -> delta +1,257.50',
   sandbox.__pcRec.length === 1 &&
   sandbox.__pcRec[0].actual === 12757.50 && sandbox.__pcRec[0].shiftSum === 11500 &&
   sandbox.__pcRec[0].delta === 1257.50 && sandbox.__pcRec[0].shiftCount === 5);
-t('reconciled YTD: the period contributes its actual, every other period its shift sum (no double count)',
-  // Raw C YTD at Nov 6: 11,500 (stub period) + 4,250 (Nov 2-15 period,
-  // dated <= Nov 6) + 2,000 (CAMC) = 17,750. Reconciled: +1,257.50.
-  sandbox.__pcRaw.c.ytd === 17750 &&
-  sandbox.__pcRecon.c.ytd === 19007.50 &&
-  sandbox.__pcRecon.c.predicted === 23257.50 &&
-  sandbox.__pcRecon.p.ytd === 19007.50 &&
+t('reconciled YTD: the stubbed period contributes its actual, every other period its shift sum (no double count)',
+  // Raw C YTD at Nov 6 (today): Oct shifts 11,500 + Nov 2-5 confirmed
+  // 9,375 = 20,875. P YTD adds the proposed Nov 6 shift: 23,875.
+  // Reconciled C: +1,257.50. Reconciled P swaps vs the P period sum,
+  // which is also 11,500 here (the stub period is all confirmed).
+  sandbox.__pcRaw.c.ytd === 20875 && sandbox.__pcRaw.p.ytd === 23875 &&
+  sandbox.__pcRecon.c.ytd === 22132.50 && sandbox.__pcRecon.p.ytd === 25132.50 &&
   sandbox.__pcRecon.stubActuals.length === 1);
 t('income table note spells out the swap with Caleb\'s numbers (+$1,257.50 vs prediction)',
   sandbox.__pcCSP.includes('Pay stub actual included') &&
   sandbox.__pcCSP.includes('$12,757.50') &&
   sandbox.__pcCSP.includes('$11,500.00') &&
   sandbox.__pcCSP.includes('+$1,257.50'));
-t('upcoming panel: Nov 10 shows actual from pay stub, Nov 24 shows its own calculated estimate',
+t('upcoming panel: Nov 10 actual from pay stub; Nov 24 headline is the full $27,075.00 with the proposed share noted',
   sandbox.__pcUpHTML.includes('$12,757.50') &&
   sandbox.__pcUpHTML.includes('actual') &&
   sandbox.__pcUpHTML.includes('from pay stub') &&
-  sandbox.__pcUpHTML.includes('$6,375.00') &&
+  sandbox.__pcUpHTML.includes('Estimated $27,075.00 gross') &&
+  sandbox.__pcUpHTML.includes('includes $17,700.00 from proposed shifts') &&
   !sandbox.__pcUpHTML.includes('$12,757.50 net'));
+// An unpriced shift inside a period flags that check, never $0-fills it,
+// and a stub naming a facility never claims another facility's shifts.
+run(`
+  db.facilities = [{id:'f1', name:'Holzer'}, {id:'f2', name:'CAMC'}];
+  db.shifts = [
+    {id:'u1', date:'2026-11-03', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
+    {id:'u2', date:'2026-11-05', facility:'Holzer', type:'5**', pay:'', incomplete:true, status:'confirmed'},
+    {id:'u3', date:'2026-11-04', facility:'CAMC', type:'8-hour day', pay:'2000', status:'confirmed'}
+  ];
+  globalThis.__uOcc = paystubOccurrences(db.payStubs[0], '2026-11-01', '2026-11-30');
+`);
+t('an unpriced shift in a period flags that check incomplete (Nov 24: $2,125 priced + 1 unpriced), never $0-filled; the CAMC shift is not claimed by the Holzer stub',
+  sandbox.__uOcc.find((x) => x.date === '2026-11-24').total === 2125 &&
+  sandbox.__uOcc.find((x) => x.date === '2026-11-24').unpriced === 1 &&
+  sandbox.__uOcc.find((x) => x.date === '2026-11-24').shiftCount === 2);
 run(`
   // A later stub with a HUGE amount changes only its own period.
+  db.shifts = [];
   db.payStubs[0].gross = '99999'; db.payStubs[0].net = '';
   globalThis.__hugeOcc = paystubOccurrences(db.payStubs[0], '2026-11-01', '2026-12-31');
   db.payStubs[0].gross = '12757.50'; db.payStubs[0].net = '12757.50';
 `);
-t('a huge stub amount leaks nowhere: only its own check is the actual; period 2 stays the shift sum',
+t('a huge stub amount leaks nowhere: only its own check is the actual; later periods stay shift-calculated (none recorded -> no amount)',
   sandbox.__hugeOcc.find((x) => x.date === '2026-11-10').actual === 99999 &&
-  sandbox.__hugeOcc.find((x) => x.date === '2026-11-24').gross === 6375 &&
-  sandbox.__hugeOcc.find((x) => x.date === '2026-12-08').gross === 2125);
+  sandbox.__hugeOcc.find((x) => x.date === '2026-11-24').shiftCount === 0 &&
+  run(`paystubOccurrenceAmount(globalThis.__hugeOcc.find((x) => x.date === '2026-11-24'))`) === null);
 t('paystubStubActual: gross wins; net is only the fallback; blank stub has no actual',
   run(`paystubStubActual({gross:'100', net:'80'}).amount`) === 100 &&
   run(`paystubStubActual({gross:'', net:'80'}).basis`) === 'net' &&
