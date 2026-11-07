@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/fn.js": {
+      "maxDuration": 60
+    }
+  }
+}

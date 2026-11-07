@@ -2624,19 +2624,34 @@ function applyAiToSchedulePreview(data,fileName){
 // as if it were the answer.
 function scheduleGridUnreadMessage(){
   const nm=scheduleName();
-  return 'AI read the photos but found no shifts'+(nm?' for "'+nm+'"':'')+'. If this is a grid schedule (names down the side, dates across the top), I couldn\'t read this grid — try a closer, straight-on photo that shows the whole grid, your name row included. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';
+  return 'No shifts could be read from these photos'+(nm?' for "'+nm+'"':'')+'. If this is a grid schedule (names down the side, dates across the top), I couldn\'t read this grid — try a closer, straight-on photo that shows the whole grid, your name row included. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';
+}
+// Evidence rule for photo reads (Nov 6, 2026): a row counts as a
+// real schedule row only if something ties it to an actual schedule
+// — a matched person's name, a grid code, a facility, or a real
+// shift type. A bare date with type "Other" and nothing else is OCR
+// noise (a stray date the linear parser swept up), never a shift.
+function scheduleRowHasEvidence(r){
+  return !!((r.matchedName&&String(r.matchedName).trim())||String(r.code||'').trim()||String(r.facility||'').trim()||(r.type&&r.type!=='Other'));
 }
 // On-device fallback when the AI read is unavailable or finds
 // nothing: OCR the photos and run the linear parser. Honest status
 // line says the read happened on-device. A grid read this way will
 // normally still yield nothing (OCR loses the grid alignment) — the
-// caller then shows the grid message above.
+// caller then shows the grid message above. Rows with no evidence
+// (above) are dropped, and if nothing with evidence remains the
+// fallback reports failure instead of presenting invented rows:
+// Caleb's Nov 6 retry OCR'd a dense grid into two date-only "Other"
+// rows (Dec 6 / Nov 1) that were NOT his shifts — a fallback that
+// fabricates rows is worse than no result.
 async function scheduleOcrFallback(images,fileName){
   try{
     let text='';
     for(const f of images.slice(0,4)){ text+='\n'+(await ocrImageFile(f)); }
     if(!text.trim())return false;
     const parsed=parseScheduleText(text,fileName);
+    if(!parsed.rows.length)return false;
+    parsed.rows=parsed.rows.filter(scheduleRowHasEvidence);
     if(!parsed.rows.length)return false;
     schedulePreview=parsed;
     scheduleAiStatus='AI reading wasn\'t available for these photos, so this was read on your device instead — check the rows carefully before approving.';
@@ -2649,7 +2664,16 @@ async function readScheduleWithAI(images){
   scheduleAiStatus='Sending '+images.length+' photo(s) to AI for reading — this can take a few seconds…'; render();
   const fileName=images.map(f=>f.name).join(', ');
   try{
-    const data=await callExtractSchedule(images.slice(0,4),scheduleName());
+    let data;
+    try{
+      data=await callExtractSchedule(images.slice(0,4),scheduleName());
+    }catch(firstErr){
+      // A schedule read is read-only, so one retry is safe. A dense
+      // grid photo takes 10–30s server-side; a single stall or a
+      // proxy cut mid-read (Nov 6, 2026) must not dump the user
+      // straight into the on-device fallback.
+      data=await callExtractSchedule(images.slice(0,4),scheduleName());
+    }
     const ok=applyAiToSchedulePreview(data,fileName);
     if(!ok){
       if(await scheduleOcrFallback(images,fileName)){render();return}
@@ -2658,7 +2682,12 @@ async function readScheduleWithAI(images){
     scheduleAiStatus=''; scheduleImportError=''; render();
   }catch(e){
     if(await scheduleOcrFallback(images,fileName)){render();return}
-    const msg=String((e&&e.message)||e||''); scheduleAiStatus=''; schedulePreview=null; scheduleImportError=(msg===AI_KEY_MISSING_MESSAGE?AI_KEY_MISSING_MESSAGE:'AI reading failed: '+msg+' Nothing was saved — upload a CSV or text file instead (read on this device).'); render();
+    const msg=String((e&&e.message)||e||''); scheduleAiStatus=''; schedulePreview=null;
+    // A photo that neither the AI (after its retry) nor the guarded
+    // on-device read could read gets the honest couldn't-read
+    // message — never a raw error code and never invented rows.
+    // Only the missing-key setup problem keeps its specific text.
+    scheduleImportError=(msg===AI_KEY_MISSING_MESSAGE||(e&&e.data&&e.data.error==='openai_key_missing'))?AI_KEY_MISSING_MESSAGE:scheduleGridUnreadMessage(); render();
   }
 }
 

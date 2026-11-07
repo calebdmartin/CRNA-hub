@@ -40,6 +40,14 @@
 // - Upstream status and body are returned verbatim, so the app's
 //   existing error handling is unchanged. The function does not log,
 //   store, or inspect tokens, passwords, or shift contents.
+// - Duration: vercel.json raises this function to maxDuration 60s.
+//   The platform DEFAULT limit is far shorter, and an AI read of a
+//   dense schedule-grid photo measurably takes 10–30s server-side —
+//   with the default, Vercel killed this proxy mid-read (Nov 6, 2026:
+//   contract/portal reads finished in time, schedule reads never
+//   did, and the app silently fell back to on-device OCR). The 60s
+//   abort timer below only means anything while the function's own
+//   limit is at least as long.
 
 const SUPABASE_URL = 'https://xgoghgihfhtnyevgapyp.supabase.co';
 const PUBLISHABLE_KEY = 'sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX';

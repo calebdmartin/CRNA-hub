@@ -89,5 +89,5 @@ t('tips sit before the upload form so they are seen before choosing a file',
   upload.indexOf(TOGGLE) >= 0 && upload.indexOf(TOGGLE) < upload.indexOf('id="scheduleForm"'));
 t('toggle appears nowhere outside the upload panel',
   !html.slice(0, iU).includes('Taking a photo of a paper schedule?'));
-t('service worker cache bumped to v60', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v60'));
+t('service worker cache bumped to v61', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v61'));
 console.log(failures ? failures + ' FAILURES' : 'ALL PASS');
