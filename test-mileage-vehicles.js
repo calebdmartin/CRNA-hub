@@ -21,11 +21,13 @@
 //   * Per-trip vehicle picker appears in the weekly review (and the
 //     trip form) only with 2+ vehicles; a review pick is applied on
 //     save. With >= 1 vehicle the review ALSO carries a week-level
-//     picker ("Vehicle for this week") that stamps the week's
-//     unstamped trips — confirmed ones included, without touching
-//     their status or miles — while a trip deliberately carrying a
-//     DIFFERENT vehicle keeps it. With no vehicles the picker area is
-//     just an "Add a vehicle" jump to the Vehicles panel.
+//     control ("Same vehicle for all days") whose Apply stamps EVERY
+//     trip in the week — confirmed ones included, without touching
+//     their status or miles — overriding per-day picks for that week
+//     (superseded semantics, Nov 7, 2026: per-day picks made AFTER an
+//     apply stand; the dedicated per-day regression lives in
+//     test-mileage-vehicle-perday.js). With no vehicles the control
+//     area is just an "Add a vehicle" jump to the Vehicles panel.
 //   * Mileage page order: header totals, then the Vehicles panel
 //     (moved up under the totals Nov 7, 2026), then the review.
 //   * The license plate field is gone from the vehicle form (Caleb:
@@ -258,9 +260,10 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     db.shifts = [{id: 's-rv', date: mon, facility: 'Holzer', type: '8-hour day', status: 'confirmed', pay: '2125'}];
   `);
   const review2 = run(`mileageReviewHTML()`);
-  t('with 2+ vehicles the review gains a Vehicle column', review2.includes('<th>Vehicle</th>'));
+  t('with 2+ vehicles the review has no separate Vehicle column', !review2.includes('<th>Vehicle</th>'));
   t('draft rows get the vehicle picker', review2.includes('class="reviewVehicle"'));
-  t('confirmed rows show their vehicle name', review2.includes('2019 Outback'));
+  t('confirmed rows get their own vehicle picker too',
+    (review2.match(/class="reviewVehicle"/g) || []).length >= 2 && review2.includes('2019 Outback'));
   t('trip form shows the vehicle select with 2+ vehicles', run(`mileagePage()`).includes('name="vehicleId"'));
   run(`window.__vehPick = 'veh-2'; applyMileageReviewEdits(window.__mon); window.__vehPick = null;`);
   t('a review pick is applied to the trip on save',
@@ -269,7 +272,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   run(`db.vehicles = [db.vehicles[0]];`);
   const review1 = run(`mileageReviewHTML()`);
   t('with a single vehicle the per-trip picker and column step aside', !review1.includes('class="reviewVehicle"') && !review1.includes('<th>Vehicle</th>'));
-  t('with a single vehicle the week picker shows instead', review1.includes('id="mileageReviewVehicleSelect"') && review1.includes('Vehicle for this week:'));
+  t('with a single vehicle the all-days control shows instead', review1.includes('id="mileageReviewVehicleSelect"') && review1.includes('Same vehicle for all days:'));
   t('single-vehicle trips still show no picker in the form', !run(`mileagePage()`).includes('name="vehicleId"'));
   run(`db.vehicles = [];`);
   const review0 = run(`mileageReviewHTML()`);
@@ -307,8 +310,8 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     pageC.indexOf('Year to date') < pageC.indexOf('id="vehicles-panel"') &&
     pageC.indexOf('id="vehicles-panel"') < pageC.indexOf('Weekly mileage review'));
   const reviewC = run(`mileageReviewHTML()`);
-  t('one vehicle: the week picker appears with it selected',
-    reviewC.includes('id="mileageReviewVehicleSelect"') && reviewC.includes('2023 F-150') && reviewC.includes('Vehicle for this week:'));
+  t('one vehicle: the all-days control appears with it selected',
+    reviewC.includes('id="mileageReviewVehicleSelect"') && reviewC.includes('2023 F-150') && reviewC.includes('Same vehicle for all days:'));
   t('week vehicle total before stamping is 7 x 68.6',
     Math.abs(run(`mileageTripsInWeek('2026-11-02').reduce((s, m) => s + num(m.miles), 0)`) - 480.2) < 0.001);
   run(`stampWeekVehicle('2026-11-02', 'veh-c');`);
@@ -317,24 +320,29 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('stamping never un-confirms and never changes miles',
     run(`db.mileage.every(m => m.status === 'verified' && m.miles === '68.6')`) === true &&
     Math.abs(run(`mileageTripsInWeek('2026-11-02').reduce((s, m) => s + num(m.miles), 0)`) - 480.2) < 0.001);
-  // A deliberate different choice survives a later week stamp.
+  // A per-day pick made AFTER an all-days apply stands (it is the
+  // later deliberate choice) — the other six keep the applied vehicle.
   run(`
     db.vehicles.push({id: 'veh-d', name: '2020 Outback', make: 'Subaru', model: 'Outback', year: '2020', isDefault: false, updatedAt: '2026-11-07T10:00:00.000Z'});
     const t4 = db.mileage.find(m => m.id === 'ct-4');
     t4.vehicleId = 'veh-d'; t4.vehicleName = '2020 Outback';
-    stampWeekVehicle('2026-11-02', 'veh-c');
   `);
-  t('a trip with a deliberate different vehicle keeps it',
+  t('a per-day pick made after the apply stands',
     run(`db.mileage.find(m => m.id === 'ct-4').vehicleId`) === 'veh-d');
   t('the other six trips still carry the week vehicle',
     run(`db.mileage.filter(m => m.vehicleId === 'veh-c').length`) === 6);
+  // ...until the user explicitly applies all-days again, which
+  // overrides the per-day pick for that week.
+  run(`stampWeekVehicle('2026-11-02', 'veh-c');`);
+  t('re-applying all-days overrides the per-day pick',
+    run(`db.mileage.filter(m => m.vehicleId === 'veh-c').length`) === 7);
   run(`
     mileageExportYear = ''; mileageExportSel = null; mileageExportOpen = false;
     mileageExportInit(); mileageExportDownload();
   `);
   const csvC = downloads[downloads.length - 1].parts.join('').split('\r\n').filter(l => l.startsWith('2026-11-'));
   t('export shows the stamped vehicle on all 7 rows',
-    csvC.length === 7 && csvC.every(l => l.endsWith(',2023 F-150') || l.endsWith(',2020 Outback')) && csvC.some(l => l.endsWith(',2020 Outback')));
+    csvC.length === 7 && csvC.every(l => l.endsWith(',2023 F-150')));
 
   const dlBefore = downloads.length;
   // ================= 6. CSV vehicle column =================
@@ -355,7 +363,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   // ================= 7. Cloud round trip =================
   t('source: vehicles are a synced list bound for the vehicles table',
     appSrc.includes("{ kind: 'vehicles', table: 'vehicles', row: cloudVehicleRow }") && appSrc.includes("'/rest/v1/vehicles'"));
-  t('service worker cache bumped to v78', swSrc.includes('crna-hub-shell-v80'));
+  t('service worker cache bumped to v81', swSrc.includes('crna-hub-shell-v81'));
 
   const downloads2 = [];
   const w2 = makeWorld(new Map(), downloads2);

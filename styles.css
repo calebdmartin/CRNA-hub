@@ -7,7 +7,7 @@
 @media(max-width:650px){.chat-form{flex-wrap:wrap}.chat-form input{flex-basis:100%}}
 .contract-table{width:100%;border-collapse:collapse;font-size:13px}
 .contract-table th,.contract-table td{border-bottom:1px solid #e7edf3;padding:8px 6px;text-align:left;vertical-align:top}
-.contract-table input,.contract-table select{padding:6px 8px;font-size:13px;min-width:0}
+.contract-table input,.contract-table select{padding:6px 8px;font-size:13px;min-width:0}.reviewVehicle{display:block;margin-top:4px;max-width:190px}
 .contract-table input[type="checkbox"]{width:auto}
 .pill.warn{background:#fef5dc;color:#75541e}
 
