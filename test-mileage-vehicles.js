@@ -18,8 +18,19 @@
 //   * Default stamping: new drafts (priced + blank) and hand-logged
 //     trips get the default vehicle; existing unstamped trips are NOT
 //     backfilled.
-//   * Trip vehicle picker appears in the weekly review (and the trip
-//     form) only with 2+ vehicles; a review pick is applied on save.
+//   * Per-trip vehicle picker appears in the weekly review (and the
+//     trip form) only with 2+ vehicles; a review pick is applied on
+//     save. With >= 1 vehicle the review ALSO carries a week-level
+//     picker ("Vehicle for this week") that stamps the week's
+//     unstamped trips — confirmed ones included, without touching
+//     their status or miles — while a trip deliberately carrying a
+//     DIFFERENT vehicle keeps it. With no vehicles the picker area is
+//     just an "Add a vehicle" jump to the Vehicles panel.
+//   * Mileage page order: header totals, then the Vehicles panel
+//     (moved up under the totals Nov 7, 2026), then the review.
+//   * The license plate field is gone from the vehicle form (Caleb:
+//     "seems weird") — stored plate values on older vehicles stay
+//     harmlessly in place but are never collected, shown or exported.
 //   * Deleting a vehicle keeps the trip's history: the name snapshot
 //     stays on the trip, in the log line and in the CSV.
 //   * CSV gains a Vehicle column (blank where unstamped).
@@ -163,19 +174,21 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 
   // ================= 2. Vehicle CRUD =================
   run(`db.vehicles = []; db.mileage = []; editId = null;`);
-  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2022 Silverado'],['make','Chevrolet'],['model','Silverado 1500'],['year','2022'],['plate','ABC123'],['isDefault','on']]}})`);
+  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2022 Silverado'],['make','Chevrolet'],['model','Silverado 1500'],['year','2022'],['isDefault','on']]}})`);
   t('add vehicle via the form', run(`db.vehicles.length`) === 1 && run(`db.vehicles[0].name`) === '2022 Silverado');
   t('first vehicle saved as default with its details',
-    run(`db.vehicles[0].isDefault`) === true && run(`db.vehicles[0].make`) === 'Chevrolet' && run(`db.vehicles[0].plate`) === 'ABC123');
-  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2019 Outback'],['make','Subaru'],['model','Outback'],['year','2019'],['plate','']]}})`);
+    run(`db.vehicles[0].isDefault`) === true && run(`db.vehicles[0].make`) === 'Chevrolet' && run(`db.vehicles[0].model`) === 'Silverado 1500');
+  t('vehicle form no longer collects a license plate',
+    !run(`vehiclesPanelHTML()`).includes('License plate') && !appSrc.includes("field('plate'"));
+  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2019 Outback'],['make','Subaru'],['model','Outback'],['year','2019']]}})`);
   t('second vehicle added, not default', run(`db.vehicles.length`) === 2 && run(`db.vehicles[1].isDefault`) === false);
-  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2024 Model Y'],['make','Tesla'],['model','Model Y'],['year','2024'],['plate','EV1'],['isDefault','on']]}})`);
+  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2024 Model Y'],['make','Tesla'],['model','Model Y'],['year','2024'],['isDefault','on']]}})`);
   t('adding a new default clears the old one — exactly one default',
     run(`db.vehicles.filter(v => v.isDefault).length`) === 1 && run(`defaultVehicle().name`) === '2024 Model Y');
   const v2id = run(`db.vehicles[1].id`);
-  run(`editId = '${v2id}'; submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2019 Outback Touring'],['make','Subaru'],['model','Outback'],['year','2019'],['plate','XYZ9']]}})`);
-  t('edit updates in place', run(`db.vehicles.length`) === 3 && run(`db.vehicles[1].name`) === '2019 Outback Touring' && run(`db.vehicles[1].plate`) === 'XYZ9');
-  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','  '],['make',''],['model',''],['year',''],['plate','']]}})`);
+  run(`editId = '${v2id}'; submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','2019 Outback Touring'],['make','Subaru'],['model','Outback'],['year','2019']]}})`);
+  t('edit updates in place', run(`db.vehicles.length`) === 3 && run(`db.vehicles[1].name`) === '2019 Outback Touring' && run(`db.vehicles[1].model`) === 'Outback');
+  run(`submitEntry({preventDefault(){}, currentTarget:{dataset:{kind:'vehicles'}, _entries:[['name','  '],['make',''],['model',''],['year','']]}})`);
   t('a vehicle with no name is refused', run(`db.vehicles.length`) === 3);
   const v1id = run(`db.vehicles[0].id`);
   run(`actions('vehicle-default', '${v1id}')`);
@@ -187,7 +200,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('vehicles panel is a collapsed panel by default', panel.includes('id="vehicles-panel"') && !panel.includes('id="vehicles-panel" open'));
   t('panel carries the one-line explainer', panel.includes('Trips use your default vehicle'));
   t('panel lists vehicles with the Default pill and details',
-    panel.includes('2022 Silverado') && panel.includes('Default') && panel.includes('Chevrolet') && panel.includes('Plate ABC123'));
+    panel.includes('2022 Silverado') && panel.includes('Default') && panel.includes('Chevrolet') && !panel.includes('Plate'));
   run(`editId = '${v2id}';`);
   t('panel opens while editing a vehicle', run(`vehiclesPanelHTML()`).includes('id="vehicles-panel" open'));
   run(`editId = null; db.vehicles = [];`);
@@ -255,10 +268,12 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     run(`db.mileage.find(m => m.id === 'rv-draft').vehicleName`) === '2019 Outback');
   run(`db.vehicles = [db.vehicles[0]];`);
   const review1 = run(`mileageReviewHTML()`);
-  t('with a single vehicle the picker and column disappear', !review1.includes('reviewVehicle') && !review1.includes('<th>Vehicle</th>'));
+  t('with a single vehicle the per-trip picker and column step aside', !review1.includes('class="reviewVehicle"') && !review1.includes('<th>Vehicle</th>'));
+  t('with a single vehicle the week picker shows instead', review1.includes('id="mileageReviewVehicleSelect"') && review1.includes('Vehicle for this week:'));
   t('single-vehicle trips still show no picker in the form', !run(`mileagePage()`).includes('name="vehicleId"'));
   run(`db.vehicles = [];`);
-  t('with no vehicles the review is unchanged', !run(`mileageReviewHTML()`).includes('reviewVehicle'));
+  const review0 = run(`mileageReviewHTML()`);
+  t('with no vehicles the review offers only an Add-a-vehicle jump', !review0.includes('reviewVehicle') && review0.includes('Add a vehicle'));
 
   // ================= 5. Delete keeps trip history =================
   run(`
@@ -275,25 +290,72 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t("the trip keeps the vehicle's name as its history", run(`tripVehicleLabel(db.mileage[0])`) === '2022 Silverado');
   t('the trip log line still names the vehicle', run(`mileageTripLine(db.mileage[0])`).includes('2022 Silverado'));
 
+  // ============ 6b. Panel position + week stamping ============
+  // Caleb's exact state (Nov 7, 2026): the week of Nov 2-8 fully
+  // confirmed, 7 trips x 68.6 mi, no vehicle anywhere — then he adds
+  // ONE vehicle and picks it in the review's week picker.
+  run(`
+    db.facilities = []; db.hotelStays = [];
+    db.vehicles = [{id: 'veh-c', name: '2023 F-150', make: 'Ford', model: 'F-150', year: '2023', isDefault: true, updatedAt: '2026-11-07T10:00:00.000Z'}];
+    db.shifts = [2, 3, 4, 5, 6, 7, 8].map(d => ({id: 'cs-' + d, date: '2026-11-0' + d, facility: 'Holzer', type: '8-hour day', status: 'confirmed', pay: '2125'}));
+    db.mileage = [2, 3, 4, 5, 6, 7, 8].map(d => ({id: 'ct-' + d, date: '2026-11-0' + d, facility: 'Holzer', purpose: 'work', miles: '68.6', status: 'verified', origin: 'home', tripType: 'round-trip', oneWayMiles: '34.3', milesSource: 'auto', hotelAddress: ''}));
+    mileageReviewWeek = '2026-11-02'; mileageReviewVehicleWeek = ''; mileageReviewVehicleId = '';
+  `);
+  const pageC = run(`mileagePage()`);
+  t('Mileage page order: totals, Vehicles panel, then the review',
+    pageC.indexOf('Year to date') >= 0 &&
+    pageC.indexOf('Year to date') < pageC.indexOf('id="vehicles-panel"') &&
+    pageC.indexOf('id="vehicles-panel"') < pageC.indexOf('Weekly mileage review'));
+  const reviewC = run(`mileageReviewHTML()`);
+  t('one vehicle: the week picker appears with it selected',
+    reviewC.includes('id="mileageReviewVehicleSelect"') && reviewC.includes('2023 F-150') && reviewC.includes('Vehicle for this week:'));
+  t('week vehicle total before stamping is 7 x 68.6',
+    Math.abs(run(`mileageTripsInWeek('2026-11-02').reduce((s, m) => s + num(m.miles), 0)`) - 480.2) < 0.001);
+  run(`stampWeekVehicle('2026-11-02', 'veh-c');`);
+  t('week stamp lands on all 7 confirmed trips',
+    run(`db.mileage.filter(m => m.vehicleId === 'veh-c' && m.vehicleName === '2023 F-150').length`) === 7);
+  t('stamping never un-confirms and never changes miles',
+    run(`db.mileage.every(m => m.status === 'verified' && m.miles === '68.6')`) === true &&
+    Math.abs(run(`mileageTripsInWeek('2026-11-02').reduce((s, m) => s + num(m.miles), 0)`) - 480.2) < 0.001);
+  // A deliberate different choice survives a later week stamp.
+  run(`
+    db.vehicles.push({id: 'veh-d', name: '2020 Outback', make: 'Subaru', model: 'Outback', year: '2020', isDefault: false, updatedAt: '2026-11-07T10:00:00.000Z'});
+    const t4 = db.mileage.find(m => m.id === 'ct-4');
+    t4.vehicleId = 'veh-d'; t4.vehicleName = '2020 Outback';
+    stampWeekVehicle('2026-11-02', 'veh-c');
+  `);
+  t('a trip with a deliberate different vehicle keeps it',
+    run(`db.mileage.find(m => m.id === 'ct-4').vehicleId`) === 'veh-d');
+  t('the other six trips still carry the week vehicle',
+    run(`db.mileage.filter(m => m.vehicleId === 'veh-c').length`) === 6);
+  run(`
+    mileageExportYear = ''; mileageExportSel = null; mileageExportOpen = false;
+    mileageExportInit(); mileageExportDownload();
+  `);
+  const csvC = downloads[downloads.length - 1].parts.join('').split('\r\n').filter(l => l.startsWith('2026-11-'));
+  t('export shows the stamped vehicle on all 7 rows',
+    csvC.length === 7 && csvC.every(l => l.endsWith(',2023 F-150') || l.endsWith(',2020 Outback')) && csvC.some(l => l.endsWith(',2020 Outback')));
+
+  const dlBefore = downloads.length;
   // ================= 6. CSV vehicle column =================
   run(`
     mileageExportYear = ''; mileageExportSel = null; mileageExportOpen = false;
     db.mileage.push({id: 'hist-2', date: localDate(new Date()), facility: 'Holzer', purpose: 'work', miles: '20', status: 'verified', origin: 'home', tripType: 'round-trip'});
     mileageExportInit(); mileageExportDownload();
   `);
-  t('one CSV downloaded', downloads.length === 1);
-  const csvLines = downloads[0].parts.join('').split('\r\n');
+  t('one more CSV downloaded', downloads.length === dlBefore + 1);
+  const csvLines = downloads[downloads.length - 1].parts.join('').split('\r\n');
   t('CSV header ends with the Vehicle column',
     csvLines[0] === 'date,facility,purpose,miles,tripType,oneWayMiles,milesSource,origin,hotelAddress,status,vehicle');
-  const stampedRow = csvLines.find(l => l.includes('68.6'));
+  const stampedRow = csvLines.find(l => l.startsWith('2026-11-02'));
   const unstampedRow = csvLines.find(l => l.includes(',20,'));
-  t('stamped trip exports its vehicle name', !!stampedRow && stampedRow.endsWith(',2022 Silverado'));
+  t('stamped trip exports its vehicle name', !!stampedRow && stampedRow.endsWith(',2023 F-150'));
   t('unstamped trip exports a blank vehicle', !!unstampedRow && unstampedRow.endsWith(','));
 
   // ================= 7. Cloud round trip =================
   t('source: vehicles are a synced list bound for the vehicles table',
     appSrc.includes("{ kind: 'vehicles', table: 'vehicles', row: cloudVehicleRow }") && appSrc.includes("'/rest/v1/vehicles'"));
-  t('service worker cache bumped to v78', swSrc.includes('crna-hub-shell-v79'));
+  t('service worker cache bumped to v78', swSrc.includes('crna-hub-shell-v80'));
 
   const downloads2 = [];
   const w2 = makeWorld(new Map(), downloads2);
@@ -349,6 +411,8 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('vehicles upload to the vehicles table', cloudVehicles.length === 2);
   t('the uploaded payload carries the full record (default flag included)',
     cloudVehicles.some(r => r.data && r.data.isDefault === true && r.data.plate === 'ABC123'));
+  t("a stored plate stays in the record but is never shown",
+    run2(`vehicleDetailLine(db.vehicles.find(v => v.id === 'veh-1'))`).includes('Chevrolet') && !run2(`vehicleDetailLine(db.vehicles.find(v => v.id === 'veh-1'))`).includes('ABC123'));
   run2(`db = empty();`);
   t('device wiped', run2(`db.vehicles.length`) === 0 && run2(`db.mileage.length`) === 0);
   await run2(`(async () => { const d = await cloudFetchAll(); cloudApplyData(d); })()`);

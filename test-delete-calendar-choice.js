@@ -199,7 +199,7 @@ function tap(pred, label) {
     srvSrc.includes('body.action === "delete-source-event"') && srvSrc.includes('deleteAppleEvent(sourceUrl, appleId, password, sourceEventId)') && srvSrc.includes('getImportMapRows'));
   t('server refuses non-Apple providers honestly (no import source exists for them)',
     srvSrc.includes('source_delete_unsupported'));
-  t('service worker cache bumped to v73', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v79'));
+  t('service worker cache bumped to v73', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v80'));
 
   console.log(fails ? ('FAILURES: ' + fails) : 'ALL PASS');
 })();
