@@ -144,6 +144,10 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     sandbox.__addrEmpty.includes('Save addresses') &&
     !sandbox.__addrEmpty.includes('data-action="edit-addresses"'));
 
+  const ADDR_LINE = 'Save your home address and where you stay on call — we\'ll use them to calculate your mileage automatically.';
+  t('addresses edit view carries the one-line mileage explanation (Nov 7, 2026)',
+    sandbox.__addrEmpty.includes(ADDR_LINE) && sandbox.__addrEmpty.includes('<h2>Your addresses</h2>'));
+
   run(`
     db.settings.homeAddress = '1 Home St'; db.settings.hotelAddress = '9 Hotel Ave';
     globalThis.__addrSaved = homeAddressSection();
@@ -152,6 +156,8 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     sandbox.__addrSaved.includes('Home: 1 Home St · Hotel: 9 Hotel Ave') &&
     sandbox.__addrSaved.includes('data-action="edit-addresses"') &&
     !sandbox.__addrSaved.includes('f_homeAddress'));
+  t('addresses summary view carries the same one-line mileage explanation',
+    sandbox.__addrSaved.includes(ADDR_LINE));
 
   run(`
     db.settings.hotelAddress = '';
@@ -289,7 +295,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     sandbox.__schedBusy.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v82'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v83'));
 
   console.log(failures === 0 ? 'account-collapse test done: all passed' : 'account-collapse test done: FAILURES=' + failures);
 })();

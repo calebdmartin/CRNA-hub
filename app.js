@@ -3173,9 +3173,9 @@ function homeAddressSection(){
   // in isn't fighting a collapsed panel.
   if(home&&!addressesEditing){
     const parts=['Home: '+home];if(hotel)parts.push('Hotel: '+hotel);
-    return `<section class="panel" id="addresses-panel"><h2>Your addresses — for automatic mileage</h2><p>${escapeHTML(parts.join(' · '))}</p>${homeGeocodeStatus?`<p class="hint">${escapeHTML(homeGeocodeStatus)}</p>`:''}<div class="toolbar"><button type="button" class="secondary" data-action="edit-addresses">Edit</button></div></section>`;
+    return `<section class="panel" id="addresses-panel"><h2>Your addresses</h2><p class="muted">Save your home address and where you stay on call — we'll use them to calculate your mileage automatically.</p><p>${escapeHTML(parts.join(' · '))}</p>${homeGeocodeStatus?`<p class="hint">${escapeHTML(homeGeocodeStatus)}</p>`:''}<div class="toolbar"><button type="button" class="secondary" data-action="edit-addresses">Edit</button></div></section>`;
   }
-  return `<section class="panel" id="addresses-panel"><h2>Your addresses — for automatic mileage</h2><form data-kind="home-address"><div class="form-grid">${field('homeAddress','Home address','text',s.homeAddress||'','placeholder="Street, City, State ZIP"')}${field('hotelAddress','Hotel address','text',s.hotelAddress||'','placeholder="Hotel street, City, State ZIP"')}</div>${formEnd('Save addresses')}</form>${homeGeocodeStatus?`<p class="hint">${escapeHTML(homeGeocodeStatus)}</p>`:''}</section>`;
+  return `<section class="panel" id="addresses-panel"><h2>Your addresses</h2><p class="muted">Save your home address and where you stay on call — we'll use them to calculate your mileage automatically.</p><form data-kind="home-address"><div class="form-grid">${field('homeAddress','Home address','text',s.homeAddress||'','placeholder="Street, City, State ZIP"')}${field('hotelAddress','Hotel address','text',s.hotelAddress||'','placeholder="Hotel street, City, State ZIP"')}</div>${formEnd('Save addresses')}</form>${homeGeocodeStatus?`<p class="hint">${escapeHTML(homeGeocodeStatus)}</p>`:''}</section>`;
 }
 async function submitHomeAddress(e){
   const fd=new FormData(e.currentTarget);

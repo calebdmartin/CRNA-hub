@@ -167,8 +167,10 @@ const t = (name, cond) => {
   // ================= Account: addresses moved up + hotel field =================
   const acct = run(`accountPage()`);
   t('addresses section is on the Account tab, above Live calendar sync',
-    acct.includes('Your addresses — for automatic mileage') &&
-    acct.indexOf('Your addresses — for automatic mileage') < acct.indexOf('Live calendar sync'));
+    acct.includes('<h2>Your addresses</h2>') &&
+    acct.indexOf('<h2>Your addresses</h2>') < acct.indexOf('Live calendar sync'));
+  t('addresses carry the one-line mileage explanation (Nov 7, 2026)',
+    acct.includes('Save your home address and where you stay on call — we\'ll use them to calculate your mileage automatically.'));
   t('old home-address heading/paragraphs are gone',
     !acct.includes('Home address — for automatic mileage') &&
     !acct.includes('OpenStreetMap geocoder and OSRM'));
