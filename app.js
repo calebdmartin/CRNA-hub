@@ -2217,19 +2217,51 @@ function canAutoMileage(f,originAddr){const origin=String(originAddr!==undefined
 // failure). The origin defaults to the saved home address; pass a hotel
 // address to calculate hotel-based mileage instead. Never falls back to a
 // straight-line estimate — a guessed number is worse than a blank one.
-async function homeToFacilityMiles(f,originAddr){
+// The diagnostic twin reports WHY a calculation failed, so the weekly
+// review can tell the user exactly which address is missing or could not
+// be found instead of silently producing nothing. (Found live, Nov 7,
+// 2026: all 7 of Caleb's Holzer trips calculated 0 with no reason given —
+// his Holzer facility record, auto-created from his calendar, had never
+// been given an address, and every failure path swallowed that fact.)
+// Resolves {oneWay} on success, or {error} with one of: 'origin-missing'
+// (no home/hotel address to start from), 'address-missing' (the facility
+// has no address saved), 'origin-not-found' / 'address-not-found' (the
+// geocoder could not locate that address; the address is included), or
+// 'route-failed' (both endpoints located but no driving route came back).
+async function mileageRouteDiagnostic(f,originAddr){
   const home=String(originAddr!==undefined?originAddr:(db.settings&&db.settings.homeAddress)||'').trim();
   const dest=String((f&&f.address)||'').trim();
-  if(!home||!dest)return null;
+  if(!home)return {error:'origin-missing'};
+  if(!dest)return {error:'address-missing'};
   const isHome=!originAddr||home===String((db.settings&&db.settings.homeAddress)||'').trim();
   let h=null;
   if(isHome&&db.settings.homeLat&&db.settings.homeLng&&db.settings.homeGeocodedAddress===home)h={lat:+db.settings.homeLat,lon:+db.settings.homeLng};
-  else{h=await geocodeAddress(home);if(!h)return null;if(isHome){db.settings.homeLat=String(h.lat);db.settings.homeLng=String(h.lon);db.settings.homeGeocodedAddress=home;persist()}}
+  else{h=await geocodeAddress(home);if(!h)return {error:'origin-not-found',address:home};if(isHome){db.settings.homeLat=String(h.lat);db.settings.homeLng=String(h.lon);db.settings.homeGeocodedAddress=home;persist()}}
   let d=null;
-  if(f.lat&&f.lng&&f.geocodedAddress===dest)d={lat:+f.lat,lon:+f.lng};
-  else{d=await geocodeAddress(dest);if(!d)return null;f.lat=String(d.lat);f.lng=String(d.lon);f.geocodedAddress=dest;persist()}
+  if(f&&f.lat&&f.lng&&f.geocodedAddress===dest)d={lat:+f.lat,lon:+f.lng};
+  else{d=await geocodeAddress(dest);if(!d)return {error:'address-not-found',address:dest};if(f){f.lat=String(d.lat);f.lng=String(d.lon);f.geocodedAddress=dest;persist()}}
   const miles=await drivingMilesOneWay(h,d);
-  return miles==null?null:{oneWay:miles};
+  return miles==null?{error:'route-failed'}:{oneWay:miles};
+}
+async function homeToFacilityMiles(f,originAddr){
+  const r=await mileageRouteDiagnostic(f,originAddr);
+  return r&&r.oneWay!=null?{oneWay:r.oneWay}:null;
+}
+// One plain sentence naming what a failed calculation needs, so a result
+// dialog or the review itself can say it instead of a bare "0 created".
+// fail: {reason, facility, address, origin} — origin 'home'|'hotel'|'other'.
+function mileageCalcFailureText(fail){
+  const fname=String((fail&&fail.facility)||'This facility');
+  const originWord=fail&&fail.origin==='hotel'?'hotel':(fail&&fail.origin==='other'?'starting':'home');
+  switch(fail&&fail.reason){
+    case 'address-missing':return fname+' has no address saved — add it below and tap Calculate again.';
+    case 'origin-missing':return 'No '+originWord+' address is saved — add it below and tap Calculate again.';
+    case 'address-not-found':return 'The address saved for '+fname+' (“'+String(fail.address||'')+'”) could not be found — fix it below and tap Calculate again.';
+    case 'origin-not-found':return 'Your '+originWord+' address (“'+String(fail.address||'')+'”) could not be found — fix it below and tap Calculate again.';
+    case 'route-failed':return 'The driving route to '+fname+' could not be calculated just now — tap Calculate again, or enter the miles manually.';
+    case 'facility-missing':return 'No facility named '+fname+' is saved yet — add it on the Facilities tab.';
+    default:return 'Miles for '+fname+' could not be calculated.';
+  }
 }
 // --- Hotel stays (one address reused for a whole block of shifts) ---
 // A stay covers a date range (check-in to check-out) and optionally one
@@ -2563,37 +2595,76 @@ function ensureWeeklyMileageDrafts(start){
 // to the facility's saved one-way distance for home trips, and drafts
 // blank for anything still uncomputable. Also upgrades blank drafts
 // already in the week when the calculation now succeeds.
+// The most recent Calculate run's failures for a week, kept so the
+// review can show the fix (a missing/unfindable address input) right
+// where the user is standing:
+// {week, failures:[{reason, facility, address, origin}]}.
+let mileageReviewCalcNote=null;
 async function generateWeeklyMileageDrafts(start){
-  let created=0,auto=0,hotel=0,blank=0;
+  weeklyMileageReview(start); // make sure every shift this week has a draft row first
+  let created=0,auto=0,hotel=0,blank=0,filled=0;
+  const failures=[],failSeen=new Set();
+  const noteFail=(reason,facility,address,origin)=>{
+    const key=reason+'|'+String(facility||'')+'|'+(origin||'home');
+    if(failSeen.has(key))return;
+    failSeen.add(key);
+    failures.push({reason:reason,facility:String(facility||''),address:String(address||''),origin:origin==='hotel'?'hotel':(origin==='other'?'other':'home')});
+  };
+  // Fill one blank trip from a diagnostic result, falling back to the
+  // facility's saved manual distance for home-based trips (the same
+  // order the bulk generator uses). Returns true when the trip got miles.
+  const fillTrip=(m,f,res)=>{
+    let oneWay=null,source='';
+    if(res&&res.oneWay!=null){oneWay=res.oneWay;source='auto'}
+    else if(m.origin!=='hotel'&&m.origin!=='other'&&f){const man=effectiveOneWayMiles(f);if(man>0){oneWay=man;source='manual'}}
+    if(!(oneWay>0))return false;
+    const t=m.tripType==='one-way'?'one-way':'round-trip';
+    m.oneWayMiles=String(oneWay);
+    m.miles=String(tripMilesFor(oneWay,t));
+    m.tripType=t;
+    m.milesSource=source;
+    filled++;
+    if(source==='auto')auto++;
+    return true;
+  };
   for(const m of mileageTripsInWeek(start).filter(x=>x.status==='draft'&&!(num(x.miles)>0))){
     const f=facilityByNameOrAlias(m.facility);
-    if(!f)continue;
+    if(!f){noteFail('facility-missing',m.facility,'',m.origin);blank++;continue}
     const addr=tripOriginAddress(m);
     if(m.origin==='hotel'&&addr&&!String(m.hotelAddress||'').trim())m.hotelAddress=addr;
-    const res=await homeToFacilityMiles(f,addr||undefined);
-    if(!res)continue;
-    const t=m.tripType==='one-way'?'one-way':'round-trip';
-    m.oneWayMiles=String(res.oneWay);
-    m.miles=String(tripMilesFor(res.oneWay,t));
-    m.tripType=t;
-    m.milesSource='auto';
-    auto++;
+    const res=await mileageRouteDiagnostic(f,addr||undefined);
+    if(fillTrip(m,f,res))continue;
+    noteFail(res.error||'route-failed',f.name,res.address||'',m.origin);
+    blank++;
   }
   for(const x of shiftsInWeek(start)){
     if((db.mileage||[]).some(m=>mileageTripMatchesShift(m,x)))continue;
     const f=facilityByNameOrAlias(x.facility);
     const stay=hotelStayFor(x.date,x.facility);
-    let oneWay=null,source='',origin='home',hotelAddress='';
-    if(stay&&f){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}
-    else if(f){const res=await homeToFacilityMiles(f);if(res){oneWay=res.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}
     let draft=null;
-    if(oneWay>0&&f)draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());
-    if(draft){db.mileage.push(draft);created++;if(source==='auto')auto++;if(origin==='hotel')hotel++;}
+    if(!f)noteFail('facility-missing',x.facility,'',stay?'hotel':'home');
+    else if(stay){const res=await mileageRouteDiagnostic(f,stay.hotelAddress);if(res.oneWay!=null){draft=mileageDraftForShift(x,f,res.oneWay,'auto','hotel',stay.hotelAddress,mileageTripType());if(draft){filled++;auto++;hotel++}}else noteFail(res.error||'route-failed',f.name,res.address||'','hotel')}
+    else{const res=await mileageRouteDiagnostic(f);if(res.oneWay!=null){draft=mileageDraftForShift(x,f,res.oneWay,'auto','home','',mileageTripType());if(draft){filled++;auto++}}else if(effectiveOneWayMiles(f)>0){draft=mileageDraftForShift(x,f,effectiveOneWayMiles(f),'manual','home','',mileageTripType());if(draft)filled++}else noteFail(res.error||'route-failed',f.name,res.address||'','home')}
+    if(draft){db.mileage.push(draft);created++;}
     else{db.mileage.push(blankMileageDraftForShift(x,stay?'hotel':'home',stay?stay.hotelAddress:''));created++;blank++;}
   }
+  mileageReviewCalcNote={week:start,failures:failures};
   persist();render();
-  alert(created+' mileage draft(s) created for the week of '+weekRangeLabel(start)+(auto?' ('+auto+' auto-calculated'+(hotel?', '+hotel+' from a hotel stay':'')+')':'')+'.'+(blank?' '+blank+' could not be calculated, so '+(blank===1?'its miles are':'their miles are')+' blank \u2014 enter them manually, nothing was guessed.':'')+' Review the week and confirm all trips.');
-  return {created:created,auto:auto,hotel:hotel,blank:blank};
+  const review=weeklyMileageReview(start);
+  const scope=review.drafts.length,stillBlank=review.needsMiles.length,withMiles=scope-stillBlank;
+  let msg;
+  if(scope===0)msg='No trips to calculate for the week of '+weekRangeLabel(start)+'.';
+  else{
+    msg='Calculated miles for '+withMiles+' of '+scope+' trip(s) for the week of '+weekRangeLabel(start)+'.';
+    if(stillBlank>0){
+      msg+=' '+stillBlank+' still need'+(stillBlank===1?'s':'')+' miles';
+      const texts=failures.map(mileageCalcFailureText);
+      msg+=texts.length?(' — '+texts.join(' ')):' — enter them manually to confirm those trips.';
+    }
+    msg+=' Review the week and confirm all trips.';
+  }
+  alert(msg);
+  return {created:created,auto:auto,hotel:hotel,blank:blank,calculated:filled,failures:failures};
 }
 function reviewInputValue(cls,tripId){
   if(typeof document==='undefined'||typeof document.querySelector!=='function')return null;
@@ -2663,7 +2734,7 @@ function confirmWeeklyMileage(start){
   const left=weeklyMileageReview(start);
   persist();render();
   if(left.toReview>0){
-    alert('Confirmed '+confirmed+' trip(s) for the week of '+weekRangeLabel(start)+'. '+left.toReview+' trip(s) still need review'+(left.needsMiles.length?' \u2014 '+left.needsMiles.length+' still '+(left.needsMiles.length===1?'has':'have')+' no miles, so '+(left.needsMiles.length===1?'it stays':'they stay')+' a draft until you enter miles':'')+'. Nothing was guessed.');
+    alert('Confirmed '+confirmed+' trip(s) for the week of '+weekRangeLabel(start)+'. '+left.toReview+' trip(s) still need review'+(left.needsMiles.length?' \u2014 '+left.needsMiles.length+' still '+(left.needsMiles.length===1?'has':'have')+' no miles, so '+(left.needsMiles.length===1?'it stays':'they stay')+' a draft until miles are entered or calculated (a missing address is flagged at the top of the review)':'')+'.');
   }else{
     alert('Week of '+weekRangeLabel(start)+': all '+review.trips.length+' trip(s) confirmed.');
   }
@@ -2676,6 +2747,87 @@ function mileageReviewStep(n){
   const i=weeks.indexOf(cur);
   const next=weeks[Math.min(weeks.length-1,Math.max(0,(i<0?0:i)+n))];
   mileageReviewWeek=next;render();
+}
+// Reads one of the review's inline fix inputs (class + data-key), the
+// same pattern reviewInputValue uses for the trip rows themselves.
+function reviewFixInputValue(cls,key){
+  if(typeof document==='undefined'||typeof document.querySelector!=='function')return null;
+  const el=document.querySelector('.'+cls+'[data-key="'+key+'"]');
+  return el?el.value:null;
+}
+// Save an address typed into the weekly review's fix box — a facility's
+// address, or the home address — and immediately recalculate the week,
+// so the user never has to leave the review to unblock a calculation.
+// Saving a changed address clears its cached geocode (and a facility's
+// auto-calculated distance), mirroring the facility form's own rule.
+async function mileageReviewFixAddress(kind,key){
+  const start=selectedMileageReviewWeek();
+  if(kind==='facility'){
+    const f=facilityByNameOrAlias(key);
+    if(!f)return render();
+    const v=reviewFixInputValue('reviewFixFacility',String(f.name));
+    const addr=v!=null?String(v).trim():String(f.address||'').trim();
+    if(addr&&addr!==String(f.address||'').trim()){
+      f.address=addr;f.lat='';f.lng='';f.geocodedAddress='';
+      if(f.distanceSource==='auto'){f.distance='';f.distanceSource=''}
+      persist();
+    }
+  }else{
+    const v=reviewFixInputValue('reviewFixHome','home');
+    const addr=v!=null?String(v).trim():'';
+    if(addr&&addr!==String((db.settings&&db.settings.homeAddress)||'').trim()){
+      db.settings.homeAddress=addr;db.settings.homeLat='';db.settings.homeLng='';db.settings.homeGeocodedAddress='';persist();
+    }
+  }
+  return generateWeeklyMileageDrafts(start);
+}
+// A short note under a blank trip's miles box naming the address that
+// trip is waiting on, so the row itself says what is missing.
+function mileageReviewRowNote(m){
+  if(num(m.miles)>0)return '';
+  const f=facilityByNameOrAlias(m.facility);
+  if(!f)return `<div class="muted">No facility named ${escapeHTML(m.facility)} is saved — add it on the Facilities tab.</div>`;
+  if(!String(f.address||'').trim())return `<div class="muted">No address saved for ${escapeHTML(f.name)} — add it above to calculate this trip.</div>`;
+  if(m.origin==='home'&&!String((db.settings&&db.settings.homeAddress)||'').trim())return `<div class="muted">No home address saved — add it above to calculate this trip.</div>`;
+  if(m.origin==='hotel'&&!tripOriginAddress(m))return `<div class="muted">No hotel address for this trip — add one in the Starting point field above.</div>`;
+  return '';
+}
+// Inline fixes at the top of the review: when trips cannot be
+// calculated because an address is missing or could not be found, the
+// fix sits right where the user is standing — an address input and one
+// tap that saves it and recalculates — instead of a bare "0 created"
+// dialog and a trip to another tab.
+function mileageReviewFixHTML(start,r){
+  const items=[],seen=new Set();
+  const homeAddress=String((db.settings&&db.settings.homeAddress)||'').trim();
+  const pushHome=(prefill,notFound)=>{
+    if(seen.has('home'))return;seen.add('home');
+    items.push(`<div class="item"><div class="item-title">${notFound?'Your home address could not be found':'No home address saved'}</div><div class="muted">${notFound?'Fix it here, then recalculate.':'Trips that start from home can’t be calculated without one.'}</div><div class="toolbar"><input class="reviewFixHome" data-key="home" value="${escapeHTML(prefill||'')}" placeholder="Home address — street, city, state ZIP" aria-label="Home address"><button type="button" class="tiny" data-action="mileage-review-fix-home">Save address &amp; calculate</button></div></div>`);
+  };
+  const pushFacility=(f,prefill,title,note)=>{
+    const key='fac:'+f.name;if(seen.has(key))return;seen.add(key);
+    items.push(`<div class="item"><div class="item-title">${escapeHTML(title)}</div><div class="muted">${escapeHTML(note)}</div><div class="toolbar"><input class="reviewFixFacility" data-key="${escapeHTML(f.name)}" value="${escapeHTML(prefill||'')}" placeholder="${escapeHTML(f.name)} address — street, city, state ZIP" aria-label="${escapeHTML(f.name)} address"><button type="button" class="tiny" data-action="mileage-review-fix-facility" data-id="${escapeHTML(f.name)}">Save address &amp; calculate</button></div></div>`);
+  };
+  const pushLine=(key,text)=>{
+    if(seen.has(key))return;seen.add(key);
+    items.push(`<div class="item"><div class="muted">${escapeHTML(text)}</div></div>`);
+  };
+  for(const m of r.drafts.filter(x=>!(num(x.miles)>0))){
+    const f=facilityByNameOrAlias(m.facility);
+    if(f&&!String(f.address||'').trim())pushFacility(f,'',f.name+' has no address saved','Its trips can’t be calculated until an address is saved.');
+    else if(!f)pushLine('missing:'+m.facility,'No facility named '+m.facility+' is saved — add it on the Facilities tab, then tap Calculate.');
+    if(m.origin==='home'&&!homeAddress)pushHome('',false);
+  }
+  const note=mileageReviewCalcNote&&mileageReviewCalcNote.week===start?mileageReviewCalcNote:null;
+  if(note)for(const fail of note.failures){
+    if(fail.reason==='address-missing'){const f=facilityByNameOrAlias(fail.facility);if(f)pushFacility(f,'',f.name+' has no address saved','Its trips can’t be calculated until an address is saved.')}
+    else if(fail.reason==='address-not-found'){const f=facilityByNameOrAlias(fail.facility);if(f)pushFacility(f,String(f.address||''),f.name+'’s address could not be found','The saved address (“'+String(f.address||'')+'”) could not be located — fix it here, then recalculate.')}
+    else if(fail.reason==='origin-missing'&&fail.origin==='home')pushHome('',false);
+    else if(fail.reason==='origin-not-found'&&fail.origin==='home')pushHome(homeAddress,true);
+    else pushLine('fail:'+fail.reason+':'+fail.facility+':'+fail.origin,mileageCalcFailureText(fail));
+  }
+  if(!items.length)return '';
+  return `<div style="border:1px solid #e3c98a;background:#fdf6e0;border-radius:10px;padding:10px 12px;margin:10px 0"><strong>Some trips can’t be calculated yet:</strong>${items.join('')}</div>`;
 }
 function mileageReviewHTML(){
   const weeks=mileageWeeks();
@@ -2691,9 +2843,9 @@ function mileageReviewHTML(){
     if(m.status==='verified')return `<tr><td>${fmt(m.date)}</td><td>${escapeHTML(m.facility)}</td><td>${escapeHTML(mileageOriginLabel(m))}</td><td>${escapeHTML(m.miles)} mi</td><td>${m.tripType==='one-way'?'One way':'Round trip'}</td><td><span class="pill">Confirmed</span></td></tr>`;
     if(m.status==='skipped')return `<tr><td>${fmt(m.date)}</td><td>${escapeHTML(m.facility)}</td><td>${escapeHTML(mileageOriginLabel(m))}</td><td>${num(m.miles)>0?escapeHTML(m.miles)+' mi':'\u2014'}</td><td>${m.tripType==='one-way'?'One way':'Round trip'}</td><td><span class="pill warn">Skipped</span> <button type="button" class="tiny secondary" data-action="mileage-review-restore" data-id="${escapeHTML(m.id)}">Restore</button></td></tr>`;
     if(m.status==='dismissed')return `<tr><td>${fmt(m.date)}</td><td>${escapeHTML(m.facility)}</td><td>${escapeHTML(mileageOriginLabel(m))}</td><td>${num(m.miles)>0?escapeHTML(m.miles)+' mi':'\u2014'}</td><td>${m.tripType==='one-way'?'One way':'Round trip'}</td><td><span class="pill">Cleared</span> <button type="button" class="tiny secondary" data-action="mileage-review-restore" data-id="${escapeHTML(m.id)}">Restore</button></td></tr>`;
-    return `<tr><td>${fmt(m.date)}</td><td>${escapeHTML(m.facility)}</td><td>${originOptions(m)}</td><td><input type="number" class="reviewMiles" data-trip="${escapeHTML(m.id)}" value="${escapeHTML(m.miles||'')}" min="0" step="0.1" placeholder="Enter miles">${!(num(m.miles)>0)?' <span class="pill warn">miles needed</span>':''}</td><td>${typeOptions(m)}</td><td><button type="button" class="tiny secondary" data-action="mileage-review-skip" data-id="${escapeHTML(m.id)}">Skip</button></td></tr>`;
+    return `<tr><td>${fmt(m.date)}</td><td>${escapeHTML(m.facility)}</td><td>${originOptions(m)}</td><td><input type="number" class="reviewMiles" data-trip="${escapeHTML(m.id)}" value="${escapeHTML(m.miles||'')}" min="0" step="0.1" placeholder="Enter miles">${!(num(m.miles)>0)?' <span class="pill warn">miles needed</span>':''}${mileageReviewRowNote(m)}</td><td>${typeOptions(m)}</td><td><button type="button" class="tiny secondary" data-action="mileage-review-skip" data-id="${escapeHTML(m.id)}">Skip</button></td></tr>`;
   }).join('');
-  return `<section class="panel"><h2>Weekly mileage review</h2><p><strong>${escapeHTML(mileageReviewStatusLine(start))}</strong>${r.overdue?' \u00b7 <span class="expired">overdue \u2014 the week ended '+fmt(r.end)+'</span>':r.due?' \u00b7 due now':''}</p><div class="toolbar"><button type="button" class="secondary" data-action="mileage-review-prev">\u2039 Previous week</button><select id="mileageReviewWeekSelect">${weeks.map(w=>`<option value="${w}" ${w===start?'selected':''}>Week of ${weekRangeLabel(w)}${weeklyMileageReview(w).allConfirmed?' \u2014 All confirmed':' \u2014 '+weeklyMileageReview(w).toReview+' to review'}</option>`).join('')}</select><button type="button" class="secondary" data-action="mileage-review-next">Next week \u203a</button><button type="button" class="secondary" data-action="mileage-review-generate">Calculate miles for this week</button></div><p class="muted">One screen per week: check every trip, fix the starting point or miles, skip any trip that did not happen, then confirm the whole week at once. Only confirmed trips count in totals and exports. Reviews start with this month — older unconfirmed trips can be cleared in one tap in the summary below. Changing a starting point clears its miles — enter them, or tap Calculate miles for this week.</p>${rows.length?`<div class="table-scroll"><table class="contract-table"><thead><tr><th>Date</th><th>Facility</th><th>Starting point</th><th>Miles</th><th>Type</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:'<p class="muted">No trips in this week.</p>'}<div class="form-actions"><button type="button" data-action="mileage-review-confirm">Confirm all \u2014 ${r.drafts.length} trip(s)</button><button type="button" class="secondary" data-action="mileage-review-save">Save changes</button></div><p class="muted">${r.needsMiles.length?r.needsMiles.length+' trip(s) have no miles yet \u2014 enter miles to confirm them; nothing is guessed. ':''}${due.length>1?'Other weeks still to review: '+due.filter(d=>d.start!==start).map(d=>mileageReviewStatusLine(d.start)).join('; ')+'.':''}</p></section>`;
+  return `<section class="panel"><h2>Weekly mileage review</h2><p><strong>${escapeHTML(mileageReviewStatusLine(start))}</strong>${r.overdue?' \u00b7 <span class="expired">overdue \u2014 the week ended '+fmt(r.end)+'</span>':r.due?' \u00b7 due now':''}</p>${mileageReviewFixHTML(start,r)}<div class="toolbar"><button type="button" class="secondary" data-action="mileage-review-prev">\u2039 Previous week</button><select id="mileageReviewWeekSelect">${weeks.map(w=>`<option value="${w}" ${w===start?'selected':''}>Week of ${weekRangeLabel(w)}${weeklyMileageReview(w).allConfirmed?' \u2014 All confirmed':' \u2014 '+weeklyMileageReview(w).toReview+' to review'}</option>`).join('')}</select><button type="button" class="secondary" data-action="mileage-review-next">Next week \u203a</button><button type="button" class="secondary" data-action="mileage-review-generate">Calculate miles for this week</button></div><p class="muted">One screen per week: check every trip, fix the starting point or miles, skip any trip that did not happen, then confirm the whole week at once. Only confirmed trips count in totals and exports. Reviews start with this month — older unconfirmed trips can be cleared in one tap in the summary below. Changing a starting point clears its miles — enter them, or tap Calculate miles for this week.</p>${rows.length?`<div class="table-scroll"><table class="contract-table"><thead><tr><th>Date</th><th>Facility</th><th>Starting point</th><th>Miles</th><th>Type</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`:'<p class="muted">No trips in this week.</p>'}<div class="form-actions"><button type="button" data-action="mileage-review-confirm">Confirm all \u2014 ${r.drafts.length} trip(s)</button><button type="button" class="secondary" data-action="mileage-review-save">Save changes</button></div><p class="muted">${r.needsMiles.length?r.needsMiles.length+' trip(s) have no miles yet \u2014 add the missing address above, or enter miles, to confirm them. ':''}${due.length>1?'Other weeks still to review: '+due.filter(d=>d.start!==start).map(d=>mileageReviewStatusLine(d.start)).join('; ')+'.':''}</p></section>`;
 }
 function dashboardMileageNudgeHTML(){
   if(!featureOn('featureMileage'))return '';
@@ -2765,7 +2917,7 @@ async function calcFacilityDistance(){
   if(srcEl)srcEl.value='auto';
   setStatus('Auto-calculated: '+res.oneWay.toFixed(1)+' mi one-way from home ('+roundTripMiles(res.oneWay).toFixed(1)+' mi round trip). Save the facility to keep it — you can edit the miles, which marks it manual.');
 }
-function mileagePage(){if(!featureOn('featureMileage'))return featureOffHTML('featureMileage');const x=db.mileage.find(x=>x.id===editId)||{},stay=db.hotelStays.find(x=>x.id===editId)||{},total=verifiedMileageTotal(),monthPrefix=localDate(new Date()).slice(0,7),draftCount=db.mileage.filter(x=>x.status==='draft'&&String(x.date||'').startsWith(monthPrefix)).length,backlog=unconfirmedTripsBeforeMonth(),logMonths=[...new Set(db.mileage.map(m=>String(m.date||'').slice(0,7)).filter(s=>/^\d{4}-\d{2}$/.test(s)))].sort().reverse(),logMonth=(mileageLogMonth==='all'||logMonths.includes(mileageLogMonth))?mileageLogMonth:monthPrefix,logTrips=db.mileage.filter(m=>logMonth==='all'||String(m.date||'').startsWith(logMonth)),home=String((db.settings&&db.settings.homeAddress)||'').trim(),hotels=knownHotelAddresses(),isStayEdit=!!stay;const tripOrigin=x.origin==='hotel'?'hotel':x.origin==='other'?'other':'home',tripHotel=x.hotelAddress||((db.settings&&db.settings.hotelAddress)||'')||((db.settings&&db.settings.lastHotelAddress)||'');const tripType=x.tripType==='one-way'?'one-way':mileageTripType(),rtCount=verifiedMileageTrips().filter(m=>m.tripType!=='one-way').length,owCount=verifiedMileageTrips().length-rtCount;return `${mileageReviewHTML()}<div class="two"><section class="panel"><h2>${editId&&!isStayEdit?'Edit':'Log'} business mileage</h2><p class="muted">${home?`Home: ${escapeHTML(home)} — mileage below can be auto-calculated from home.`:`No home address saved yet — set it on the Account tab to auto-calculate mileage.`}</p><div class="toolbar"><button type="button" class="secondary tiny" data-action="goto-account">Set home address on the Account tab</button></div><form id="entryForm" data-kind="mileage"><div class="form-grid">${field('date','Trip date','date',x.date||localDate(new Date()),'required')}${select('facility','Hospital / facility',[''].concat((db.facilities||[]).map(f=>f.name)),x.facility||'')}${selectLabeled('origin','Starting point',[['home','Home'],['hotel','Hotel'],['other','Other address']],tripOrigin)}${field('hotelAddress','Hotel / other address (only when starting point is Hotel or Other address)','text',tripHotel,'list="hotelAddresses" placeholder="Hotel street, city, state ZIP"')}<datalist id="hotelAddresses">${hotels.map(h=>`<option value="${escapeHTML(h)}"></option>`).join('')}</datalist>${selectLabeled('tripType','Mileage type',[['round-trip','Round trip'],['one-way','One way']],tripType)}${field('miles','Actual miles','number',x.miles??'','min="0" step="0.1" required')}<input type="hidden" name="milesSource" id="f_milesSource" value="${escapeHTML(x.milesSource||(x.miles?'manual':''))}"><input type="hidden" name="oneWayMiles" id="f_oneWayMiles" value="${escapeHTML(x.oneWayMiles||'')}">${field('purpose','Business purpose','text',x.purpose||'','required')}${select('status','Verification',['verified','draft'],x.status||'verified')}</div><p class="hint" id="mileageCalcStatus">${escapeHTML(mileageCalcStatus)}</p><div class="toolbar"><button type="button" class="secondary" data-action="mileage-autocalc">Calculate miles (from home or hotel)</button></div>${formEnd(editId&&!isStayEdit?'Save trip':'Log trip')}</section><section class="panel"><h2>Mileage summary</h2><div class="stat"><strong>${total.toFixed(1)} miles</strong>Verified trips only — ${rtCount} round-trip · ${owCount} one-way${draftCount?` · ${draftCount} draft(s) this month not counted yet`:''}</div><p class="muted">Each trip is counted once. A round trip already includes the return leg, so it is never doubled.</p>${backlog.length?`<p class="muted">${backlog.length} unconfirmed trip(s) from before this month.</p><div class="toolbar"><button type="button" class="secondary" data-action="mileage-clear-backlog">Clear everything before this month</button></div>`:''}${mileageClearStatus?`<p class="hint">${escapeHTML(mileageClearStatus)}</p>`:''}<div class="field"><label for="mileageTripTypeSelect">Default mileage type for new trips and drafts</label><select id="mileageTripTypeSelect"><option value="round-trip" ${mileageTripType()==='round-trip'?'selected':''}>Round trip (default)</option><option value="one-way" ${mileageTripType()==='one-way'?'selected':''}>One way</option></select></div><div class="toolbar" style="margin-top:14px"><button data-action="mileage-drafts">Generate schedule-based drafts</button><button class="secondary" data-action="export-mileage">Export CSV</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<p class="hint">Drafts use your default mileage type (currently ${tripTypeLabel(mileageTripType())}): the auto-calculated ${tripTypeLabel(mileageTripType())} distance from home when it can be computed, otherwise the facility’s saved one-way distance converted to ${tripTypeLabel(mileageTripType())}. A shift inside a saved hotel stay below is calculated from the HOTEL address instead. Trips with neither show up in the weekly review above with blank miles — never guessed. Confirm the trip happened, the miles, and that it counts for tax. Regular commuting is generally not deductible.</p></section></div><section class="panel"><h2>Hotel stays — one address for a whole block</h2><p class="muted">Staying in a hotel for a block of shifts? Enter the hotel address and dates once here. Drafts for shifts in that block are calculated from the hotel, not home — and when you log a trip by hand, pick “Hotel” and the address is already filled in. A hotel address you enter on a trip is remembered for the next one.</p><p class="muted">Drafts from a stay use your mileage type — currently ${tripTypeLabel(mileageTripType())} — and show as hotel-based in the trip log.</p><form id="stayForm" data-kind="hotelStays"><div class="form-grid">${field('hotelAddress','Hotel address','text',stay.hotelAddress||(db.settings&&db.settings.hotelAddress)||'','required placeholder="Hotel street, city, state ZIP"')}${field('checkIn','Check-in date','date',stay.checkIn||localDate(new Date()),'required')}${field('checkOut','Check-out date','date',stay.checkOut||localDate(new Date()),'required')}${select('facility','Facility (blank = any facility)',[''].concat((db.facilities||[]).map(f=>f.name)),stay.facility||'')}${field('note','Note','text',stay.note||'','placeholder="e.g. Call block"')}</div>${formEnd(isStayEdit?'Save hotel stay':'Add hotel stay')}</form>${list('hotelStays',(db.hotelStays||[]).slice().sort((a,b)=>(b.checkIn||'').localeCompare(a.checkIn||'')),s=>`<div class="item-title">${escapeHTML(s.hotelAddress)}</div><div class="muted">${fmt(s.checkIn)} to ${fmt(s.checkOut)}${s.facility?` · ${escapeHTML(s.facility)}`:' · any facility'}${s.note?` · ${escapeHTML(s.note)}`:''}</div>`)}</section><section class="panel"><h2>Trip log</h2><div class="toolbar"><button type="button" class="secondary" data-action="export-mileage">Export mileage</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<div class="field"><label for="mileageLogMonthSelect">Showing</label><select id="mileageLogMonthSelect">${logMonths.map(mo=>`<option value="${mo}" ${mo===logMonth?'selected':''}>${escapeHTML(monthLabel(mo))}${mo===monthPrefix?' (this month)':''}</option>`).join('')}<option value="all" ${logMonth==='all'?'selected':''}>All months</option></select></div>${list('mileage',logTrips.slice().sort((a,b)=>b.date.localeCompare(a.date)),mileageTripLine)})}</section>`+featureTurnOffLineHTML('featureMileage')}
+function mileagePage(){if(!featureOn('featureMileage'))return featureOffHTML('featureMileage');const x=db.mileage.find(x=>x.id===editId)||{},stay=db.hotelStays.find(x=>x.id===editId)||{},total=verifiedMileageTotal(),monthPrefix=localDate(new Date()).slice(0,7),draftCount=db.mileage.filter(x=>x.status==='draft'&&String(x.date||'').startsWith(monthPrefix)).length,backlog=unconfirmedTripsBeforeMonth(),logMonths=[...new Set(db.mileage.map(m=>String(m.date||'').slice(0,7)).filter(s=>/^\d{4}-\d{2}$/.test(s)))].sort().reverse(),logMonth=(mileageLogMonth==='all'||logMonths.includes(mileageLogMonth))?mileageLogMonth:monthPrefix,logTrips=db.mileage.filter(m=>logMonth==='all'||String(m.date||'').startsWith(logMonth)),home=String((db.settings&&db.settings.homeAddress)||'').trim(),hotels=knownHotelAddresses(),isStayEdit=!!stay;const tripOrigin=x.origin==='hotel'?'hotel':x.origin==='other'?'other':'home',tripHotel=x.hotelAddress||((db.settings&&db.settings.hotelAddress)||'')||((db.settings&&db.settings.lastHotelAddress)||'');const tripType=x.tripType==='one-way'?'one-way':mileageTripType(),rtCount=verifiedMileageTrips().filter(m=>m.tripType!=='one-way').length,owCount=verifiedMileageTrips().length-rtCount;return `${mileageReviewHTML()}<div class="two"><section class="panel"><h2>${editId&&!isStayEdit?'Edit':'Log'} business mileage</h2><p class="muted">${home?`Home: ${escapeHTML(home)} — mileage below can be auto-calculated from home.`:`No home address saved yet — set it on the Account tab to auto-calculate mileage.`}</p><div class="toolbar"><button type="button" class="secondary tiny" data-action="goto-account">Set home address on the Account tab</button></div><form id="entryForm" data-kind="mileage"><div class="form-grid">${field('date','Trip date','date',x.date||localDate(new Date()),'required')}${select('facility','Hospital / facility',[''].concat((db.facilities||[]).map(f=>f.name)),x.facility||'')}${selectLabeled('origin','Starting point',[['home','Home'],['hotel','Hotel'],['other','Other address']],tripOrigin)}${field('hotelAddress','Hotel / other address (only when starting point is Hotel or Other address)','text',tripHotel,'list="hotelAddresses" placeholder="Hotel street, city, state ZIP"')}<datalist id="hotelAddresses">${hotels.map(h=>`<option value="${escapeHTML(h)}"></option>`).join('')}</datalist>${selectLabeled('tripType','Mileage type',[['round-trip','Round trip'],['one-way','One way']],tripType)}${field('miles','Actual miles','number',x.miles??'','min="0" step="0.1" required')}<input type="hidden" name="milesSource" id="f_milesSource" value="${escapeHTML(x.milesSource||(x.miles?'manual':''))}"><input type="hidden" name="oneWayMiles" id="f_oneWayMiles" value="${escapeHTML(x.oneWayMiles||'')}">${field('purpose','Business purpose','text',x.purpose||'','required')}${select('status','Verification',['verified','draft'],x.status||'verified')}</div><p class="hint" id="mileageCalcStatus">${escapeHTML(mileageCalcStatus)}</p><div class="toolbar"><button type="button" class="secondary" data-action="mileage-autocalc">Calculate miles (from home or hotel)</button></div>${formEnd(editId&&!isStayEdit?'Save trip':'Log trip')}</section><section class="panel"><h2>Mileage summary</h2><div class="stat"><strong>${total.toFixed(1)} miles</strong>Verified trips only — ${rtCount} round-trip · ${owCount} one-way${draftCount?` · ${draftCount} draft(s) this month not counted yet`:''}</div><p class="muted">Each trip is counted once. A round trip already includes the return leg, so it is never doubled.</p>${backlog.length?`<p class="muted">${backlog.length} unconfirmed trip(s) from before this month.</p><div class="toolbar"><button type="button" class="secondary" data-action="mileage-clear-backlog">Clear everything before this month</button></div>`:''}${mileageClearStatus?`<p class="hint">${escapeHTML(mileageClearStatus)}</p>`:''}<div class="field"><label for="mileageTripTypeSelect">Default mileage type for new trips and drafts</label><select id="mileageTripTypeSelect"><option value="round-trip" ${mileageTripType()==='round-trip'?'selected':''}>Round trip (default)</option><option value="one-way" ${mileageTripType()==='one-way'?'selected':''}>One way</option></select></div><div class="toolbar" style="margin-top:14px"><button data-action="mileage-drafts">Generate schedule-based drafts</button><button class="secondary" data-action="export-mileage">Export CSV</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<p class="hint">Drafts use your default mileage type (currently ${tripTypeLabel(mileageTripType())}): the auto-calculated ${tripTypeLabel(mileageTripType())} distance from home when it can be computed, otherwise the facility’s saved one-way distance converted to ${tripTypeLabel(mileageTripType())}. A shift inside a saved hotel stay below is calculated from the HOTEL address instead. Trips with neither show up in the weekly review above with blank miles — the review flags the missing address so you can add it there. Confirm the trip happened, the miles, and that it counts for tax. Regular commuting is generally not deductible.</p></section></div><section class="panel"><h2>Hotel stays — one address for a whole block</h2><p class="muted">Staying in a hotel for a block of shifts? Enter the hotel address and dates once here. Drafts for shifts in that block are calculated from the hotel, not home — and when you log a trip by hand, pick “Hotel” and the address is already filled in. A hotel address you enter on a trip is remembered for the next one.</p><p class="muted">Drafts from a stay use your mileage type — currently ${tripTypeLabel(mileageTripType())} — and show as hotel-based in the trip log.</p><form id="stayForm" data-kind="hotelStays"><div class="form-grid">${field('hotelAddress','Hotel address','text',stay.hotelAddress||(db.settings&&db.settings.hotelAddress)||'','required placeholder="Hotel street, city, state ZIP"')}${field('checkIn','Check-in date','date',stay.checkIn||localDate(new Date()),'required')}${field('checkOut','Check-out date','date',stay.checkOut||localDate(new Date()),'required')}${select('facility','Facility (blank = any facility)',[''].concat((db.facilities||[]).map(f=>f.name)),stay.facility||'')}${field('note','Note','text',stay.note||'','placeholder="e.g. Call block"')}</div>${formEnd(isStayEdit?'Save hotel stay':'Add hotel stay')}</form>${list('hotelStays',(db.hotelStays||[]).slice().sort((a,b)=>(b.checkIn||'').localeCompare(a.checkIn||'')),s=>`<div class="item-title">${escapeHTML(s.hotelAddress)}</div><div class="muted">${fmt(s.checkIn)} to ${fmt(s.checkOut)}${s.facility?` · ${escapeHTML(s.facility)}`:' · any facility'}${s.note?` · ${escapeHTML(s.note)}`:''}</div>`)}</section><section class="panel"><h2>Trip log</h2><div class="toolbar"><button type="button" class="secondary" data-action="export-mileage">Export mileage</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<div class="field"><label for="mileageLogMonthSelect">Showing</label><select id="mileageLogMonthSelect">${logMonths.map(mo=>`<option value="${mo}" ${mo===logMonth?'selected':''}>${escapeHTML(monthLabel(mo))}${mo===monthPrefix?' (this month)':''}</option>`).join('')}<option value="all" ${logMonth==='all'?'selected':''}>All months</option></select></div>${list('mileage',logTrips.slice().sort((a,b)=>b.date.localeCompare(a.date)),mileageTripLine)})}</section>`+featureTurnOffLineHTML('featureMileage')}
 
 // --- Calendar import / export (Google / Apple / Outlook, file-based) ---
 // Import and export work today, entirely in the browser, via .ics files.
@@ -3359,7 +3511,7 @@ if(action==='close-day'){dayViewOpen=false;if(paycheckEdit&&paycheckEdit.from===
   if(action==='edit-paycheck'){paycheckEdit={stubId:entry,schedDate:date,from:from||'panel'};render();return}
   if(action==='paycheck-edit-cancel'){paycheckEdit=null;render();return}
   if(action==='paycheck-clear-actual'){const stub=(db.payStubs||[]).find(s=>s.id===entry);if(stub)savePaycheckOverride(stub,{schedDate:date,actual:''});paycheckEdit={stubId:entry,schedDate:date,from:from||'panel'};render();return}
-  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts')showShiftForm=true;render();if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-save'){applyMileageReviewEdits(selectedMileageReviewWeek());persist();return render()}if(action==='mileage-review-skip'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='skipped';persist()}return render()}if(action==='mileage-review-restore'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='draft';persist()}return render()}if(action==='mileage-clear-backlog'){const n=clearMileageBacklog();mileageClearStatus=n>0?('Cleared '+n+' older trip'+(n===1?'':'s')+' \u2014 they won\u2019t count toward mileage.'):'';return render()}if(action==='cloud-signup'){const em=$('f_email'),pw=$('f_password'),sn=$('f_scheduleName'),et=$('f_employmentType'),gl=$('f_incomeGoalStep1');if(!em||!pw||!em.value.trim()||!pw.value)return alert('Enter an email and password first.');cloudSignUp(em.value.trim(),pw.value,sn?String(sn.value||'').trim():'',et?String(et.value||'').trim():'',gl&&String(gl.value||'').trim()!==''?num(gl.value):undefined);return}
+  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts')showShiftForm=true;render();if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-fix-facility')return mileageReviewFixAddress('facility',entry);if(action==='mileage-review-fix-home')return mileageReviewFixAddress('home','');if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-save'){applyMileageReviewEdits(selectedMileageReviewWeek());persist();return render()}if(action==='mileage-review-skip'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='skipped';persist()}return render()}if(action==='mileage-review-restore'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='draft';persist()}return render()}if(action==='mileage-clear-backlog'){const n=clearMileageBacklog();mileageClearStatus=n>0?('Cleared '+n+' older trip'+(n===1?'':'s')+' \u2014 they won\u2019t count toward mileage.'):'';return render()}if(action==='cloud-signup'){const em=$('f_email'),pw=$('f_password'),sn=$('f_scheduleName'),et=$('f_employmentType'),gl=$('f_incomeGoalStep1');if(!em||!pw||!em.value.trim()||!pw.value)return alert('Enter an email and password first.');cloudSignUp(em.value.trim(),pw.value,sn?String(sn.value||'').trim():'',et?String(et.value||'').trim():'',gl&&String(gl.value||'').trim()!==''?num(gl.value):undefined);return}
 if(action==='skip-income-goal'){const gl=$('f_incomeGoalStep1');if(gl)gl.value='';cloudAuthStatus='No income goal set — you can set it later on the Account tab (Profile — step 1).';return render()}
 if(action==='save-profile'){const nm=$('f_profileName'),et=$('f_profileEmploymentType'),gl=$('f_profileIncomeGoal');applyProfileValues({name:nm?String(nm.value||'').trim():'',employmentType:et?String(et.value||'').trim():'',monthlyIncomeGoal:gl&&String(gl.value||'').trim()!==''?num(gl.value):0});cloudSaveProfile();profileEditing=false;return render()}
 if(action==='cloud-signout'){cloudSignOut();return}
@@ -3391,7 +3543,7 @@ if(action==='contract-page-remove'||action==='contract-page-up'||action==='contr
 if(action==='view-contract-image')return viewContractImage(entry);
 if(action==='view-contract-image-page')return viewContractImage(entry,+date);
 if(action==='backup')return download('crna-hub-backup.json',deviceBackupJSON(),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage'){mileageExportInit();mileageExportOpen=true;return render()}if(action==='mileage-export-close'){mileageExportOpen=false;return render()}if(action==='mileage-export-this-month'){mileageExportApplyQuick('this-month');return render()}if(action==='mileage-export-ytd'){mileageExportApplyQuick('ytd');return render()}if(action==='mileage-export-all'){mileageExportApplyQuick('all');return render()}if(action==='mileage-export-none'){mileageExportApplyQuick('none');return render()}if(action==='mileage-export-download')return mileageExportDownload()}
-async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=(db.facilities||[]).find(f=>String(f.name||'').trim().toLowerCase()===String(x.facility||'').trim().toLowerCase());if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file, so no miles were guessed.`:''} Review every trip and tax eligibility before using them.`)}
+async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;const skippedNoAddress=new Set();for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=(db.facilities||[]).find(f=>String(f.name||'').trim().toLowerCase()===String(x.facility||'').trim().toLowerCase());if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;if(!String(f.address||'').trim())skippedNoAddress.add(f.name);continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file.`:''}${skippedNoAddress.size?` Trips for ${[...skippedNoAddress].join(', ')} were skipped: no address is saved for ${skippedNoAddress.size===1?'that facility':'those facilities'} — add it on the Facilities tab so miles can be calculated.`:''} Review every trip and tax eligibility before using them.`)}
 function csvEscape(v){const s=String(v??'');return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function exportCsv(filename,headers,rows){download(filename,[headers.join(','),...rows.map(r=>headers.map(h=>csvEscape(r[h])).join(','))].join('\r\n'),'text/csv;charset=utf-8')}
 function download(filename,contents,mime){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([contents],{type:mime}));a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000)}
