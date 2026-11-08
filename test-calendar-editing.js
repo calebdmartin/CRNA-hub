@@ -171,11 +171,14 @@ tap(b => b.dataset.action === 'close-day', 'day sheet backdrop/×');
 t('closing the day sheet removes the overlay (no duplicate left behind)',
   !appHTML().includes('id="day-view"'));
 
-// ---------- 4. Paycheck from the calendar: payday tap -> row -> editor overlay ----------
+// ---------- 4. Paycheck from the calendar: payday tap -> section -> editor overlay ----------
 tap(b => b.dataset.action === 'day' && b.dataset.date === '2026-11-24', 'day 2026-11-24 (payday, no shifts)');
-t('payday tap: day sheet overlay carries the condensed paycheck row',
-  appHTML().includes('id="day-view"') && appHTML().includes('paycheck-row') && appHTML().includes('$27,075.00'));
-tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-24' && b.dataset.from === 'day', 'paycheck row in day sheet');
+t('payday tap: day sheet overlay carries a labelled Paycheck section with the condensed format + a visible Edit paycheck button',
+  appHTML().includes('id="day-view"') && appHTML().includes('class="day-pays"') &&
+  appHTML().includes('>Paycheck</h3>') && appHTML().includes('Nov 24, 2026') &&
+  appHTML().includes('(Nov 2 – Nov 15)') && appHTML().includes('$27,075.00') &&
+  appHTML().includes('>estimate<') && appHTML().includes('Edit paycheck'));
+tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-24' && b.dataset.from === 'day', 'Edit paycheck button in day sheet');
 t('paycheck tap opens its editor as a sheet stacked over the day sheet',
   appHTML().includes('sheet sheet-over') && appHTML().includes('paycheck-editor') &&
   appHTML().includes('Estimated $27,075.00 gross') && appHTML().includes('id="day-view"'));
@@ -183,6 +186,59 @@ tap(b => b.dataset.action === 'paycheck-edit-cancel', 'editor cancel');
 t('editor back/cancel returns to the day sheet (day sheet still open, editor gone)',
   appHTML().includes('id="day-view"') && !appHTML().includes('paycheck-editor'));
 tap(b => b.dataset.action === 'close-day', 'close day sheet again');
+
+// ---------- 4b. Day-sheet paycheck section: Nov 10 actual, placement, chip path, save-from-sheet ----------
+tap(b => b.dataset.action === 'day' && b.dataset.date === '2026-11-10', 'day 2026-11-10 (payday, with a shift)');
+t('Nov 10 sheet: Paycheck section shows "Nov 10, 2026 (Oct 19 – Nov 1)  $12,757.50" + actual pill + Edit paycheck',
+  appHTML().includes('class="day-pays"') && appHTML().includes('Nov 10, 2026') &&
+  appHTML().includes('(Oct 19 – Nov 1)') && appHTML().includes('$12,757.50') &&
+  appHTML().includes('>actual<') && appHTML().includes('Edit paycheck'));
+t('the Paycheck section sits ABOVE the shift list in the sheet',
+  appHTML().indexOf('class="day-pays"') > -1 &&
+  appHTML().indexOf('class="day-pays"') < appHTML().indexOf('data-shift-status="n8"'));
+tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-10' && b.dataset.from === 'day', 'Edit paycheck on Nov 10 sheet');
+t('Nov 10 Edit paycheck opens the editor over the sheet (stub-backed: source-of-truth copy, no amount form)',
+  appHTML().includes('paycheck-editor') && appHTML().includes('source of truth') &&
+  appHTML().includes('id="day-view"'));
+tap(b => b.dataset.action === 'paycheck-edit-cancel', 'close Nov 10 editor');
+t('closing the Nov 10 editor returns to the day sheet',
+  appHTML().includes('id="day-view"') && !appHTML().includes('paycheck-editor'));
+tap(b => b.dataset.action === 'close-day', 'close Nov 10 sheet');
+tap(b => b.dataset.action === 'day' && b.dataset.date === '2026-11-03', 'day 2026-11-03 (no paycheck)');
+t('Nov 3 sheet: NO paycheck section and no Edit paycheck button on a non-pay day',
+  appHTML().includes('id="day-view"') && !appHTML().includes('day-pays') && !appHTML().includes('Edit paycheck'));
+tap(b => b.dataset.action === 'close-day', 'close Nov 3 sheet');
+// Calendar-chip path: the 💰 chip lives inside the day cell, so a chip
+// tap lands on the same day action — the sheet it opens must carry the
+// paycheck section too, not just the plain-day-tap sheet.
+run(`render()`);
+t('the calendar grid itself shows the Nov 24 paycheck chip',
+  appHTML().includes('chip paycheck') && appHTML().includes('est. $27,075.00'));
+tap(b => b.dataset.action === 'day' && b.dataset.date === '2026-11-24', 'chip-path tap on Nov 24 cell');
+t('chip-path sheet carries the Paycheck section + Edit paycheck button',
+  appHTML().includes('class="day-pays"') && appHTML().includes('$27,075.00') && appHTML().includes('Edit paycheck'));
+// Save an entered actual FROM the sheet: panel + banner must move.
+tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-24' && b.dataset.from === 'day', 'Edit paycheck from sheet (save flow)');
+submitForm('paycheck-edit', [['stubId', 'pc'], ['schedDate', '2026-11-24'], ['payDate', '2026-11-24'], ['actual', '27950']], 'enter actual $27,950 from the day sheet');
+t('actual saved from the sheet: headline swaps $39,832.50 -> $40,707.50 and the sheet stays open showing the actual',
+  run(`monthHeadline('2026-11').gross`) === 40707.50 &&
+  appHTML().includes('id="day-view"') && appHTML().includes('$27,950.00') && appHTML().includes('>actual<'));
+t('the Upcoming paychecks panel row updated from the sheet save',
+  run(`paystubUpcomingHTML()`).includes('Nov 24, 2026') && run(`paystubUpcomingHTML()`).includes('$27,950.00'));
+tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-24' && b.dataset.from === 'day', 'reopen Nov 24 editor from sheet');
+tap(b => b.dataset.action === 'paycheck-clear-actual', 'clear the sheet-entered actual');
+tap(b => b.dataset.action === 'paycheck-edit-cancel', 'close editor after sheet clear');
+t('clearing from the sheet restores the estimate + headline',
+  run(`monthHeadline('2026-11').gross`) === 39832.50 &&
+  run(`paystubOccurrences(db.payStubs[0],'2026-11-01','2026-11-30').find(o=>o.date==='2026-11-24').isActual`) === false);
+tap(b => b.dataset.action === 'close-day', 'close sheet after save flow');
+// Feature off: no paycheck section in the sheet either.
+run(`db.settings.featurePaychecks = false;`);
+tap(b => b.dataset.action === 'day' && b.dataset.date === '2026-11-24', 'day 2026-11-24 with Paychecks feature off');
+t('Paychecks feature off: the day sheet shows no paycheck section',
+  appHTML().includes('id="day-view"') && !appHTML().includes('day-pays'));
+tap(b => b.dataset.action === 'close-day', 'close feature-off sheet');
+run(`db.settings.featurePaychecks = true;`);
 
 // ---------- 5. Enter an actual from the panel row -> headline swaps by the delta ----------
 tap(b => b.dataset.action === 'edit-paycheck' && b.dataset.date === '2026-11-24' && b.dataset.from === 'panel', 'Nov 24 row in Upcoming panel');
@@ -324,6 +380,13 @@ const cssSrc = fs.readFileSync(R + 'styles.css', 'utf8');
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 t('wiring: swipe-down sheet dismissal + overlay CSS + cache v68',
   appSrc.includes("closest('.sheet')") && cssSrc.includes('.sheet-backdrop{position:fixed') &&
-  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v72'));
+  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v73'));
+t('wiring: day-sheet paycheck is an obvious edit target — a styled full-width Edit paycheck button bound to the editor',
+  appSrc.includes('class="day-paycheck-edit" data-action="edit-paycheck"') &&
+  appSrc.includes('data-from="day">Edit paycheck</button>') &&
+  cssSrc.includes('.day-paycheck-edit{display:block;width:100%') && cssSrc.includes('cursor:pointer'));
+t('wiring: day-sheet paycheck line wraps, never ellipsizes — the panel row\'s nowrap/ellipsis .pc-date is overridden in the sheet',
+  cssSrc.includes('.day-paycheck-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap') &&
+  cssSrc.includes('.day-paycheck .pc-date{white-space:normal;overflow:visible;text-overflow:clip'));
 
 console.log(fails ? `\n${fails} check(s) failed` : '\nall calendar-editing checks passed');

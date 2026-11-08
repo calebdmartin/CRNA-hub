@@ -584,6 +584,26 @@ function paycheckRowHTML(x,from){
   const range=paystubRangeShort(x);
   return `<button type="button" class="paycheck-row" data-action="edit-paycheck" data-id="${escapeHTML(x.stubId)}" data-date="${escapeHTML(x.schedDate||x.date)}" data-from="${from||'panel'}" aria-label="Paycheck ${fmt(x.date)}, ${escapeHTML(x.agency)} — tap for detail"><span class="pc-date">${fmt(x.date)}${range?` <span class="pc-range">(${range})</span>`:''}</span><span class="pc-right"><span class="pc-total">${amt!=null?currency(amt):'—'}</span> <span class="pill">${x.isActual?'actual':'estimate'}</span></span></button>`;
 }
+// The day sheet's paycheck section (Nov 7, 2026 discoverability fix):
+// the calendar-editing build DID put the condensed paycheck row in the
+// day sheet, but it was an unlabelled tappable line — Caleb opened the
+// sheet on a payday and reported "I don't see where I can edit a
+// paycheck on that screen." So in the sheet the check gets its own
+// labelled section, ABOVE the shift list: a "Paycheck" heading, the
+// check in the same condensed format (pay date, period range in
+// parentheses, prominent total, estimate/actual pill), the agency, and
+// a visible "Edit paycheck" button that opens the same paycheck editor
+// — stacked over the day sheet, returning to it on cancel. Days with
+// no paycheck landing on them render no section at all.
+function dayPaycheckSectionHTML(pays){
+  if(!pays||!pays.length)return '';
+  const rows=pays.map(x=>{
+    const amt=paystubOccurrenceAmount(x);
+    const range=paystubRangeShort(x);
+    return `<div class="day-paycheck"><div class="day-paycheck-line"><span class="pc-date">${fmt(x.date)}${range?` <span class="pc-range">(${range})</span>`:''}</span><span class="pc-right"><span class="pc-total">${amt!=null?currency(amt):'—'}</span> <span class="pill">${x.isActual?'actual':'estimate'}</span></span></div><div class="muted">${escapeHTML(x.agency)}${x.facility?` (${escapeHTML(x.facility)})`:''}</div><button type="button" class="day-paycheck-edit" data-action="edit-paycheck" data-id="${escapeHTML(x.stubId)}" data-date="${escapeHTML(x.schedDate||x.date)}" data-from="day">Edit paycheck</button></div>`;
+  }).join('');
+  return `<div class="day-pays"><h3 class="day-pays-title">Paycheck</h3>${rows}</div>`;
+}
 // The paycheck editor (Nov 7, 2026): opened by tapping a paycheck row
 // in Upcoming paychecks or in the calendar day sheet. Shows the
 // calculated estimate with its breakdown, plus the two corrections a
@@ -1692,11 +1712,14 @@ function dayViewHTML(){
   // screens down. Now it pops up in front of the calendar: dimmed
   // backdrop (tap to close), an × button, swipe-down to close.
   const head=`<div class="sheet-backdrop" data-action="close-day"></div><section class="sheet" id="day-view" role="dialog" aria-label="Day detail"><div class="sheet-head"><h2>${fmt(selected)}</h2><button type="button" class="sheet-close" data-action="close-day" aria-label="Close">×</button></div>`;
-  // Paychecks landing on this day get the same condensed row (and the
-  // same editor) as the Upcoming paychecks panel — a payday is exactly
-  // where a user goes to correct a check, shifts or no shifts.
-  const pays=paystubOccurrencesOn(selected);
-  const paysSection=pays.length?`<div class="day-pays">${pays.map(p=>paycheckRowHTML(p,'day')).join('')}</div>`:'';
+  // Paychecks landing on this day get their own labelled section at
+  // the TOP of the sheet (above the shifts), with a visible Edit
+  // paycheck button into the same editor the Upcoming paychecks panel
+  // uses — a payday is exactly where a user goes to correct a check,
+  // shifts or no shifts. Hidden entirely when the Paycheck estimates
+  // feature is off, like the calendar chips and the panel.
+  const pays=featureOn('featurePaychecks')?paystubOccurrencesOn(selected):[];
+  const paysSection=dayPaycheckSectionHTML(pays);
   if(!rows.length)return `${head}${paysSection}<p class="muted">No shifts on this day yet.</p><div class="toolbar"><button data-action="add-shift">Add a shift on this day</button></div></section>`;
   return `${head}${paysSection}${list('shifts',rows,x=>`<div class="item-title">${escapeHTML(x.facility)}</div><div class="muted">${escapeHTML(x.type)} · ${x.pay===''||x.incomplete?'Pay not yet priced — incomplete':currency(x.pay)}${isW2SalaryShift(x)?' · <span class="pill">W-2 salary day — excluded from income totals</span>':''}${x.source==='extracted-from-contract'?' · <span class="pill">from contract</span>':x.source==='extracted-from-contract-photo'?' · <span class="pill">from contract photo</span>':x.source==='user-entered'?' · <span class="pill">user-entered</span>':x.source&&x.source.startsWith('calendar-')?' · <span class="pill">'+escapeHTML({"calendar-google":"from Google Calendar","calendar-apple":"from Apple Calendar","calendar-outlook":"from Outlook","calendar-file":"from calendar file"}[x.source]||'from calendar')+'</span>':''}${typeof liveSyncShiftSyncLabel==='function'?liveSyncShiftSyncLabel(x):''}</div><div class="muted"><label>Status <select data-shift-status="${escapeHTML(x.id)}" aria-label="Status for shift on ${escapeHTML(x.date)}">${shiftStatusOptions(x.status)}</select></label></div>${shiftTripOriginHTML(x)}<div class="muted"><a href="${googleCalUrl(x)}" target="_blank" rel="noopener">Add to Google</a> · <a href="${outlookCalUrl(x)}" target="_blank" rel="noopener">Add to Outlook</a></div>${x.note?`<p>${escapeHTML(x.note)}</p>`:''}`)}<div class="toolbar"><button data-action="add-shift">Add a shift on this day</button></div><p class="muted">${(()=>{const s=rows.map(r=>shiftLiveCalendarSource(r)).find(Boolean);return s?('Deleting removes it here and from your CRNA Hub calendar — your '+escapeHTML(s.calendarName)+' calendar isn\'t touched, and it won\'t be imported again.'):'Deleting removes it here and from your CRNA Hub calendar right away.'})()}</p></section>`;
 }
