@@ -1653,7 +1653,7 @@ function captureMileageLogDraft(){
 }
 function render(){ captureMileageLogDraft(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));
 document.querySelectorAll('.previewPayUnit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.payUnit=el.value==='hourly'?'hourly':'daily';render()}}));
-document.querySelectorAll('.importRateEdit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.ratesDraft=p.ratesDraft||{};p.ratesDraft[el.dataset.field]=el.value}}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
+document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.facContractKind').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f||!el.dataset.field||el.value===el.dataset.field)return;f.rates=f.rates||{};if(f.rates[el.dataset.field]!=null){f.rates[el.value]=f.rates[el.dataset.field];delete f.rates[el.dataset.field]}render()}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
 function area(name,label,value='',placeholder=''){return `<div class="field wide"><label for="f_${name}">${label}</label><textarea id="f_${name}" name="${name}" placeholder="${escapeHTML(placeholder)}">${escapeHTML(value)}</textarea></div>`}
 function select(name,label,options,value){return `<div class="field"><label for="f_${name}">${label}</label><select name="${name}" id="f_${name}">${options.map(o=>`<option value="${escapeHTML(o)}" ${o===value?'selected':''}>${escapeHTML(o)}</option>`).join('')}</select></div>`}
@@ -2044,12 +2044,45 @@ function payUnitHoursFor(type,f){const t=String(type||'');if(/24-hour|24 hour/i.
 function previewPayConversion(rawPay,unit,type,f){const raw=String(rawPay||'').trim();const amt=Number(raw.replace(/[^0-9.]/g,''));if(!raw||!isFinite(amt)||amt<=0)return{pay:raw,payRate:'',payUnit:''};if(unit==='hourly'){const h=payUnitHoursFor(type,f);if(h)return{pay:String(Math.round(amt*h*100)/100),payRate:String(amt),payUnit:'hourly'};return{pay:String(amt),payRate:String(amt),payUnit:'daily'}}return{pay:String(amt),payRate:String(amt),payUnit:'daily'}}
 function facilityHasUsableRates(f){return !!f&&FACILITY_RATE_KEYS.some(k=>rateOrNull(f[k])!=null)}
 function payUnitControlHTML(preview,kind){const u=preview&&preview.payUnit==='hourly'?'hourly':'daily';return `<div class="form-grid"><div class="field"><label for="payUnit_${kind}">Pay amounts in this preview are</label><select id="payUnit_${kind}" class="previewPayUnit" data-kind="${kind}"><option value="daily" ${u==='daily'?'selected':''}>Per shift — the total for that shift</option><option value="hourly" ${u==='hourly'?'selected':''}>Hourly — a rate, times the shift's hours</option></select></div></div><p class="muted">${u==='hourly'?'Each Pay amount is an hourly rate — approving multiplies it by the shift\u2019s hours (8-hour shifts use the facility\u2019s paid hours). Leave Pay blank to price from the facility\u2019s rates.':'Each Pay amount is the total pay for that one shift. Leave Pay blank to price from the facility\u2019s rates.'}</p>`}
-// First-time rates prompt: when the facility these shifts belong to
-// is new, or saved but has no rate that prices any imported row, the
-// preview offers that facility's own rate fields inline — the same
-// FACILITY_RATE_KEYS model the contract preview and the facility
-// form use, never a parallel one. Skipping is remembered per
-// facility (ratesPromptSkipped) so later imports don't nag.
+// First-time clarification prompt (narrowed Nov 8, 2026, Caleb):
+// "Make the prompt specific to the shifts that the AI reads — only
+// ask clarification of the shifts it sees." When the facility these
+// shifts belong to is new, or has shift codes on this import it
+// cannot price yet, the preview asks ONLY about the distinct codes
+// actually present in the included rows: ONE shared hourly rate for
+// the facility, plus per code a label ("what is 5**?") and its
+// hours — nothing more. The full FACILITY_RATE_KEYS grid stays on
+// the Facilities tab and the contract flow. On approve the answers
+// persist through the existing facility record: the hourly rate
+// lands in hourlyRate, and each clarified code is remembered in the
+// facility's codeMap ({code: {label, hours}}) so a later import of
+// the same code prices automatically and never re-asks. Skipping is
+// remembered per facility (ratesPromptSkipped) so imports don't nag.
+function facilityCodeDefs(f){const cm=f&&f.codeMap;return (cm&&typeof cm==='object'&&!Array.isArray(cm))?cm:{}}
+function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;return facilityCodeDefs(f)[k]||null}
+function rowCodeKey(r){return String((r&&(r.code!=null&&String(r.code).trim()))?r.code:(r?r.type:'')||'').trim()}
+function importTargetRows(preview,name){
+  const rows=(preview.rows||[]).filter(r=>r.match!=='other');
+  const cand=rows.filter(r=>facilityNameKey(r.facility)===facilityNameKey(name)||!scheduleRowFacilityResolved(r));
+  return cand.length?cand:rows;
+}
+function unclarifiedCodes(preview,target){
+  // Distinct codes/types among the INCLUDED rows for this facility
+  // that the facility cannot price yet: facilityPayFor says 0 and no
+  // saved code definition covers the code. Order of first appearance.
+  const seen=new Map();
+  for(const r of importTargetRows(preview,target.name)){
+    if(!r.include)continue;
+    const code=rowCodeKey(r);if(!code)continue;
+    if(seen.has(code))continue;
+    seen.set(code,r.date||'');
+    if(target.fac){
+      if(facilityPayFor(target.fac,code,r.date)>0)seen.delete(code);
+      else if(codeDefFor(target.fac,code))seen.delete(code);
+    }
+  }
+  return [...seen.keys()].map(code=>({code}));
+}
 function importRatesTarget(preview){
   if(!preview||preview.ratesSkipped)return null;
   const rows=(preview.rows||[]).filter(r=>r.match!=='other');
@@ -2059,27 +2092,73 @@ function importRatesTarget(preview){
   if(!name){const names=[...new Set(rows.map(r=>String(r.facility||'').trim()).filter(Boolean))];if(names.length===1)name=names[0];else return null}
   const fac=facilityByNameOrAlias(name);
   if(fac&&fac.ratesPromptSkipped)return null;
-  const cand=rows.filter(r=>facilityNameKey(r.facility)===facilityNameKey(name)||!scheduleRowFacilityResolved(r));
-  const use=cand.length?cand:rows;
-  if(fac&&use.some(r=>facilityPayFor(fac,r.type,r.date)>0))return null;
-  return {name,fac:fac||null};
+  const codes=unclarifiedCodes(preview,{name,fac:fac||null});
+  if(!codes.length)return null;
+  return {name,fac:fac||null,codes};
 }
-function importRatesDraftHasRates(preview){const d=(preview&&preview.ratesDraft)||{};return FACILITY_RATE_KEYS.some(k=>rateOrNull(d[k])!=null)}
+function clarifyDraftOf(preview){return (preview&&preview.clarifyDraft)||{hourlyRate:'',codes:{}}}
+function clarifyEntryFor(preview,code){
+  // Effective clarification for one code: what the user typed, or —
+  // for a code that already reads as a known shift type ("8-hour
+  // day") — the obvious default the prompt pre-fills, so entering
+  // just the hourly rate is enough for those. A grid code ("5**")
+  // has no default: it counts only when the user actually types.
+  const d=clarifyDraftOf(preview);const e=(d.codes||{})[code]||{};
+  const typedLabel=String(e.label!=null?e.label:'').trim();
+  const typedHours=e.hours!=null&&String(e.hours).trim()!==''?String(e.hours).trim():'';
+  const defLabel=/hour|call/i.test(code)?code:'';
+  const defHours=payUnitHoursFor(code,null);
+  const label=typedLabel||defLabel;
+  const hours=typedHours||(defHours!=null?String(defHours):'');
+  return {label,hours,touched:!!(typedLabel||typedHours),answered:!!(label||hours)};
+}
 function importRatesPromptHTML(preview,kind){
   const t=importRatesTarget(preview);if(!t)return '';
-  const d=(preview&&preview.ratesDraft)||{};
-  const inputs=FACILITY_RATE_KEYS.map(k=>`<div class="field"><label for="impRate_${kind}_${k}">${FACILITY_RATE_LABELS[k]} ($)</label><input id="impRate_${kind}_${k}" class="importRateEdit" data-kind="${kind}" data-field="${k}" type="number" min="0" step="0.01" value="${escapeHTML(d[k]!=null?d[k]:'')}" placeholder="Not taken here"></div>`).join('');
-  return `<div class="item" style="display:block"><p><strong>First time at ${escapeHTML(t.name)}? Set its pay rates now</strong></p><p class="muted">Add the rates you use at ${escapeHTML(t.name)} and these shifts price right away — hourly, per-shift, and call rates, the same fields a contract sets. Skip and the shifts stay unpriced until rates are set on the Facilities tab.</p><div class="form-grid">${inputs}</div><div class="toolbar"><button type="button" class="secondary" data-action="import-rates-skip" data-id="${kind}">Skip for now</button></div></div>`;
+  const d=clarifyDraftOf(preview);
+  const codeRows=t.codes.map((c,ci)=>{
+    const e=clarifyEntryFor(preview,c.code);
+    return `<div class="form-grid"><div class="field"><label for="impCodeLabel_${kind}_${ci}">What is “${escapeHTML(c.code)}”?</label><input id="impCodeLabel_${kind}_${ci}" class="clarifyCodeLabel" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="text" value="${escapeHTML(e.label)}" placeholder="e.g. 8-hour day shift"></div><div class="field"><label for="impCodeHours_${kind}_${ci}">Hours for “${escapeHTML(c.code)}”</label><input id="impCodeHours_${kind}_${ci}" class="clarifyCodeHours" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.25" value="${escapeHTML(e.hours)}" placeholder="e.g. 8.5"></div></div>`;
+  }).join('');
+  return `<div class="item" style="display:block"><p><strong>First time at ${escapeHTML(t.name)}? Tell us what these shifts are</strong></p><p class="muted">We only ask about the shift${t.codes.length===1?'':'s'} on this schedule — nothing else. Set your hourly rate at ${escapeHTML(t.name)}, say what each code means, and these shifts price right away. We’ll remember them for next time. Skip and the shifts stay unpriced until rates are set on the Facilities tab.</p><div class="form-grid"><div class="field"><label for="impHourly_${kind}">Your hourly rate at ${escapeHTML(t.name)} ($/hr)</label><input id="impHourly_${kind}" class="clarifyHourly" data-kind="${kind}" type="number" min="0" step="0.01" value="${escapeHTML(d.hourlyRate!=null?d.hourlyRate:'')}" placeholder="e.g. 250"></div></div>${codeRows}<div class="toolbar"><button type="button" class="secondary" data-action="import-rates-skip" data-id="${kind}">Skip for now</button></div></div>`;
 }
-function applyImportRatesDraft(preview,target){
-  // Applies the preview's rates draft to the target facility: creates
-  // it WITH the rates when new; merges entered values onto a saved
-  // facility (a blank field never wipes a saved rate). Returns
-  // {fac, saved} — saved=false when the draft held no usable rate.
-  if(!target||!importRatesDraftHasRates(preview))return{fac:target?target.fac:null,saved:false};
-  const d=preview.ratesDraft||{};const rates={};for(const k of FACILITY_RATE_KEYS){const v=rateOrNull(d[k]);rates[k]=v==null?'':String(v)}
-  if(target.fac){const f=target.fac;for(const k of FACILITY_RATE_KEYS)if(rates[k]!=='')f[k]=rates[k];f.ratesPromptSkipped=false;f.updatedAt=new Date().toISOString();return{fac:f,saved:true}}
-  const nf={id:id(),name:target.name,aliases:'',address:'',distance:'',notes:'',...rates,ratesPromptSkipped:false};db.facilities=db.facilities||[];db.facilities.push(nf);return{fac:nf,saved:true};
+function applyImportClarifyDraft(preview,target){
+  // Applies the preview's clarification draft to the target facility:
+  // creates it when new (with the hourly rate and code definitions);
+  // merges onto a saved facility otherwise. Only codes the user
+  // actually clarified get a saved definition — an untouched code
+  // keeps asking next time. Returns {fac, saved} — saved=false when
+  // no hourly rate was entered (nothing can price without one).
+  if(!target)return{fac:null,saved:false};
+  const d=clarifyDraftOf(preview);const hourly=rateOrNull(d.hourlyRate);
+  if(hourly==null)return{fac:target.fac,saved:false};
+  let fac=target.fac;
+  if(!fac){fac={id:id(),name:target.name,aliases:'',address:'',distance:'',notes:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',hourlyCall1st:'',weekendRate24:'',weekendRateSecond:'',codeMap:{},ratesPromptSkipped:false};db.facilities=db.facilities||[];db.facilities.push(fac)}
+  fac.hourlyRate=String(hourly);
+  fac.codeMap=facilityCodeDefs(fac);
+  for(const c of target.codes){
+    const e=clarifyEntryFor(preview,c.code);if(!e.answered)continue;
+    const label=e.label||c.code;
+    const hours=rateOrNull(e.hours)!=null?rateOrNull(e.hours):payUnitHoursFor(label,fac);
+    fac.codeMap[c.code]={label,hours:hours!=null?String(hours):''};
+    if(/8-hour/i.test(label)&&hours!=null)fac.paidHours8=String(hours);
+  }
+  fac.ratesPromptSkipped=false;fac.updatedAt=new Date().toISOString();
+  return{fac,saved:true};
+}
+function clarifiedRowPricing(fac,row){
+  // Prices a row from the facility's saved code definition for the
+  // row's code: hourly rate × the definition's hours, and the shift
+  // takes the clarified label as its type. Returns null when the
+  // code has no definition; {type} alone when a definition exists
+  // but cannot price (no hourly rate / no hours known).
+  if(!fac)return null;
+  const key=rowCodeKey(row);if(!key)return null;
+  const def=codeDefFor(fac,key);if(!def)return null;
+  const label=String(def.label||'').trim()||key;
+  const hourly=rateOrNull(fac.hourlyRate);
+  const hours=rateOrNull(def.hours)!=null?rateOrNull(def.hours):payUnitHoursFor(label,fac);
+  if(hourly==null||hours==null)return{type:label};
+  return{type:label,pay:String(Math.round(hourly*hours*100)/100),payRate:String(hourly),payUnit:'hourly'};
 }
 function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}return n}
 // One-line rate summary for the facilities list. Only rates that are set
@@ -2100,6 +2179,23 @@ function facilityRateSummary(x){
   if(rateOrNull(x.rateSecond)==null&&rateOrNull(x.weekendRateSecond)==null&&!(rateOrNull(x.callBonus)!=null&&(rateOrNull(x.rate8)!=null||rateOrNull(x.hourlyRate)!=null)))missing.push('second call');
   return {set:set,missing:missing};
 }
+// Contract clarification rows (narrowed Nov 8, 2026, Caleb): the
+// contract preview asks ONLY about the rate lines the read actually
+// extracted from THIS contract — each one shown as "what is this
+// rate?" (confirm or correct the kind) beside the rate the read
+// found, with its basis kept visible: an hourly line stays per-hour,
+// a flat line stays per-shift — never force-converted. Rate lines
+// the contract never mentioned are never asked about; the full rate
+// grid lives on the Facilities tab.
+function rateKeyBasis(k){if(k==='hourlyRate'||k==='hourlyCall1st')return 'per hour';if(k==='callBonus')return 'added bonus';if(k==='paidHours8')return 'hours';return 'per shift — flat'}
+function contractExtractedRateKeys(f){return FACILITY_RATE_KEYS.filter(k=>rateOrNull(f.rates&&f.rates[k])!=null||(f.unreadable||[]).includes(k))}
+function contractClarifyRowHTML(f,i,k){
+  const un=(f.unreadable||[]).includes(k);
+  const val=escapeHTML(f.rates&&f.rates[k]!=null?f.rates[k]:'');
+  if(k==='paidHours8')return `<div class="form-grid"><div class="field"><label>What is this?</label><p style="margin:4px 0">${FACILITY_RATE_LABELS[k]} <span class="pill">${rateKeyBasis(k)}</span></p></div><div class="field"><label for="f_facPrev_${i}_${k}">${FACILITY_RATE_LABELS[k]}</label><input id="f_facPrev_${i}_${k}" class="facContractEdit" data-i="${i}" data-field="${k}" type="number" min="0" step="0.25" value="${val}" placeholder="${un?'Not readable from photo — re-take or type':''}"></div></div>`;
+  const kindOptions=FACILITY_RATE_KEYS.filter(x=>x!=='paidHours8').map(x=>`<option value="${x}" ${x===k?'selected':''}>${FACILITY_RATE_LABELS[x]}</option>`).join('');
+  return `<div class="form-grid"><div class="field"><label for="f_facKind_${i}_${k}">What is this rate?</label><select id="f_facKind_${i}_${k}" class="facContractKind" data-i="${i}" data-field="${k}">${kindOptions}</select></div><div class="field"><label for="f_facPrev_${i}_${k}">${FACILITY_RATE_LABELS[k]} ($) <span class="pill">${rateKeyBasis(k)}</span></label><input id="f_facPrev_${i}_${k}" class="facContractEdit" data-i="${i}" data-field="${k}" type="number" min="0" step="0.01" value="${val}" placeholder="${un?'Not readable from photo — re-take or type':''}"></div></div>`;
+}
 function facilityContractPreviewHTML(){
   if(facilityContractError)return `<p class="hint">${escapeHTML(facilityContractError)}</p>`;
   if(!facilityContractPreview)return '<p class="muted">No contract read yet. Upload a contract or paste its text above, then tap “Read my contract” — nothing is saved until you approve the preview below.</p>';
@@ -2111,7 +2207,7 @@ function facilityContractPreviewHTML(){
   }
   if(p.isPhoto)out+=`<div class="toolbar"><button type="button" data-action="facility-reread-rates">Re-read just the rates table</button><span class="muted">Crops the bottom half of each photo and reads only that — the rates table sits at the bottom of this addendum. New rates are merged into the preview below; nothing is saved yet. No picture leaves this device.</span></div>${facilityContractCropNote?`<p class="hint">${escapeHTML(facilityContractCropNote)}</p>`:''}`;
   p.facilities.forEach((f,i)=>{
-    const rateInputs=FACILITY_RATE_KEYS.map(k=>{const un=(f.unreadable||[]).includes(k);return `<div class="field"><label for="f_facPrev_${i}_${k}">${FACILITY_RATE_LABELS[k]} ($)</label><input id="f_facPrev_${i}_${k}" class="facContractEdit" data-i="${i}" data-field="${k}" type="number" min="0" step="0.01" value="${escapeHTML(f.rates&&f.rates[k]!=null?f.rates[k]:'')}" placeholder="${un?'Not readable from photo — re-take or type':'Not stated in contract'}"></div>`}).join('');
+    const rateInputs=contractExtractedRateKeys(f).map(k=>contractClarifyRowHTML(f,i,k)).join('');
     out+=`<div class="item" style="display:block"><label><input type="checkbox" class="facContractInclude" data-i="${i}" ${f.include?'checked':''}> Save this facility</label>
     <div class="form-grid">
     <div class="field"><label for="f_facPrev_${i}_name">Facility name</label><input id="f_facPrev_${i}_name" class="facContractEdit" data-i="${i}" data-field="name" type="text" value="${escapeHTML(f.name||'')}" placeholder="Not found — type the facility name"></div>
@@ -2120,7 +2216,7 @@ function facilityContractPreviewHTML(){
     ${rateInputs}
     </div>
     ${FACILITY_RATE_KEYS.every(k=>rateOrNull(f.rates&&f.rates[k])==null)?`<p class="hint">No rates for ${escapeHTML(f.name||'this facility')} yet — add them here now, or save as-is and set them later on the Facilities tab.</p>`:''}${unreadableRatesWarningHTML(f.unreadable||[])}
-    <p class="muted">Found: ${f.found.length?escapeHTML(f.found.join(', ')):'nothing recognised'}.${(f.unreadable||[]).length?(' Not readable from the photos (see above): '+escapeHTML((f.unreadable||[]).map(k=>FACILITY_RATE_LABELS[k]||k).join(', '))+'.'):''}${(()=>{const unL=(f.unreadable||[]).map(k=>FACILITY_RATE_LABELS[k]||k);const rest=f.missing.filter(m=>!unL.includes(m));return rest.length?(' Not stated in the contract — fill in by hand if it applies: '+escapeHTML(rest.join(', '))+'.'):''})()}${f.effectiveStart?(' Contract dates: '+fmt(f.effectiveStart)+' to '+fmt(f.effectiveEnd||f.effectiveStart)+'.'):''}${p.shiftCount?(' This document also lists '+p.shiftCount+' shift(s) — shifts are not created here; use Upload a schedule on this tab to import them from the same contract.'):''}</p></div>`;
+    <p class="muted">Found: ${f.found.length?escapeHTML(f.found.join(', ')):'nothing recognised'}.${(f.unreadable||[]).length?(' Not readable from the photos (see above): '+escapeHTML((f.unreadable||[]).map(k=>FACILITY_RATE_LABELS[k]||k).join(', '))+'.'):''}${''}${f.effectiveStart?(' Contract dates: '+fmt(f.effectiveStart)+' to '+fmt(f.effectiveEnd||f.effectiveStart)+'.'):''}${p.shiftCount?(' This document also lists '+p.shiftCount+' shift(s) — shifts are not created here; use Upload a schedule on this tab to import them from the same contract.'):''}</p></div>`;
   });
   out+=`<div class="toolbar" style="margin-top:12px"><button data-action="facility-contract-approve">Save facilities — I checked this</button><button type="button" class="secondary" data-action="facility-contract-discard">Discard preview (save nothing)</button></div>`;
   return out;
@@ -3366,7 +3462,7 @@ function calPreviewNeedsFacility(){
 }
 function calPreviewHTML(){if(!calPreview)return '<p class="muted">No calendar file parsed yet. Choose an .ics file above, then parse it — nothing is saved until you approve the preview.</p>';const rows=calPreview.rows,dup=rows.filter(r=>r.duplicate).length,need=rows.filter(r=>r.flags.length).length;return `<p><strong>Parsed from:</strong> ${escapeHTML(calPreview.fileName)} · Source: ${escapeHTML(calPreview.sourceLabel)} · ${rows.length} event(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Duplicates are events already in the app with the same date, facility, and shift type. Uncheck any row to leave it out. Rows with a missing date or facility block approval until fixed or unchecked.</p>${calPreviewNeedsFacility()?`<div class="form-grid"><div class="field"><label for="calFacilityAll">Which facility is this schedule for?</label><input id="calFacilityAll" class="calFacilityAll" list="facilityNamesCal" value="${escapeHTML(calPreview.facilityAll||'')}" placeholder="e.g. CAMC"><datalist id="facilityNamesCal">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(calPreview,'cal')}${importRatesPromptHTML(calPreview,'cal')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${calPreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="calInclude" data-row="${i}" ${r.include?'checked':''}></td><td><input type="date" class="calEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.type||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${r.duplicate?'<span class="pill warn">duplicate — will merge</span> ':''}${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="cal-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="cal-discard">Discard preview</button></div>`}
 async function importCalendar(e){e.preventDefault();calImportError='';const f=$('f_calFile').files[0];const sourceLabel=$('f_calSource').value||'Calendar file';if(!f){calImportError='Choose an .ics calendar file first (Google, Apple, or Outlook can all export one).';return render()}let text='';try{text=await f.text()}catch(err){calImportError='Could not read that file: '+err.message;return render()}if(!/^BEGIN:VCALENDAR/i.test(text.trim())){calImportError='That file is not a calendar (.ics) file. Export your calendar as .ics from Google, Apple, or Outlook and try again. Nothing was saved.';calPreview=null;return render()}const parsed=parseICS(text,f.name);const sourceCode=CAL_SOURCES[sourceLabel]||'calendar-file';const grossByBlock=text.split(/BEGIN:VEVENT/i).slice(1).map(b=>{const m=b.match(/Expected gross:\s*\$?([\d\\,]+(?:\.\d+)?)/i);return m?m[1].replace(/[\\,]/g,''):''});const rows=parsed.rows.map((r,ri)=>{if(grossByBlock[ri])r={...r,pay:grossByBlock[ri]};const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,r));const flags=[...r.flags];if(duplicate)flags.push('already in CRNA Hub — will merge, not double');return {...r,source:sourceCode,sourceLabel,status:importStatusForDate(r.date),include:true,duplicate,incomplete:!String(r.pay||'').trim(),note:'Imported from '+sourceLabel+' (.ics): '+f.name}});calPreview={fileName:f.name,sourceLabel,sourceCode,rows};if(!rows.length){calImportError='No events found in that calendar file. Nothing was saved.';calPreview=null}render()}
-function approveCalendarImport(){if(!calPreview)return;const rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac)for(const r of rows)if(!scheduleRowFacilityResolved(r))r.facility=fillFac;let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget&&importRatesDraftHasRates(calPreview)){const applied=applyImportRatesDraft(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name}else if(ratesTarget&&calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name;if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}let created=0,skipped=0,newFacilities=0;for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay;if(!pay){const facP=facilityByNameOrAlias(r.facility);if(facP){const pp=facilityPayFor(facP,r.type,r.date);if(pp>0)pay=String(pp)}}const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:r.type,pay,payRate:conv.payRate,payUnit:conv.payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note});if(res.merged){skipped++;continue}created++;if(r.facility&&!facilityByNameOrAlias(r.facility)){db.facilities.push({id:id(),name:String(r.facility).trim(),aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:''});newFacilities++}}const dups=calPreview.rows.filter(r=>r.duplicate).length;calPreview=null;persist();render();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();alert(`Added ${created} shift(s) from the calendar. Merged ${skipped} duplicate(s) into existing shifts — never doubled.${newFacilities&&!ratesSavedFor?` New facilit(ies) learned: set their pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}`)}
+function approveCalendarImport(){if(!calPreview)return;const rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac)for(const r of rows)if(!scheduleRowFacilityResolved(r))r.facility=fillFac;let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportClarifyDraft(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}let created=0,skipped=0,newFacilities=0;for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0)pay=String(pp)}const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note});if(res.merged){skipped++;continue}created++;if(r.facility&&!facilityByNameOrAlias(r.facility)){db.facilities.push({id:id(),name:String(r.facility).trim(),aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:''});newFacilities++}}const dups=calPreview.rows.filter(r=>r.duplicate).length;calPreview=null;persist();render();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();alert(`Added ${created} shift(s) from the calendar. Merged ${skipped} duplicate(s) into existing shifts — never doubled.${newFacilities&&!ratesSavedFor?` New facilit(ies) learned: set their pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}`)}
 function exportCalendarICS(shifts,filename){if(!shifts.length){alert('No shifts to export.');return}download(filename,shiftsToICS(shifts),'text/calendar;charset=utf-8')}
 function backupHTML(){
   return collapsePanelHTML('backup-panel','Backup & restore',`<p class="muted">${escapeHTML(cloudHeaderLabel())}</p><div class="toolbar"><button data-action="backup">Download JSON backup</button><button class="secondary" data-action="export-shifts">Download shift CSV</button><button class="secondary" data-action="export-mileage">Download mileage CSV</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<label for="restoreFile">Restore a CRNA Hub JSON backup (replaces current records)</label><input id="restoreFile" type="file" accept=".json,application/json"><p class="muted" style="font-size:0.85em">${INCOME_DISCLAIMER}</p>`,false);
@@ -3632,10 +3728,11 @@ function approveScheduleImport(){
   // path, not an edge case.
   let createdFacility='',ratesSavedFor='',ratesSkippedFor='';
   const ratesTarget=importRatesTarget(schedulePreview.ratesSkipped?{...schedulePreview,ratesSkipped:false}:schedulePreview);
-  if(ratesTarget&&importRatesDraftHasRates(schedulePreview)){
-    const applied=applyImportRatesDraft(schedulePreview,ratesTarget);
+  if(ratesTarget){
+    const applied=applyImportClarifyDraft(schedulePreview,ratesTarget);
     if(applied.saved){ratesSavedFor=ratesTarget.name;if(!ratesTarget.fac)createdFacility=ratesTarget.name}
-  }else if(ratesTarget&&schedulePreview.ratesSkipped)ratesSkippedFor=ratesTarget.name;
+    else if(schedulePreview.ratesSkipped)ratesSkippedFor=ratesTarget.name;
+  }
   if(fillFac&&!facilityByNameOrAlias(fillFac)){
     db.facilities=db.facilities||[];
     db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(schedulePreview.ratesSkipped?{ratesPromptSkipped:true}:{})});
@@ -3648,11 +3745,12 @@ function approveScheduleImport(){
   if(!rows.length){alert('Nothing selected to add — check the rows that are yours, or discard the preview.');return}
   let created=0,skipped=0,incomplete=0; const newNames=[];
   for(const r of rows){
-    let pay='',inc=true,payRate='',payUnit='';
+    let pay='',inc=true,payRate='',payUnit='',shiftType=r.type;
     const facForRow=facilityByNameOrAlias(r.facility);
     if(String(r.pay||'').trim()){const conv=previewPayConversion(r.pay,schedulePreview.payUnit,r.type,facForRow);pay=conv.pay;payRate=conv.payRate;payUnit=conv.payUnit;inc=!pay}
-    if(!pay&&facForRow){const p=facilityPayFor(facForRow,r.type,r.date); if(p>0){pay=String(p);inc=false}}
-    const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:r.type,pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source||'schedule-import',sources:[r.source||'schedule-import'],incomplete:inc,updatedAt:new Date().toISOString(),note:'Schedule import: '+schedulePreview.fileName+(schedulePreview.matchedName?(' — matched name "'+schedulePreview.matchedName+'"'):'')});
+    if(facForRow){const cp=clarifiedRowPricing(facForRow,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit;inc=false}}}
+    if(!pay&&facForRow){const p=facilityPayFor(facForRow,shiftType,r.date); if(p>0){pay=String(p);inc=false}}
+    const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source||'schedule-import',sources:[r.source||'schedule-import'],incomplete:inc,updatedAt:new Date().toISOString(),note:'Schedule import: '+schedulePreview.fileName+(schedulePreview.matchedName?(' — matched name "'+schedulePreview.matchedName+'"'):'')});
     if(res.merged){skipped++;continue}
     if(!pay)incomplete++;
     created++;

@@ -72,55 +72,79 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({pay:'2000'})]))}; approveScheduleImport();`);
   t('daily (default) keeps the typed amount as the shift total', run(`db.shifts[0].pay`) === '2000' && run(`db.shifts[0].payUnit`) === 'daily' && run(`db.shifts[0].payRate`) === '2000');
 
-  // ---------- Case 2: rates prompt — new facility on a fresh account ----------
+  // ---------- Case 2:  // ---------- Case 2: narrow clarification — fresh account, grid codes ----------
   run(`db = empty(); db.settings.scheduleName='Martin'; db.facilities=[]; db.shifts=[]; persist();
-       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:''})]))}; schedulePreview.facilityAll='CAMC';`);
-  t('prompt appears for a brand-new facility', run(`schedulePreviewHTML().includes('First time at CAMC') && schedulePreviewHTML().includes('importRateEdit') && schedulePreviewHTML().includes('Skip for now')`));
-  run(`schedulePreview.ratesDraft={hourlyRate:'250', rate8:'2000'}; approveScheduleImport();`);
-  t('facility is created WITH the entered rates', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].rate8`) === '2000');
-  t('the imported shift prices immediately from them', run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2000' && run(`db.shifts[0].incomplete`) === false);
+       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', type:'5**', code:'5**'}), mkRow({facility:'', type:'5*', code:'5*', date:'2026-12-08'})]))}; schedulePreview.facilityAll='CAMC';`);
+  const html2 = run(`schedulePreviewHTML()`);
+  t('prompt appears for a brand-new facility', html2.includes('First time at CAMC') && html2.includes('Skip for now'));
+  t('prompt asks ONLY about the codes on this schedule', html2.includes('What is “5**”') && html2.includes('What is “5*”') && !html2.includes('What is “7”') && !html2.includes('importRateEdit') && !html2.includes('Weekend 24-hour call rate'));
+  t('prompt centres on ONE shared hourly rate field', (html2.match(/clarifyHourly/g) || []).length === 1 && html2.includes('Your hourly rate at CAMC'));
+  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{'5**':{label:'8-hour day shift', hours:'8.5'}}}; approveScheduleImport();`);
+  t('facility is created with the hourly rate + the code definition', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].codeMap['5**'].label`) === '8-hour day shift' && run(`db.facilities[0].codeMap['5**'].hours`) === '8.5');
+  t('the clarified code prices immediately (250 x 8.5) and takes its label', run(`db.shifts.length`) === 2 && run(`db.shifts[0].pay`) === '2125' && run(`db.shifts[0].type`) === '8-hour day shift' && run(`db.shifts[0].payUnit`) === 'hourly' && run(`db.shifts[0].incomplete`) === false);
+  t('partial clarification: the untouched code stays unpriced, approval not blocked', run(`db.shifts[1].pay`) === '' && run(`db.shifts[1].incomplete`) === true && run(`db.shifts[1].type`) === '5*');
   t('approval message says rates were saved', lastAlert().includes('Rates saved for CAMC'));
+
+  // ---------- Case 2b: second import of a known code — no re-prompt, auto-prices ----------
+  run(`schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'CAMC', type:'5**', code:'5**', date:'2026-12-09'})]))};`);
+  t('a known code does not re-prompt', !run(`schedulePreviewHTML().includes('First time at')`));
+  run(`approveScheduleImport();`);
+  t('the known code prices automatically from the saved definition', run(`db.shifts.length`) === 3 && run(`db.shifts[2].pay`) === '2125' && run(`db.shifts[2].type`) === '8-hour day shift');
 
   // ---------- Case 3: no prompt when the facility already prices the rows ----------
   run(`db = empty(); db.facilities=[{id:'f1',name:'CAMC',aliases:'',hourlyRate:'250',rate8:'2000'}]; db.shifts=[]; persist();
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({})]))};`);
-  t('no rates prompt for an already-priced facility', !run(`schedulePreviewHTML().includes('First time at')`));
+  t('no clarification prompt for an already-priced facility', !run(`schedulePreviewHTML().includes('First time at')`));
   run(`approveScheduleImport();`);
   t('blank pay still prices from the saved facility rates', run(`db.shifts[0].pay`) === '2000');
 
-  // ---------- Case 4: existing facility with NO usable rates — prompt + merge ----------
+  // ---------- Case 4: saved facility with NO rates — prompt lists the row type, hourly alone suffices ----------
   run(`db = empty(); db.facilities=[{id:'f1',name:'CAMC',aliases:'',hourlyRate:'',rate8:''}]; db.shifts=[]; persist();
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({})]))};`);
-  t('prompt appears for a saved facility with no rates', run(`schedulePreviewHTML().includes('First time at CAMC')`));
-  run(`schedulePreview.ratesDraft={hourlyRate:'250'}; approveScheduleImport();`);
-  t('rates merge onto the existing facility (no duplicate)', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250');
+  const html4 = run(`schedulePreviewHTML()`);
+  t('prompt appears for a saved facility with no rates, listing only the type present', html4.includes('First time at CAMC') && html4.includes('What is “8-hour day”') && !html4.includes('What is “5**”'));
+  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{}}; approveScheduleImport();`);
+  t('hourly rate merges onto the existing facility (no duplicate)', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250');
   t('shift prices from the just-entered hourly rate', run(`db.shifts[0].pay`) === '2000');
 
   // ---------- Case 5: skip path — unpriced, explained, never nags again ----------
   run(`db = empty(); db.facilities=[]; db.shifts=[]; persist();
-       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:''})]))}; schedulePreview.facilityAll='Mercer';`);
+       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', type:'5**', code:'5**'})]))}; schedulePreview.facilityAll='Mercer';`);
   run(`actions('import-rates-skip','sched');`);
   t('skip dismisses the prompt', !run(`schedulePreviewHTML().includes('First time at')`));
   run(`approveScheduleImport();`);
   t('skipped shifts land named but unpriced', run(`db.shifts.length`) === 1 && run(`db.shifts[0].facility`) === 'Mercer' && run(`db.shifts[0].pay`) === '' && run(`db.shifts[0].incomplete`) === true);
   t('approval message explains rates can be set later on Facilities', lastAlert().includes('No rates for Mercer yet') && lastAlert().includes('Facilities tab'));
   t('the created facility remembers the skip', run(`db.facilities[0].ratesPromptSkipped`) === true);
-  run(`schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'Mercer', date:'2026-12-08'})]))};`);
+  run(`schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'Mercer', type:'5**', code:'5**', date:'2026-12-08'})]))};`);
   t('a later import for the same facility does not nag', !run(`schedulePreviewHTML().includes('First time at')`));
 
   // ---------- Case 6: QGenda parity (shared preview + approve) ----------
   run(`db = empty(); db.facilities=[]; db.shifts=[]; persist();
-       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', source:'qgenda-feed'})], {fileName:'QGenda feed', source:'qgenda-feed'}))}; schedulePreview.facilityAll='CAMC';`);
-  t('QGenda preview shows the pay-unit control and the rates prompt', run(`schedulePreviewHTML().includes('previewPayUnit') && schedulePreviewHTML().includes('First time at CAMC')`));
-  run(`schedulePreview.ratesDraft={rate8:'2000'}; approveScheduleImport();`);
-  t('QGenda shifts price from the entered rates', run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2000' && run(`db.facilities[0].rate8`) === '2000');
+       schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', type:'5*', code:'5*', source:'qgenda-feed'})], {fileName:'QGenda feed', source:'qgenda-feed'}))}; schedulePreview.facilityAll='CAMC';`);
+  t('QGenda preview shows the pay-unit control and the narrow prompt', run(`schedulePreviewHTML().includes('previewPayUnit') && schedulePreviewHTML().includes('First time at CAMC') && schedulePreviewHTML().includes('What is “5*”')`));
+  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{'5*':{label:'10-hour shift', hours:'10'}}}; approveScheduleImport();`);
+  t('QGenda shifts price from the clarification', run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2500' && run(`db.shifts[0].type`) === '10-hour shift' && run(`db.facilities[0].codeMap['5*'].hours`) === '10');
 
   // ---------- Case 7: .ics preview parity ----------
   run(`db = empty(); db.facilities=[]; db.shifts=[]; persist();
        calPreview = {fileName:'cal.ics', sourceLabel:'Calendar file', sourceCode:'calendar-file', rows:[{date:'2026-12-07', facility:'CAMC', type:'8-hour day', pay:'', flags:[], include:true, duplicate:false, source:'calendar-file', note:'Imported from Calendar file (.ics): cal.ics'}]};`);
-  t('.ics preview shows the pay-unit control and the rates prompt', run(`calPreviewHTML().includes('previewPayUnit') && calPreviewHTML().includes('First time at CAMC')`));
-  run(`calPreview.ratesDraft={rate8:'2000'}; approveCalendarImport();`);
-  t('.ics approve creates the facility with rates and prices the shift', run(`db.facilities.length`) === 1 && run(`db.facilities[0].rate8`) === '2000' && run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2000');
+  t('.ics preview shows the pay-unit control and the narrow prompt', run(`calPreviewHTML().includes('previewPayUnit') && calPreviewHTML().includes('First time at CAMC') && calPreviewHTML().includes('What is “8-hour day”')`));
+  run(`calPreview.clarifyDraft={hourlyRate:'250', codes:{}}; approveCalendarImport();`);
+  t('.ics approve creates the facility with the hourly rate and prices the shift', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2000');
+
+  // ---------- Case 8: contract flow — clarify ONLY what the read extracted ----------
+  run(`db = empty(); db.facilities=[{id:'f1',name:'CAMC',aliases:'',hourlyRate:'',rate8:''}]; db.shifts=[]; db.contracts=[]; persist();
+       facilityContractPreview = { fileName:'camc.pdf', isPhoto:false, aiRead:true, contract:{id:'ct-n', facility:'CAMC', rates:{hourlyRate:'250', rate8:'2000'}}, facilities:[{include:true, name:'CAMC', aliases:'', address:'', effectiveStart:'', effectiveEnd:'', rates:{hourlyRate:'250', rate8:'2000'}, found:['Hourly rate $250.00','8-hour shift rate $2,000.00'], missing:['10-hour shift rate','12-hour shift rate','24-hour call rate','1st call hourly rate','Second call rate','Overnight call bonus','Weekend 24-hour call rate','Weekend second call rate','Paid hours for an 8-hour shift'], unreadable:[]}] };
+       facilityContractPendingImages = []; facilityContractConfirmCreate = false;`);
+  const html8 = run(`facilityContractPreviewHTML()`);
+  t('contract preview clarifies the extracted lines', html8.includes('f_facPrev_0_hourlyRate') && html8.includes('f_facPrev_0_rate8') && html8.includes('facContractKind'));
+  t('contract lines the read never mentioned never appear', !html8.includes('f_facPrev_0_rate10') && !html8.includes('f_facPrev_0_rate12') && !html8.includes('f_facPrev_0_rate24') && !html8.includes('f_facPrev_0_rateSecond') && !html8.includes('f_facPrev_0_callBonus') && !html8.includes('f_facPrev_0_weekendRate24') && !html8.includes('f_facPrev_0_weekendRateSecond') && !html8.includes('f_facPrev_0_paidHours8'));
+  t('each contract line keeps its own basis visible (hourly stays per-hour, flat stays per-shift)', html8.includes('per hour') && html8.includes('per shift — flat'));
+  run(`facilityContractPreview.facilities[0].rates.rate8 = '2100';`);
+  await run(`approveFacilityContract()`);
+  t('confirm/correct saves only the extracted rates onto the facility', run(`db.facilities.length`) === 1 && run(`db.facilities[0].rate8`) === '2100' && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].rate24 == null || db.facilities[0].rate24 === ''`));
+  t('the corrected contract rates price shifts', run(`facilityPayFor(db.facilities[0],'8-hour day','2026-12-07')`) === 2100);
 
   console.log(fails ? ('\n' + fails + ' FAILURE(S)') : '\nALL PASS');
 })();
