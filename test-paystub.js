@@ -254,7 +254,7 @@ t('calendar shows paycheck chips labelled by agency, amounts calculated from shi
 t('calendar carries the paystub disclaimer on paychecks',
   sandbox.__cal.includes('calculated from your shifts for each pay period'));
 t('dashboard upcoming-paychecks panel lists both agencies',
-  sandbox.__dash.includes('Upcoming paychecks</h2>') &&
+  sandbox.__dash.includes('Upcoming paychecks · next') &&
   sandbox.__dash.includes('Premier Anesthesia Group') &&
   sandbox.__dash.includes('Holzer Locums'));
 t('estimated paychecks are NOT added into the raw C/P shift-income totals',

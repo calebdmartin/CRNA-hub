@@ -281,10 +281,16 @@ t('exactly four rows, one line each; totals carry the dominant pc-total style',
   (panel.match(/data-action="edit-paycheck"/g) || []).length === 4 &&
   (panel.match(/class="pc-total"/g) || []).length === 4);
 t('panel title dropped "(estimated)"; the long disclaimer lives only in the collapsed toggle',
-  panel.includes('<h2>Upcoming paychecks</h2>') && !panel.includes('(estimated)') &&
+  !panel.includes('(estimated)') &&
   !panel.includes('includes $17,700.00 from proposed shifts') &&
   panel.indexOf('How paychecks are calculated') > -1 &&
   panel.indexOf('How paychecks are calculated') < panel.indexOf('Paycheck amounts are calculated'));
+t('panel is collapsible like the other panels, open by default; the collapsed summary carries the next check',
+  panel.includes('<details class="panel collapse-panel" id="upcoming-paychecks" open>') &&
+  panel.slice(0, panel.indexOf('collapse-body')).includes('Upcoming paychecks · next Nov 10 — $12,757.50'));
+t('expanding the panel reveals all four condensed rows in the new format',
+  ['Nov 10, 2026', '$12,757.50', 'Nov 24, 2026', '$27,075.00', 'Dec 8, 2026', '$10,625.00', 'Dec 22, 2026', '$29,975.00']
+    .every(s => panel.slice(panel.indexOf('collapse-body')).includes(s)));
 
 // ---------- 10. Manual edit of an imported shift survives a re-sync merge ----------
 run(`
@@ -318,6 +324,6 @@ const cssSrc = fs.readFileSync(R + 'styles.css', 'utf8');
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 t('wiring: swipe-down sheet dismissal + overlay CSS + cache v68',
   appSrc.includes("closest('.sheet')") && cssSrc.includes('.sheet-backdrop{position:fixed') &&
-  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v68'));
+  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v69'));
 
 console.log(fails ? `\n${fails} check(s) failed` : '\nall calendar-editing checks passed');

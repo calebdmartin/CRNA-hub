@@ -594,7 +594,17 @@ function paystubUpcomingHTML(){
   const stubs=db.payStubs||[];
   if(!stubs.length)return '';
   const up=paystubUpcoming(4);
-  return `<section class="panel" id="upcoming-paychecks"><h2>Upcoming paychecks</h2>${up.length?up.map(x=>paycheckRowHTML(x,'panel')).join(''):'<p class="muted">No upcoming paycheck could be worked out — check each stub has a pay frequency and a pay date (Facilities tab).</p>'}<details class="collapse-sub"><summary class="collapse-head"><span class="collapse-title">How paychecks are calculated</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><p class="muted">${PAYSTUB_DISCLAIMER}</p></details></section>`;
+  // Collapsible like every other panel (Nov 7, 2026): the collapsed
+  // header still carries the next check — "Upcoming paychecks · next
+  // Nov 24 — $27,075.00" — so collapsing never hides it. Open by
+  // default: it's the fresh thing to check; the header collapses it
+  // anytime.
+  const next=up[0];
+  const nextAmt=next?paystubOccurrenceAmount(next):null;
+  const nextShort=next?new Date(next.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+  const title='Upcoming paychecks'+(next?` · next ${nextShort} — ${nextAmt!=null?currency(nextAmt):'—'}`:'');
+  const inner=`${up.length?up.map(x=>paycheckRowHTML(x,'panel')).join(''):'<p class="muted">No upcoming paycheck could be worked out — check each stub has a pay frequency and a pay date (Facilities tab).</p>'}<details class="collapse-sub"><summary class="collapse-head"><span class="collapse-title">How paychecks are calculated</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><p class="muted">${PAYSTUB_DISCLAIMER}</p></details>`;
+  return collapsePanelHTML('upcoming-paychecks',title,inner,true);
 }
 
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){alert('Storage failed. Export a backup: '+e.message)}}
