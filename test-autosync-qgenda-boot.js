@@ -169,6 +169,9 @@ const SCHED_PREVIEW = `schedulePreview = { fileName: 'sched.csv', source: 'sched
       facilityContractPreview = { fileName: 'contract.pdf', isPhoto: false, contract: { id: 'ct1', facility: 'CAMC', rates: { rate8: '2000' } }, facilities: [{ include: true, name: 'CAMC', aliases: '', address: '', effectiveStart: '', effectiveEnd: '', rates: { rate8: '2000', hourlyRate: '250' } }] };
       facilityContractPendingImages = [];`);
     await w.run(`approveFacilityContract()`);
+    t('1d first save asks before creating the brand-new facility (facility-choice parity)',
+      w.run(`(db.facilities || []).length`) === 0 && w.run(`facilityContractConfirmCreate`) === true);
+    await w.run(`approveFacilityContract()`);
     t('1d contract approval saved the facility with its rates',
       w.run(`(db.facilities || []).some(f => f.name === 'CAMC' && f.rate8 === '2000')`) === true);
     w.flushTimers(); await drain();
@@ -301,7 +304,7 @@ const SCHED_PREVIEW = `schedulePreview = { fileName: 'sched.csv', source: 'sched
   t('pin: panel copy states the auto-check-on-open behaviour',
     appSrc.includes('We check your feed each time you open the app'));
   t('pin: service worker cache bumped to v85',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v87'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v88'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

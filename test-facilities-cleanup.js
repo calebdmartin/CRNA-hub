@@ -102,7 +102,7 @@ t('Account small print carries NO version line (Nov 6 sweep: build stamp removed
   !pages.Account.includes('cache v'));
 t('build stamp is gone entirely from the app',
   run(`typeof BUILD_STAMP`) === 'undefined' && !appSrc.includes('checkAppUpdate'));
-t('service worker cache bumped to v65', swSrc.includes("crna-hub-shell-v87"));
+t('service worker cache bumped to v65', swSrc.includes("crna-hub-shell-v88"));
 
 // ---------- 4. Contract upload still works end to end (pasted text) ----------
 (async () => {
@@ -117,6 +117,9 @@ t('service worker cache bumped to v65', swSrc.includes("crna-hub-shell-v87"));
   t('preview carries the facility name and the $250/hr rate',
     /Holzer/.test(run(`facilityContractPreview.facilities[0].name`)) &&
     run(`facilityContractPreview.facilities[0].rates.hourlyRate`) === '250');
+  await run(`approveFacilityContract()`);
+  t('first save of a brand-new contract facility asks for confirmation (facility-choice parity)',
+    run(`db.facilities.length`) === 0 && run(`facilityContractConfirmCreate`) === true);
   await run(`approveFacilityContract()`);
   t('approving the preview saves the facility with its rates',
     run(`db.facilities.length`) === 1 &&
