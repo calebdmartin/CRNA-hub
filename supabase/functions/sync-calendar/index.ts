@@ -154,8 +154,12 @@
 // Sync algorithm — newest edit wins, deletions never silent:
 //   * One dedicated provider calendar named "CRNA Hub" per provider.
 //     Other calendars are never read, written, or deleted — except the
-//     Apple import source above, which is read-only: it is never
-//     written to, and events are only ever pulled FROM it.
+//     Apple import source above, which sync only ever reads: events
+//     are only ever pulled FROM it. The single write to it is the
+//     delete-source-event action below — never part of sync, fired
+//     only when the user deletes an imported shift and explicitly
+//     ticks "Also remove it from my <calendar> calendar" for that
+//     one shift (Nov 7, 2026).
 //   * PUSH (app -> calendar, Nov 5, 2026): every local shift the
 //     browser sends is pushed to the dedicated calendar — created
 //     there if unmapped, updated there when the local copy is newer
@@ -1882,6 +1886,39 @@ Deno.serve(async (req: Request): Promise<Response> => {
           `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${body.provider}&shift_id=eq.${encodeURIComponent(String(body.shiftId))}`,
         );
         return json({ ok: true });
+      }
+      if (body.action === "delete-source-event" && isProvider(body.provider) && body.shiftId) {
+        // Delete-time choice (Caleb, Nov 7, 2026): the user deleted
+        // an imported shift in the app AND explicitly ticked "Also
+        // remove it from my <calendar> calendar" for that shift.
+        // This is the single exception to "the source calendar is
+        // never written to" — one user-confirmed event, never a sync
+        // behaviour. The pairing comes from calendar_import_map
+        // (source_calendar_url + source_event_id); the import-map
+        // row is dropped after a successful delete (the shift is
+        // already deleted locally, and its tombstone flags any
+        // surviving row deleted_locally at the next sync anyway).
+        // Only the Apple import source exists today: Google/Outlook
+        // connections sync only the app-owned calendar and pair no
+        // source events, so there is nothing to delete for them.
+        if (body.provider !== "apple") return err("source_delete_unsupported", 400);
+        const conn = await getConnection(userId, body.provider);
+        if (!conn) return err("not_connected", 400);
+        const importRows = await getImportMapRows(userId, body.provider);
+        const row = importRows.find((r) => String(r.shift_id) === String(body.shiftId));
+        if (!row) return err("no_source_pairing", 404);
+        const sourceUrl = String(row.source_calendar_url ?? conn.source_calendar_url ?? "").trim();
+        const sourceEventId = String(row.source_event_id ?? "").trim();
+        if (!sourceUrl || !sourceEventId) return err("no_source_pairing", 404);
+        const appleId = String(conn.provider_account ?? "");
+        const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+        try {
+          await deleteAppleEvent(sourceUrl, appleId, password, sourceEventId);
+        } catch {
+          return err("provider_delete_failed", 502);
+        }
+        await deleteImportMapRow(userId, body.provider, String(body.shiftId));
+        return json({ ok: true, provider: body.provider, sourceDeleted: true });
       }
       return err("unknown_action", 400);
     }

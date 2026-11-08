@@ -71,3 +71,5 @@ details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(18
 .mileage-month{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e3e8f2;border-radius:10px;background:#fff;font-weight:600}
 .mileage-month.disabled{opacity:.55;font-weight:400}
 .mileage-month input{width:18px;height:18px}
+.delete-src-check{display:flex;gap:8px;align-items:flex-start;font-size:14px;font-weight:600;color:#18384d;margin:10px 0}
+.delete-src-check input{width:auto;flex:none;margin-top:3px}

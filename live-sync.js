@@ -11,7 +11,13 @@
 //      shifts the user adds in CRNA Hub. The user never creates a
 //      calendar, never labels anything "CRNA Hub", and never sees the
 //      app-owned calendar as something to manage. The work calendar
-//      is NEVER written to.
+//      is NEVER written to — with exactly one user-confirmed
+//      exception (Nov 7, 2026): when deleting an imported shift, the
+//      user may tick "Also remove it from my <calendar> calendar" in
+//      the delete confirmation, and only then does the app delete
+//      that one paired source event (liveSyncDeleteSourceEvent).
+//      Sync itself never writes to, edits, or deletes from the work
+//      calendar.
 //   3. Apple, native: EventKit (EKEventStore) on the device —
 //      requestFullAccessToEvents, an EKCalendarChooser for the work
 //      calendar, a private EKCalendar for the app's own shifts.
@@ -564,6 +570,27 @@ function liveSyncSchedulePush() {
     liveSyncConnectedProviders().forEach((p) => liveSyncNow(p, true));
   }, 3000);
 }
+// Delete the SOURCE event of an imported shift from the user's own
+// work calendar — the ONE exception to the "work calendar is never
+// written to" rule, and only ever called when the user explicitly
+// ticked "Also remove it from my <calendar> calendar" in the delete
+// confirmation for that specific shift (Caleb, Nov 7, 2026). The
+// server resolves the pairing from calendar_import_map and deletes
+// exactly that event. Returns true only when the server confirms the
+// source event is gone; any failure returns false so the caller can
+// say so honestly while still completing the in-app delete. Only the
+// Apple import source pairs shifts with source events today —
+// Google/Outlook connections have no import source, so this is never
+// offered for them.
+async function liveSyncDeleteSourceEvent(provider, shiftId) {
+  try {
+    const data = await liveSyncPost('sync-calendar', { action: 'delete-source-event', provider, shiftId });
+    return !!(data && data.ok && data.sourceDeleted);
+  } catch (e) {
+    return false;
+  }
+}
+
 function liveSyncRecordTombstone(shiftId) {
   liveSyncDropShiftState(shiftId);
   liveSyncConnectedProviders().forEach((p) => {
@@ -1036,6 +1063,7 @@ if (typeof window !== 'undefined') {
   window.liveSyncInit = liveSyncInit;
   window.liveSyncSchedulePush = liveSyncSchedulePush;
   window.liveSyncRecordTombstone = liveSyncRecordTombstone;
+  window.liveSyncDeleteSourceEvent = liveSyncDeleteSourceEvent;
   window.liveSyncShiftSyncLabel = liveSyncShiftSyncLabel;
   window.liveSyncMarkShiftNotSynced = liveSyncMarkShiftNotSynced;
   window.liveSyncResetDeviceState = liveSyncResetDeviceState;

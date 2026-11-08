@@ -17,7 +17,9 @@
 //   allowlisted actions:
 //   sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
-//   set-auto-delete/resolve-deletion, the OAuth "start" action for
+//   set-auto-delete/resolve-deletion/delete-source-event (the
+//   delete-time "also remove it from my calendar" choice, Nov 7,
+//   2026), the OAuth "start" action for
 //   google-auth/outlook-auth, and portal-sync config/status/
 //   verify-nbcrna/verify-license (the former connect-aana action was
 //   deleted Nov 5, 2026 — audit F9 — and is rejected here),
@@ -53,7 +55,7 @@ const SUPABASE_URL = 'https://xgoghgihfhtnyevgapyp.supabase.co';
 const PUBLISHABLE_KEY = 'sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX';
 
 const FUNCTIONS = {
-  'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'disconnect', 'set-auto-delete', 'resolve-deletion']),
+  'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'disconnect', 'set-auto-delete', 'resolve-deletion', 'delete-source-event']),
   'google-auth': new Set(['start']),
   'outlook-auth': new Set(['start']),
   // Portal connections (Credentials tab): NBCRNA public verification,
