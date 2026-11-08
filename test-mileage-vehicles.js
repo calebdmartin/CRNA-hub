@@ -363,7 +363,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   // ================= 7. Cloud round trip =================
   t('source: vehicles are a synced list bound for the vehicles table',
     appSrc.includes("{ kind: 'vehicles', table: 'vehicles', row: cloudVehicleRow }") && appSrc.includes("'/rest/v1/vehicles'"));
-  t('service worker cache bumped to v81', swSrc.includes('crna-hub-shell-v90'));
+  t('service worker cache bumped to v81', swSrc.includes('crna-hub-shell-v91'));
 
   const downloads2 = [];
   const w2 = makeWorld(new Map(), downloads2);
