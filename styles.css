@@ -77,3 +77,24 @@ details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(18
 .facility-addr{cursor:pointer}
 
 .facility-addr{cursor:pointer}
+/* Floating assistant (Nov 7, 2026): one button, bottom-right, on every
+   tab except the Assistant tab. Sits right-of-center of the screen's
+   bottom edge — above the iOS home indicator / browser bar via the
+   safe-area inset, and clear of the right-edge mid-screen controls
+   (it hugs the bottom, they live mid-edge). Navy disc, teal ring,
+   white chat/sparkle glyph — app colors, no emoji. z-index 55: above
+   page content, BELOW every sheet backdrop (60/70), so an open day
+   sheet, editor, or delete confirmation always covers it. */
+.assistant-fab{position:fixed;right:calc(16px + env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));width:56px;height:56px;border-radius:50%;background:#121e53;color:#fff;border:2px solid #2dc8be;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 6px 20px rgba(10,22,38,.35);z-index:55;cursor:pointer}
+.assistant-fab:hover{filter:brightness(1.15)}
+.assistant-fab:focus-visible{outline:3px solid #2dc8be;outline-offset:2px}
+/* The assistant sheet stacks at the OVER tier (backdrop 80 / sheet 81)
+   so it opens above the base day sheet (60/61) and the stacked editors
+   (70/71) when invoked over them, and its form pins to the sheet's
+   bottom edge so the input — and its Ask button — stay reachable above
+   the iOS keyboard; the chat scrolls between header and form. */
+.assistant-backdrop{z-index:80}
+.assistant-sheet{z-index:81;display:flex;flex-direction:column;max-height:88vh}
+.assistant-sheet .chat{flex:1 1 auto;min-height:0;max-height:none}
+.assistant-sheet .chat-form{flex:0 0 auto}
+@media(max-width:650px){.assistant-fab{width:54px;height:54px;right:14px}}
