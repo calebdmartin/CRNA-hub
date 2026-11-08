@@ -234,6 +234,9 @@ run(`
     { id: 'o1', date: '${pastStr}', facility: 'Holzer', type: '8-hour day', pay: '2125', status: 'confirmed' },
     { id: 'o2', date: '${futureStr}', facility: 'Holzer', type: '8-hour day', pay: '2125', status: 'proposed' },
   ];
+  db.payStubs = [
+    { id: 'ord1', agency: 'Premier Anesthesia Group', facility: 'Holzer', frequency: 'biweekly', periodStart: '', periodEnd: '', payDate: '${futureStr}', gross: '2125', net: '1800', source: 'manual' },
+  ];
   globalThis.__dash = dashboard();
 `);
 t('Dashboard: calendar comes before the C/S/P income table',
@@ -242,5 +245,10 @@ t('Dashboard: calendar comes before the C/S/P income table',
   sandbox.__dash.indexOf('data-action="prev"') < sandbox.__dash.indexOf('<h2>Income · '));
 t('Dashboard: the income table is no longer above the calendar',
   !appSrc.includes("${incomeCSPHTML(currentYear(),ytdSplit)}${paystubUpcomingHTML()}"));
+t('Dashboard: Upcoming paychecks panel sits below the calendar, above the income table',
+  appSrc.includes("${calendar()}${dayViewHTML()}${paystubUpcomingHTML()}${incomeCSPHTML(currentYear(),ytdSplit)}") &&
+  sandbox.__dash.indexOf('id="upcoming-paychecks"') !== -1 &&
+  sandbox.__dash.indexOf('data-action="prev"') < sandbox.__dash.indexOf('id="upcoming-paychecks"') &&
+  sandbox.__dash.indexOf('id="upcoming-paychecks"') < sandbox.__dash.indexOf('<h2>Income · '));
 
 console.log(failures === 0 ? 'ytd-bug1 test done: all passed' : 'ytd-bug1 test done: FAILURES=' + failures);
