@@ -16,10 +16,13 @@
 // Fix (shared seam, no CAMC special-case):
 //   * one shiftsOnDay() selection used by BOTH the calendar grid and
 //     the day sheet — they can never disagree about a day's shifts;
-//   * one shiftFacilityLabel() used by the calendar chip, the day
-//     sheet title, the delete sheet and the Upcoming list: the saved
-//     facility name, "Off" only for an actual Off/PTO shift, otherwise
-//     "No facility yet" — never a blank title, never a false "Off";
+//   * one shiftFacilityLabel() used by the day sheet title, the
+//     delete sheet and the Upcoming list: the saved facility name,
+//     "Off" only for an actual Off/PTO shift, otherwise
+//     "No facility yet" — never a blank title, never a false "Off"
+//     (the calendar GRID chip itself was later slimmed by Caleb,
+//     Nov 8, 2026: it shows only the shift's code via shiftChipLabel);
+//
 //   * the schedule preview gains ONE schedule-level facility field
 //     ("Which facility is this schedule for?") shown whenever a row
 //     lacks a facility; on approve it fills exactly those rows, so a
@@ -113,8 +116,10 @@ t('grid shifts saved facility-less (grid prints none)', run(`db.shifts.filter(x=
 
 run(`month = new Date(2026, 11, 1); render();`);
 t('calendar counts 2 shifts on Dec 7', dayButton('2026-12-07').includes('2 shifts'));
-t('calendar chip for the uploaded shift does NOT call it "Off"', !/chip[^>]*>Off<br>/.test(dayButton('2026-12-07')));
-t('calendar chip labels the uploaded shift "No facility yet"', dayButton('2026-12-07').includes('No facility yet'));
+t('calendar chip for the uploaded shift does NOT call it "Off"', !/chip[^>]*>Off/.test(dayButton('2026-12-07')));
+// Nov 8, 2026 (Change A): grid chips now show ONLY the shift's code —
+// the "No facility yet" wording lives in the day sheet, not the grid.
+t('calendar chip shows only the uploaded shift\u2019s code', dayButton('2026-12-07').includes('>OR1</span>') && !dayButton('2026-12-07').includes('No facility yet'));
 
 run(`selectDay('2026-12-07'); render();`);
 let sheet = daySheet();
@@ -158,7 +163,7 @@ run(`month = new Date(2026, 11, 1); selectDay('2026-12-07'); render();`);
 sheet = daySheet();
 t('day sheet Dec 7 now titles the uploaded shift CAMC', sheet.includes('>CAMC<') || sheet.includes('CAMC'));
 t('day sheet Dec 7 lists both shifts again', (sheet.match(/data-action="edit-shifts"/g) || []).length === 2);
-t('calendar chip names CAMC (not "No facility yet", not "Off")', dayButton('2026-12-07').includes('CAMC') && !dayButton('2026-12-07').includes('No facility yet'));
+t('calendar chip shows the code only (no facility name on the grid)', dayButton('2026-12-07').includes('>OR1</span>') && !dayButton('2026-12-07').includes('No facility yet'));
 
 // ---------- Part 4: a named-facility upload (the literal fixture) ----------
 // CSV rows that DO carry the facility: same-day Holzer + CAMC, and a

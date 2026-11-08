@@ -174,7 +174,7 @@ const weekTotal = (run) => run(`mileageTripsInWeek('2026-11-02').reduce((s, m) =
     Math.abs(weekTotal(run2) - 480.2) < 0.001);
 
   // ================= 7. Cloud round trip =================
-  t('service worker cache bumped to v81', swSrc.includes('crna-hub-shell-v92'));
+  t('service worker cache bumped to v81', swSrc.includes('crna-hub-shell-v93'));
   const w3 = makeWorld(new Map(), []);
   const run3 = w3.run;
   run3(PICKS_STUB);
