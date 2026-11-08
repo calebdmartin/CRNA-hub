@@ -163,7 +163,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
         return err("feed_not_ics", 502);
       }
       const facilities = normalizeFacilityRules(body.facilities ?? []);
-      const parsed = parseQgendaICS(text, facilities);
+      const parsed = parseQgendaICS(text, facilities, {
+        name: typeof body.name === "string" ? body.name : "",
+      });
       await sbUpsert("calendar_connections", {
         user_id: userId,
         provider: PROVIDER,

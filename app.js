@@ -2101,19 +2101,27 @@ function importTargetRows(preview,name){
 function unclarifiedCodes(preview,target){
   // Distinct codes/types among the INCLUDED rows for this facility
   // that the facility cannot price yet: facilityPayFor says 0 and no
-  // saved code definition covers the code. Order of first appearance.
+  // saved code definition covers the code. A code is also priced when
+  // the facility can price the row by its canonical type (r.type) —
+  // e.g. a QGenda code "8/2nd call" whose type is "Second call".
+  // Order of first appearance. Each returned code carries the first
+  // included row's non-null hours for that code (as a string), so the
+  // clarification prompt can pre-fill hours the feed already gave.
   const seen=new Map();
+  const priced=new Set();
   for(const r of importTargetRows(preview,target.name)){
     if(!r.include)continue;
     const code=rowCodeKey(r);if(!code)continue;
-    if(seen.has(code))continue;
-    seen.set(code,r.date||'');
+    const rowHours=(typeof r.hours==='number'&&isFinite(r.hours))?String(r.hours):(r.hours!=null&&String(r.hours).trim()!==''?String(r.hours).trim():'');
+    if(!seen.has(code))seen.set(code,{code,hours:rowHours});
+    else if(!seen.get(code).hours&&rowHours)seen.get(code).hours=rowHours;
     if(target.fac){
-      if(facilityPayFor(target.fac,code,r.date)>0)seen.delete(code);
-      else if(codeDefFor(target.fac,code))seen.delete(code);
+      if(facilityPayFor(target.fac,code,r.date)>0)priced.add(code);
+      else if(facilityPayFor(target.fac,r.type,r.date)>0)priced.add(code);
+      else if(codeDefFor(target.fac,code))priced.add(code);
     }
   }
-  return [...seen.keys()].map(code=>({code}));
+  return [...seen.values()].filter(e=>!priced.has(e.code));
 }
 function importRatesTarget(preview){
   if(!preview||preview.ratesSkipped)return null;
@@ -2129,26 +2137,30 @@ function importRatesTarget(preview){
   return {name,fac:fac||null,codes};
 }
 function clarifyDraftOf(preview){return (preview&&preview.clarifyDraft)||{hourlyRate:'',codes:{}}}
-function clarifyEntryFor(preview,code){
+function clarifyEntryFor(preview,code,suggestedHours){
   // Effective clarification for one code: what the user typed, or —
   // for a code that already reads as a known shift type ("8-hour
   // day") — the obvious default the prompt pre-fills, so entering
   // just the hourly rate is enough for those. A grid code ("5**")
   // has no default: it counts only when the user actually types.
+  // Hours default: typed hours first, then the suggested (row-
+  // derived) hours when the caller passes them, then the known-type
+  // default from payUnitHoursFor. Label default is unchanged.
   const d=clarifyDraftOf(preview);const e=(d.codes||{})[code]||{};
   const typedLabel=String(e.label!=null?e.label:'').trim();
   const typedHours=e.hours!=null&&String(e.hours).trim()!==''?String(e.hours).trim():'';
+  const suggHours=suggestedHours!=null&&String(suggestedHours).trim()!==''?String(suggestedHours).trim():'';
   const defLabel=/hour|call/i.test(code)?code:'';
   const defHours=payUnitHoursFor(code,null);
   const label=typedLabel||defLabel;
-  const hours=typedHours||(defHours!=null?String(defHours):'');
+  const hours=typedHours||suggHours||(defHours!=null?String(defHours):'');
   return {label,hours,touched:!!(typedLabel||typedHours),answered:!!(label||hours)};
 }
 function importRatesPromptHTML(preview,kind){
   const t=importRatesTarget(preview);if(!t)return '';
   const d=clarifyDraftOf(preview);
   const codeRows=t.codes.map((c,ci)=>{
-    const e=clarifyEntryFor(preview,c.code);
+    const e=clarifyEntryFor(preview,c.code,c.hours);
     return `<div class="form-grid"><div class="field"><label for="impCodeLabel_${kind}_${ci}">What is “${escapeHTML(c.code)}”?</label><input id="impCodeLabel_${kind}_${ci}" class="clarifyCodeLabel" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="text" value="${escapeHTML(e.label)}" placeholder="e.g. 8-hour day shift"></div><div class="field"><label for="impCodeHours_${kind}_${ci}">Hours for “${escapeHTML(c.code)}”</label><input id="impCodeHours_${kind}_${ci}" class="clarifyCodeHours" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.25" value="${escapeHTML(e.hours)}" placeholder="e.g. 8.5"></div></div>`;
   }).join('');
   return `<div class="item" style="display:block"><p><strong>First time at ${escapeHTML(t.name)}? Tell us what these shifts are</strong></p><p class="muted">We only ask about the shift${t.codes.length===1?'':'s'} on this schedule — nothing else. Set your hourly rate at ${escapeHTML(t.name)}, say what each code means, and these shifts price right away. We’ll remember them for next time. Skip and the shifts stay unpriced until rates are set on the Facilities tab.</p><div class="form-grid"><div class="field"><label for="impHourly_${kind}">Your hourly rate at ${escapeHTML(t.name)} ($/hr)</label><input id="impHourly_${kind}" class="clarifyHourly" data-kind="${kind}" type="number" min="0" step="0.01" value="${escapeHTML(d.hourlyRate!=null?d.hourlyRate:'')}" placeholder="e.g. 250"></div></div>${codeRows}<div class="toolbar"><button type="button" class="secondary" data-action="import-rates-skip" data-id="${kind}">Skip for now</button></div></div>`;
@@ -2168,7 +2180,7 @@ function applyImportClarifyDraft(preview,target){
   fac.hourlyRate=String(hourly);
   fac.codeMap=facilityCodeDefs(fac);
   for(const c of target.codes){
-    const e=clarifyEntryFor(preview,c.code);if(!e.answered)continue;
+    const e=clarifyEntryFor(preview,c.code,c.hours);if(!e.answered)continue;
     const label=e.label||c.code;
     const hours=rateOrNull(e.hours)!=null?rateOrNull(e.hours):payUnitHoursFor(label,fac);
     fac.codeMap[c.code]={label,hours:hours!=null?String(hours):''};
@@ -4457,7 +4469,7 @@ async function fetchQgendaFeed(opts){
   try{
     if(!silent){qgendaStatusError='Checking your QGenda feed…'; render()}
     const facilities=(db.facilities||[]).map(f=>({name:f.name,aliases:String(f.aliases||'').split(',').map(x=>x.trim()).filter(Boolean),hourlyRate:f.hourlyRate,rate8:f.rate8,rate10:f.rate10,rate12:f.rate12,rate24:f.rate24,rateSecond:f.rateSecond,weekendRateSecond:f.weekendRateSecond,callBonus:f.callBonus,paidHours8:f.paidHours8,hourlyCall1st:f.hourlyCall1st,weekendRate24:f.weekendRate24}));
-    const data=await liveSyncPost('qgenda-feed',{action:'fetch',facilities});
+    const data=await liveSyncPost('qgenda-feed',{action:'fetch',facilities,name:scheduleName()});
     qgendaStatusError='';
     // A successful answer — even an empty one — is a check: stamp it
     // so the panel's "Last checked" line is honest in both modes.
@@ -4470,7 +4482,7 @@ async function fetchQgendaFeed(opts){
       const date=String(sh.date||''),facility=String(sh.facility||'').trim(),type=String(sh.type||'Other');
       const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,{date,facility,type}));
       const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(!sh.facilityKnown)flags.push('new facility — will be suggested, not created');
-      return {date,facility,type,pay:String(sh.pay||''),name:name,matchedName:name,match:'matched',include:true,duplicate,flags,source:'qgenda-feed',incomplete:!String(sh.pay||'').trim()};
+      return {date,facility,type,code:String(sh.code||'').trim(),hours:(typeof sh.hours==='number'&&isFinite(sh.hours))?sh.hours:null,pay:String(sh.pay||''),name:name,matchedName:name,match:'matched',include:true,duplicate,flags,source:'qgenda-feed',incomplete:!String(sh.pay||'').trim()};
     });
     const fresh=rows.filter(r=>!r.duplicate).length;
     // Boot check with nothing new: every returned shift is already
