@@ -1769,7 +1769,48 @@ function setShiftTripOrigin(shiftId,origin){
   persist();render();
 }
 function facilityAliases(f){return String((f&&f.aliases)||'').split(',').map(s=>s.trim()).filter(Boolean)}
-function facilityByNameOrAlias(name){const n=String(name||'').trim().toLowerCase();if(!n)return null;return (db.facilities||[]).find(f=>String(f.name||'').trim().toLowerCase()===n||facilityAliases(f).some(a=>a.toLowerCase()===n))||null}
+// Canonical key for facility-name matching (Nov 7, 2026): a name match
+// must survive case, spacing and punctuation differences — the calendar
+// says "Holzer", the saved hospital is "Holzer Health", a contract says
+// "Holzer — Gallipolis". Apostrophes are dropped ("St. Mary's" = "St
+// Marys"), other punctuation becomes a space, whitespace collapses.
+// Exact-key equality against the saved name or any alias is a MATCH.
+// Anything looser (one name containing the other's words) is only a
+// near-match the user confirms with a tap — never a silent merge. The
+// old resolver compared raw trimmed-lowercase strings, so "Holzer"
+// never matched a facility saved as "Holzer Health": every mileage
+// calculation for Caleb's trips failed with a false "No facility named
+// Holzer is saved yet" even though the hospital was saved, address and
+// all — the short name on his shifts vs the full name on the record.
+function facilityNameKey(v){return String(v||'').toLowerCase().replace(/[’‘]/g,"'").replace(/'/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim()}
+function facilityByNameOrAlias(name){const k=facilityNameKey(name);if(!k)return null;return (db.facilities||[]).find(f=>facilityNameKey(f.name)===k||facilityAliases(f).some(a=>facilityNameKey(a)===k))||null}
+// Resolution for a record that names a facility (a shift or a mileage
+// trip): a stored facility link wins when present, then name/alias.
+function facilityForRecord(rec){if(rec&&rec.facilityId){const byId=(db.facilities||[]).find(f=>f.id===rec.facilityId);if(byId)return byId}return facilityByNameOrAlias(rec&&rec.facility)}
+// An obvious near-match for a name that does NOT resolve: exactly one
+// saved facility whose name (or an alias) contains the other name's
+// words, or is contained by them. Ambiguous or unrelated -> null, so
+// the review can offer a one-tap link instead of claiming the facility
+// is not saved — and unrelated names never prompt.
+function facilityNearMatch(name){
+  const k=facilityNameKey(name);if(!k||k.length<3)return null;
+  if(facilityByNameOrAlias(name))return null;
+  const kt=k.split(' ');
+  const cands=(db.facilities||[]).filter(f=>[f.name,...facilityAliases(f)].map(facilityNameKey).filter(Boolean).some(nk=>{
+    const nt=nk.split(' ');
+    return kt.every(t=>nt.includes(t))||nt.every(t=>kt.includes(t));
+  }));
+  return cands.length===1?cands[0]:null;
+}
+// Record `name` as a short name (alias) for facility f, unless f's name
+// or an existing alias already covers it. Returns true when added.
+function addFacilityAlias(f,name){
+  const raw=String(name||'').trim();if(!f||!raw)return false;
+  if(facilityNameKey(f.name)===facilityNameKey(raw))return false;
+  if(facilityAliases(f).some(a=>facilityNameKey(a)===facilityNameKey(raw)))return false;
+  f.aliases=facilityAliases(f).concat([raw]).join(', ');
+  return true;
+}
 // --- Facility suggestions from calendar sync (ask-first, Nov 5, 2026) ---
 // The server holds shifts at a hospital with no saved facility rule and
 // reports the hospital as a suggestion instead of importing the shifts
@@ -2357,7 +2398,7 @@ function mileageCalcFailureText(fail){
     case 'address-not-found':return 'The address saved for '+fname+' (“'+String(fail.address||'')+'”) could not be found — fix it below and tap Calculate again.';
     case 'origin-not-found':return 'Your '+originWord+' address (“'+String(fail.address||'')+'”) could not be found — fix it below and tap Calculate again.';
     case 'route-failed':return 'The driving route to '+fname+' could not be calculated just now — tap Calculate again, or enter the miles manually.';
-    case 'facility-missing':return 'No facility named '+fname+' is saved yet — add it on the Facilities tab.';
+    case 'facility-missing':{const near=facilityNearMatch(fname);if(near)return 'These trips say “'+fname+'”, which is not a saved facility name — but “'+near.name+'” is saved and looks like the match. Link them in the review below to calculate.';return 'No facility named '+fname+' is saved yet — add it on the Facilities tab.'}
     default:return 'Miles for '+fname+' could not be calculated.';
   }
 }
@@ -2375,8 +2416,8 @@ function hotelStayFor(date,facilityName){
     if(s.checkOut&&d>s.checkOut)return false;
     if(String(s.facility||'').trim()){
       const f=facilityByNameOrAlias(facilityName);
-      const want=String(s.facility).trim().toLowerCase();
-      if(!f||String(f.name||'').trim().toLowerCase()!==want)return false;
+      const sf=facilityByNameOrAlias(s.facility);
+      if(!f||!sf||sf.id!==f.id)return false;
     }
     return true;
   })||null;
@@ -2404,7 +2445,7 @@ function mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,tripType){
   const t=tripType==='one-way'?'one-way':'round-trip';
   const miles=tripMilesFor(oneWay,t);
   if(miles==null)return null;
-  return {id:id(),date:x.date,purpose:'Scheduled facility trip: '+f.name,facility:f.name,miles:String(miles),status:'draft',milesSource:source,origin:o,hotelAddress:(o==='hotel'||o==='other')?String(hotelAddress||''):'' ,tripType:t,oneWayMiles:String(Math.round(Number(oneWay)*10)/10)};
+  return {id:id(),date:x.date,purpose:'Scheduled facility trip: '+f.name,facility:f.name,facilityId:f.id,miles:String(miles),status:'draft',milesSource:source,origin:o,hotelAddress:(o==='hotel'||o==='other')?String(hotelAddress||''):'' ,tripType:t,oneWayMiles:String(Math.round(Number(oneWay)*10)/10)};
 }
 
 // --- Weekly mileage review (one screen per Mon-Sun week) ---
@@ -2464,7 +2505,9 @@ function mileageTripsInWeek(start){
   return (db.mileage||[]).filter(x=>String(x.date||'')>=start&&String(x.date||'')<=end).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
 }
 function mileageTripMatchesShift(m,shift){
-  return String(m.date||'')===String(shift.date||'')&&String(m.facility||'').trim().toLowerCase()===String(shift.facility||'').trim().toLowerCase();
+  if(String(m.date||'')!==String(shift.date||''))return false;
+  if(m.facilityId&&shift.facilityId)return m.facilityId===shift.facilityId;
+  return facilityNameKey(m.facility)===facilityNameKey(shift.facility);
 }
 function weeklyMileageReview(start,todayStr){
   const end=weekEndISO(start),today=todayStr||localDate(new Date());
@@ -2662,7 +2705,8 @@ function mileageTripLine(x){
 // flagged for manual entry. Never a guessed number.
 function blankMileageDraftForShift(x,origin,hotelAddress){
   const o=origin==='hotel'?'hotel':'home';
-  return {id:id(),date:x.date,purpose:'Scheduled facility trip: '+String(x.facility||''),facility:String(x.facility||''),miles:'',status:'draft',milesSource:'needs-manual',origin:o,hotelAddress:o==='hotel'?String(hotelAddress||''):'' ,tripType:mileageTripType(),oneWayMiles:''};
+  const f=facilityForRecord(x);
+  return {id:id(),date:x.date,purpose:'Scheduled facility trip: '+String(x.facility||''),facility:String(x.facility||''),facilityId:f?f.id:'',miles:'',status:'draft',milesSource:'needs-manual',origin:o,hotelAddress:o==='hotel'?String(hotelAddress||''):'' ,tripType:mileageTripType(),oneWayMiles:''};
 }
 // Sync draft creation for one week: uses only the facility's saved
 // one-way distance (home origin). A hotel stay's distance is NOT taken
@@ -2673,7 +2717,7 @@ function ensureWeeklyMileageDrafts(start){
   let created=0;
   for(const x of shiftsInWeek(start)){
     if((db.mileage||[]).some(m=>mileageTripMatchesShift(m,x)))continue;
-    const f=facilityByNameOrAlias(x.facility);
+    const f=facilityForRecord(x);
     const stay=hotelStayFor(x.date,x.facility);
     if(stay){
       db.mileage.push(blankMileageDraftForShift(x,'hotel',stay.hotelAddress));
@@ -2726,7 +2770,7 @@ async function generateWeeklyMileageDrafts(start){
     return true;
   };
   for(const m of mileageTripsInWeek(start).filter(x=>x.status==='draft'&&!(num(x.miles)>0))){
-    const f=facilityByNameOrAlias(m.facility);
+    const f=facilityForRecord(m);
     if(!f){noteFail('facility-missing',m.facility,'',m.origin);blank++;continue}
     const addr=tripOriginAddress(m);
     if(m.origin==='hotel'&&addr&&!String(m.hotelAddress||'').trim())m.hotelAddress=addr;
@@ -2737,7 +2781,7 @@ async function generateWeeklyMileageDrafts(start){
   }
   for(const x of shiftsInWeek(start)){
     if((db.mileage||[]).some(m=>mileageTripMatchesShift(m,x)))continue;
-    const f=facilityByNameOrAlias(x.facility);
+    const f=facilityForRecord(x);
     const stay=hotelStayFor(x.date,x.facility);
     let draft=null;
     if(!f)noteFail('facility-missing',x.facility,'',stay?'hotel':'home');
@@ -2879,12 +2923,31 @@ async function mileageReviewFixAddress(kind,key){
   }
   return generateWeeklyMileageDrafts(start);
 }
+// One tap in the weekly review: the trips' facility name does not
+// resolve, but a saved facility is an obvious near-match. Confirming
+// records the trips' name as an alias of that facility (so it never
+// asks again and every name-based path heals), stamps the facility
+// link onto the affected trips and shifts, saves the facility (the
+// alias rides its cloud sync), and recalculates the week. Nothing is
+// ever linked without this tap.
+async function linkMileageFacility(facilityId,rawName){
+  const f=(db.facilities||[]).find(x=>x.id===facilityId);
+  if(!f)return render();
+  const start=selectedMileageReviewWeek();
+  addFacilityAlias(f,rawName);
+  const k=facilityNameKey(rawName);
+  for(const m of (db.mileage||[]))if(facilityNameKey(m.facility)===k&&m.facilityId!==f.id)m.facilityId=f.id;
+  for(const x of (db.shifts||[]))if(facilityNameKey(x.facility)===k&&x.facilityId!==f.id)x.facilityId=f.id;
+  persist();
+  if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',f.id);
+  return generateWeeklyMileageDrafts(start);
+}
 // A short note under a blank trip's miles box naming the address that
 // trip is waiting on, so the row itself says what is missing.
 function mileageReviewRowNote(m){
   if(num(m.miles)>0)return '';
-  const f=facilityByNameOrAlias(m.facility);
-  if(!f)return `<div class="muted">No facility named ${escapeHTML(m.facility)} is saved — add it on the Facilities tab.</div>`;
+  const f=facilityForRecord(m);
+  if(!f){const near=facilityNearMatch(m.facility);if(near)return `<div class="muted">“${escapeHTML(m.facility)}” is not a saved facility name — “${escapeHTML(near.name)}” looks like the match; link them above to calculate this trip.</div>`;return `<div class="muted">No facility named ${escapeHTML(m.facility)} is saved — add it on the Facilities tab.</div>`}
   if(!String(f.address||'').trim())return `<div class="muted">No address saved for ${escapeHTML(f.name)} — add it above to calculate this trip.</div>`;
   if(m.origin==='home'&&!String((db.settings&&db.settings.homeAddress)||'').trim())return `<div class="muted">No home address saved — add it above to calculate this trip.</div>`;
   if(m.origin==='hotel'&&!tripOriginAddress(m))return `<div class="muted">No hotel address for this trip — add one in the Starting point field above.</div>`;
@@ -2910,10 +2973,14 @@ function mileageReviewFixHTML(start,r){
     if(seen.has(key))return;seen.add(key);
     items.push(`<div class="item"><div class="muted">${escapeHTML(text)}</div></div>`);
   };
+  const pushLink=(rawName,f)=>{
+    const key='link:'+rawName;if(seen.has(key))return;seen.add(key);
+    items.push(`<div class="item"><div class="item-title">These trips say “${escapeHTML(rawName)}” — link them to “${escapeHTML(f.name)}”?</div><div class="muted">No facility has the exact name “${escapeHTML(rawName)}”, but “${escapeHTML(f.name)}”${String(f.address||'').trim()?` (${escapeHTML(f.address)})`:''} is saved. Linking remembers “${escapeHTML(rawName)}” as a short name for ${escapeHTML(f.name)} — and it only happens when you tap.</div><div class="toolbar"><button type="button" class="tiny" data-action="mileage-review-link-facility" data-id="${escapeHTML(f.id)}" data-date="${escapeHTML(rawName)}">Link to ${escapeHTML(f.name)} &amp; calculate</button></div></div>`);
+  };
   for(const m of r.drafts.filter(x=>!(num(x.miles)>0))){
     const f=facilityByNameOrAlias(m.facility);
     if(f&&!String(f.address||'').trim())pushFacility(f,'',f.name+' has no address saved','Its trips can’t be calculated until an address is saved.');
-    else if(!f)pushLine('missing:'+m.facility,'No facility named '+m.facility+' is saved — add it on the Facilities tab, then tap Calculate.');
+    else if(!f){const near=facilityNearMatch(m.facility);if(near)pushLink(m.facility,near);else pushLine('missing:'+m.facility,'No facility named '+m.facility+' is saved — add it on the Facilities tab, then tap Calculate.')}
     if(m.origin==='home'&&!homeAddress)pushHome('',false);
   }
   const note=mileageReviewCalcNote&&mileageReviewCalcNote.week===start?mileageReviewCalcNote:null;
@@ -2922,6 +2989,7 @@ function mileageReviewFixHTML(start,r){
     else if(fail.reason==='address-not-found'){const f=facilityByNameOrAlias(fail.facility);if(f)pushFacility(f,String(f.address||''),f.name+'’s address could not be found','The saved address (“'+String(f.address||'')+'”) could not be located — fix it here, then recalculate.')}
     else if(fail.reason==='origin-missing'&&fail.origin==='home')pushHome('',false);
     else if(fail.reason==='origin-not-found'&&fail.origin==='home')pushHome(homeAddress,true);
+    else if(fail.reason==='facility-missing'){const near=facilityNearMatch(fail.facility);if(near)pushLink(fail.facility,near);else pushLine('fail:facility-missing:'+fail.facility+':'+fail.origin,mileageCalcFailureText(fail))}
     else pushLine('fail:'+fail.reason+':'+fail.facility+':'+fail.origin,mileageCalcFailureText(fail));
   }
   if(!items.length)return '';
@@ -3833,7 +3901,7 @@ function submitEntry(e){e.preventDefault();const kind=e.currentTarget.dataset.ki
 // calendar. Before this the stamp was never set (updatedAt stayed null)
 // and the server's local-newer check never fired, so an edited shift
 // never left the app.
-if(['shifts','licenses','nbcrnaCE','aanaCE','credentials'].includes(kind))record.updatedAt=new Date().toISOString();if(kind==='facilities'){record.ratesSource='manual';record.ratesSourceFile='';record.ratesSourceDate='';for(const k of RATE_FIELDS)record[k]=rateOrNull(record[k])==null?'':String(rateOrNull(record[k]));if(rateOrNull(record.paidHours8)==null)record.paidHours8='';if(rateOrNull(record.distance)==null){record.distance='';record.distanceSource=''}else if(record.distanceSource!=='auto')record.distanceSource='manual';if(!String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress=''}else if(editId){const old=(db.facilities||[]).find(x=>x.id===editId);if(old&&String(old.address||'').trim()!==String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress='';if(record.distanceSource==='auto'){record.distance='';record.distanceSource=''}}}}if(kind==='mileage'){if(!record.milesSource)record.milesSource=String(record.miles||'').trim()?'manual':'';record.tripType=record.tripType==='one-way'?'one-way':'round-trip';const oldTrip=editId?(db.mileage||[]).find(m=>m.id===editId):null;if(oldTrip&&record.tripType!==oldTrip.tripType&&Number(oldTrip.oneWayMiles)>0&&oldTrip.milesSource==='auto'){record.miles=String(tripMilesFor(oldTrip.oneWayMiles,record.tripType));record.oneWayMiles=String(oldTrip.oneWayMiles)}else if(Number(record.oneWayMiles)>0&&record.milesSource==='auto'){record.miles=String(tripMilesFor(record.oneWayMiles,record.tripType))}else{record.oneWayMiles=oneWayFromTripMiles(record.miles,record.tripType)}record.origin=record.origin==='hotel'?'hotel':record.origin==='other'?'other':'home';record.originChosen=true;if(record.origin==='home')record.hotelAddress='';if(record.origin==='hotel'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim()}if(kind==='hotelStays'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(kind==='facilities'&&!editId){const existing=(db.facilities||[]).find(x=>String(x.name||'').trim().toLowerCase()===String(record.name||'').trim().toLowerCase()||(String(record.aliases||'').trim()&&facilityAliases(x).some(a=>String(record.aliases||'').split(',').map(y=>y.trim().toLowerCase()).includes(a.toLowerCase()))));if(existing)editId=existing.id}if(kind==='facilities'&&!String(record.name||'').trim()){alert('Enter the hospital / facility name first.');return}let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;persist();let repriced=0;if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}repriced=repriceUnpricedShiftsForFacility(saved);if(repriced>0)persist();}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
+if(['shifts','licenses','nbcrnaCE','aanaCE','credentials'].includes(kind))record.updatedAt=new Date().toISOString();if(kind==='facilities'){record.ratesSource='manual';record.ratesSourceFile='';record.ratesSourceDate='';for(const k of RATE_FIELDS)record[k]=rateOrNull(record[k])==null?'':String(rateOrNull(record[k]));if(rateOrNull(record.paidHours8)==null)record.paidHours8='';if(rateOrNull(record.distance)==null){record.distance='';record.distanceSource=''}else if(record.distanceSource!=='auto')record.distanceSource='manual';if(!String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress=''}else if(editId){const old=(db.facilities||[]).find(x=>x.id===editId);if(old&&String(old.address||'').trim()!==String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress='';if(record.distanceSource==='auto'){record.distance='';record.distanceSource=''}}}}if(kind==='mileage'){if(!record.milesSource)record.milesSource=String(record.miles||'').trim()?'manual':'';record.tripType=record.tripType==='one-way'?'one-way':'round-trip';const oldTrip=editId?(db.mileage||[]).find(m=>m.id===editId):null;if(oldTrip&&record.tripType!==oldTrip.tripType&&Number(oldTrip.oneWayMiles)>0&&oldTrip.milesSource==='auto'){record.miles=String(tripMilesFor(oldTrip.oneWayMiles,record.tripType));record.oneWayMiles=String(oldTrip.oneWayMiles)}else if(Number(record.oneWayMiles)>0&&record.milesSource==='auto'){record.miles=String(tripMilesFor(record.oneWayMiles,record.tripType))}else{record.oneWayMiles=oneWayFromTripMiles(record.miles,record.tripType)}record.origin=record.origin==='hotel'?'hotel':record.origin==='other'?'other':'home';record.originChosen=true;if(record.origin==='home')record.hotelAddress='';if(record.origin==='hotel'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim()}if(kind==='hotelStays'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(kind==='facilities'&&!editId){const existing=(db.facilities||[]).find(x=>facilityNameKey(x.name)===facilityNameKey(record.name)||(String(record.aliases||'').trim()&&facilityAliases(x).some(a=>String(record.aliases||'').split(',').map(y=>facilityNameKey(y)).includes(facilityNameKey(a)))));if(existing)editId=existing.id}if(kind==='facilities'&&!String(record.name||'').trim()){alert('Enter the hospital / facility name first.');return}if(kind==='facilities'&&editId){const oldF=(db.facilities||[]).find(x=>x.id===editId);if(oldF&&facilityNameKey(oldF.name)!==facilityNameKey(record.name)){const keep=[];const seenK=new Set();for(const a of facilityAliases(oldF).concat(String(record.aliases||'').split(',').map(y=>y.trim()).filter(Boolean))){const kk=facilityNameKey(a);if(kk&&kk!==facilityNameKey(record.name)&&!seenK.has(kk)){seenK.add(kk);keep.push(a)}}const oldName=String(oldF.name||'').trim();if(oldName&&!seenK.has(facilityNameKey(oldName)))keep.push(oldName);record.aliases=keep.join(', ')}}let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;persist();let repriced=0;if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}repriced=repriceUnpricedShiftsForFacility(saved);if(repriced>0)persist();}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
 if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(kind==='facilities'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(['licenses','nbcrnaCE','aanaCE','shifts','facilities','mileage','payStubs'].includes(kind))cloudSaveKind(kind,savedId);if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved){const hadSuggestion=clearFacilitySuggestion(saved.name);if(facilitySuggestionPrefill&&normFacilityName(facilitySuggestionPrefill.name)===normFacilityName(saved.name))facilitySuggestionPrefill=null;
   // Bug 2: a suggestion cleared by adding the facility means held
   // shifts exist for it. If the last import also skipped shifts as
@@ -3875,7 +3943,7 @@ if(action==='close-day'){dayViewOpen=false;if(paycheckEdit&&paycheckEdit.from===
   if(action==='delete-shifts'){const x=(db.shifts||[]).find(s=>s.id===entry);if(!x)return;shiftDeleteConfirm={id:entry,also:!!(db.settings&&db.settings.deleteAlsoFromCalendar)};render();return}
   if(action==='shift-delete-cancel'){shiftDeleteConfirm=null;render();return}
   if(action==='shift-delete-confirm'){return confirmShiftDelete(entry)}
-  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts')showShiftForm=true;render();if(kind==='facilities')facilityScrollTo('facility-manual-panel');else if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-fix-facility')return mileageReviewFixAddress('facility',entry);if(action==='mileage-review-fix-home')return mileageReviewFixAddress('home','');if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-save'){applyMileageReviewEdits(selectedMileageReviewWeek());persist();return render()}if(action==='mileage-review-skip'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='skipped';persist()}return render()}if(action==='mileage-review-restore'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='draft';persist()}return render()}if(action==='mileage-clear-backlog'){const n=clearMileageBacklog();mileageClearStatus=n>0?('Cleared '+n+' older trip'+(n===1?'':'s')+' \u2014 they won\u2019t count toward mileage.'):'';return render()}if(action==='cloud-signup'){const em=$('f_email'),pw=$('f_password'),sn=$('f_scheduleName'),et=$('f_employmentType'),gl=$('f_incomeGoalStep1');if(!em||!pw||!em.value.trim()||!pw.value)return alert('Enter an email and password first.');cloudSignUp(em.value.trim(),pw.value,sn?String(sn.value||'').trim():'',et?String(et.value||'').trim():'',gl&&String(gl.value||'').trim()!==''?num(gl.value):undefined);return}
+  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts')showShiftForm=true;render();if(kind==='facilities')facilityScrollTo('facility-manual-panel');else if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-fix-facility')return mileageReviewFixAddress('facility',entry);if(action==='mileage-review-fix-home')return mileageReviewFixAddress('home','');if(action==='mileage-review-link-facility')return linkMileageFacility(entry,date);if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-save'){applyMileageReviewEdits(selectedMileageReviewWeek());persist();return render()}if(action==='mileage-review-skip'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='skipped';persist()}return render()}if(action==='mileage-review-restore'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='draft';persist()}return render()}if(action==='mileage-clear-backlog'){const n=clearMileageBacklog();mileageClearStatus=n>0?('Cleared '+n+' older trip'+(n===1?'':'s')+' \u2014 they won\u2019t count toward mileage.'):'';return render()}if(action==='cloud-signup'){const em=$('f_email'),pw=$('f_password'),sn=$('f_scheduleName'),et=$('f_employmentType'),gl=$('f_incomeGoalStep1');if(!em||!pw||!em.value.trim()||!pw.value)return alert('Enter an email and password first.');cloudSignUp(em.value.trim(),pw.value,sn?String(sn.value||'').trim():'',et?String(et.value||'').trim():'',gl&&String(gl.value||'').trim()!==''?num(gl.value):undefined);return}
 if(action==='skip-income-goal'){const gl=$('f_incomeGoalStep1');if(gl)gl.value='';cloudAuthStatus='No income goal set — you can set it later on the Account tab (Profile — step 1).';return render()}
 if(action==='save-profile'){const nm=$('f_profileName'),et=$('f_profileEmploymentType'),gl=$('f_profileIncomeGoal');applyProfileValues({name:nm?String(nm.value||'').trim():'',employmentType:et?String(et.value||'').trim():'',monthlyIncomeGoal:gl&&String(gl.value||'').trim()!==''?num(gl.value):0});cloudSaveProfile();profileEditing=false;return render()}
 if(action==='cloud-signout'){cloudSignOut();return}
@@ -3907,7 +3975,7 @@ if(action==='contract-page-remove'||action==='contract-page-up'||action==='contr
 if(action==='view-contract-image')return viewContractImage(entry);
 if(action==='view-contract-image-page')return viewContractImage(entry,+date);
 if(action==='backup')return download('crna-hub-backup.json',deviceBackupJSON(),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage'){mileageExportInit();mileageExportOpen=true;return render()}if(action==='mileage-export-close'){mileageExportOpen=false;return render()}if(action==='mileage-export-this-month'){mileageExportApplyQuick('this-month');return render()}if(action==='mileage-export-ytd'){mileageExportApplyQuick('ytd');return render()}if(action==='mileage-export-all'){mileageExportApplyQuick('all');return render()}if(action==='mileage-export-none'){mileageExportApplyQuick('none');return render()}if(action==='mileage-export-download')return mileageExportDownload()}
-async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;const skippedNoAddress=new Set();for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=(db.facilities||[]).find(f=>String(f.name||'').trim().toLowerCase()===String(x.facility||'').trim().toLowerCase());if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;if(!String(f.address||'').trim())skippedNoAddress.add(f.name);continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file.`:''}${skippedNoAddress.size?` Trips for ${[...skippedNoAddress].join(', ')} were skipped: no address is saved for ${skippedNoAddress.size===1?'that facility':'those facilities'} — add it on the Facilities tab so miles can be calculated.`:''} Review every trip and tax eligibility before using them.`)}
+async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;const skippedNoAddress=new Set();for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=facilityForRecord(x);if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;if(!String(f.address||'').trim())skippedNoAddress.add(f.name);continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file.`:''}${skippedNoAddress.size?` Trips for ${[...skippedNoAddress].join(', ')} were skipped: no address is saved for ${skippedNoAddress.size===1?'that facility':'those facilities'} — add it on the Facilities tab so miles can be calculated.`:''} Review every trip and tax eligibility before using them.`)}
 function csvEscape(v){const s=String(v??'');return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function exportCsv(filename,headers,rows){download(filename,[headers.join(','),...rows.map(r=>headers.map(h=>csvEscape(r[h])).join(','))].join('\r\n'),'text/csv;charset=utf-8')}
 function download(filename,contents,mime){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([contents],{type:mime}));a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000)}
@@ -4893,6 +4961,7 @@ async function approveFacilityContract(){
      for(const [k,v] of Object.entries(rec)){if(k==='name'||k==='aliases'||k==='address'){if(String(v||'').trim())merged[k]=v;continue}if(k==='ratesSource'||k==='ratesSourceFile'||k==='ratesSourceDate'||k==='contractId'||k==='contractEffectiveStart'||k==='contractEffectiveEnd'){if(String(v||'').trim())merged[k]=v;continue}if(v!==''&&v!=null)merged[k]=v}
      if(String(f.aliases||'').trim()&&!String(existing.aliases||'').includes(String(f.aliases).trim()))merged.aliases=String(existing.aliases?existing.aliases+', '+f.aliases.trim():f.aliases.trim());
      if(String(f.address||'').trim()&&String(existing.address||'').trim()!==String(f.address).trim()){merged.address=f.address.trim();merged.lat='';merged.lng='';merged.geocodedAddress='';if(merged.distanceSource==='auto'){merged.distance='';merged.distanceSource=''}}
+     if(facilityNameKey(existing.name)!==facilityNameKey(merged.name))addFacilityAlias(merged,existing.name);
      const i=db.facilities.findIndex(x=>x.id===existing.id);db.facilities[i]=merged;updated++;
      repriced+=repriceUnpricedShiftsForFacility(merged);
    }else{
