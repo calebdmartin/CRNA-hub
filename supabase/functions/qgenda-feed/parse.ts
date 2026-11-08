@@ -17,6 +17,14 @@ import {
   type FacilityPayRule,
 } from "../_shared/calendar.ts";
 
+// Parser version, returned with every fetch/status response so the
+// client can tell when a preview it is holding was parsed by an
+// older reader and re-read the feed instead of showing stale rows.
+// Bump whenever the parse semantics change (v2, Nov 8, 2026: the
+// generic "Call (unclassified)"/"Shift" buckets are refined from
+// DESCRIPTION text and event timing; v1 returned the raw buckets).
+export const QGENDA_PARSER_VERSION = 2;
+
 export interface QgendaShift {
   date: string;
   facility: string;
@@ -285,6 +293,56 @@ function icsDurationHours(startRaw: string, endRaw: string): number | null {
   return h > 0 && h <= 36 ? h : null;
 }
 
+// Wall-clock start of a date-TIME value, in minutes since midnight
+// (components read as written, same convention as icsDateTimeMs).
+// Null for date-only values — QGenda's classic exports are date-only,
+// and for those there is no timing signal to mine.
+function icsStartMinutes(v: string): number | null {
+  const t = String(v || "").trim();
+  const m = t.match(/^\d{8}T(\d{2})(\d{2})/);
+  if (!m) return null;
+  return (+m[1]) * 60 + (+m[2]);
+}
+
+// Refine one of the two generic canonical buckets from the event's
+// timing, when the feed gave date-TIME start/end. Deliberately
+// conservative — it only fires on the buckets, never overrides a
+// type the text actually named, and leaves the bucket untouched when
+// the timing is ambiguous or absent (date-only events):
+//   Call (unclassified): a ~24h span is a 1st-call window
+//     ("24-hour call"); a long span starting in the afternoon or
+//     evening (14:00+) is an overnight 2nd-call window
+//     ("Second call"). A shorter or daytime-start span could be
+//     either, so it stays unclassified.
+//   Shift (a bare facility/code title): a daytime span prices like
+//     the day shift it spans — 7.5–9.5h -> 8-hour day, 9.5–11.5h ->
+//     10-hour, 11.5–13.5h -> 12-hour; a ~24h span is a call window.
+// The refined value only feeds the canonical `type` (pricing and the
+// clarification prompt's already-priced exclusion); the displayed
+// name stays the preserved raw `code`.
+export function refineQgendaBucketType(
+  type: string,
+  hours: number | null,
+  startMinutes: number | null,
+): string {
+  if (hours === null) return type;
+  if (type === "Call (unclassified)") {
+    if (hours >= 20) return "24-hour call";
+    if (hours >= 8 && startMinutes !== null && startMinutes >= 14 * 60) {
+      return "Second call";
+    }
+    return type;
+  }
+  if (type === "Shift") {
+    if (hours >= 20) return "24-hour call";
+    if (hours >= 11.5 && hours <= 13.5) return "12-hour shift";
+    if (hours > 9.5 && hours < 11.5) return "10-hour shift";
+    if (hours >= 7.5 && hours <= 9.5) return "8-hour day";
+    return type;
+  }
+  return type;
+}
+
 // Parse a QGenda ICS feed into shift rows with the same
 // facilities-driven parser the calendar sync uses, so a QGenda event
 // and a work-calendar event for the same shift read identically.
@@ -399,6 +457,41 @@ export function parseQgendaICS(
       }
     }
 
+    // Bucket refinement (parser v2): when the canonical type is one
+    // of the two generic buckets ("Call (unclassified)" / "Shift"),
+    // the distinguishing detail — which call, how long a day — can
+    // still live in the DESCRIPTION text or in the event's own
+    // timing. Explicit text wins over inference: scan the
+    // description with the same pattern matcher first, then fall
+    // back to the DTSTART/DTEND span. The preserved raw name (`code`
+    // below) is never touched — refinement only sharpens the
+    // canonical type that pricing reads. When the facility is known
+    // and the row was unpriced, price the refined type from its rule.
+    const hours = icsDurationHours(dtStartRaw, dtEndRaw);
+    if (type === "Call (unclassified)" || type === "Shift") {
+      let refined = "";
+      if (description) {
+        const fromDesc = deriveTypeFromName(
+          description.replace(/\n/g, " "),
+          { name: facility },
+          "",
+        );
+        if (fromDesc && fromDesc !== "Call (unclassified)" && fromDesc !== "Shift") {
+          refined = fromDesc;
+        }
+      }
+      if (!refined) {
+        refined = refineQgendaBucketType(type, hours, icsStartMinutes(dtStartRaw));
+      }
+      if (refined && refined !== type) {
+        type = refined;
+        if (facilityKnown && !pay) {
+          const rule = facilities.find((r) => r.name === facility);
+          if (rule) pay = priceShiftWithFacility(type, rule, date);
+        }
+      }
+    }
+
     // Final name against the final facility (the generic check is
     // facility-relative), then the code fallback chain: a name that
     // is empty/generic, or that is just the facility name alone,
@@ -424,7 +517,7 @@ export function parseQgendaICS(
       status: parsed.status,
       uid,
       code,
-      hours: icsDurationHours(dtStartRaw, dtEndRaw),
+      hours,
     });
     if (!facilityKnown) {
       unknown.set(facility, (unknown.get(facility) ?? 0) + 1);

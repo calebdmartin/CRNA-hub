@@ -324,6 +324,6 @@ const cssSrc = fs.readFileSync(R + 'styles.css', 'utf8');
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 t('wiring: swipe-down sheet dismissal + overlay CSS + cache v68',
   appSrc.includes("closest('.sheet')") && cssSrc.includes('.sheet-backdrop{position:fixed') &&
-  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v97'));
+  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v98'));
 
 console.log(fails ? `\n${fails} check(s) failed` : '\nall calendar-editing checks passed');

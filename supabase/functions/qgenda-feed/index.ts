@@ -52,6 +52,7 @@ import {
   isQgendaFeedUrl,
   maskFeedUrl,
   parseQgendaICS,
+  QGENDA_PARSER_VERSION,
 } from "./parse.ts";
 
 const PROVIDER = "qgenda";
@@ -77,7 +78,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     if (action === "status") {
       const row = await loadRow(userId);
-      if (!row) return json({ ok: true, connected: false, masked: null });
+      if (!row) {
+        return json({
+          ok: true,
+          connected: false,
+          masked: null,
+          parserVersion: QGENDA_PARSER_VERSION,
+        });
+      }
       let masked: string | null = null;
       try {
         masked = maskFeedUrl(
@@ -91,6 +99,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         connected: true,
         masked,
         lastFetchedAt: String(row.last_synced_at ?? ""),
+        parserVersion: QGENDA_PARSER_VERSION,
       });
     }
 
@@ -178,6 +187,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         eventCount: parsed.eventCount,
         masked: maskFeedUrl(url),
         fetchedAt: new Date().toISOString(),
+        parserVersion: QGENDA_PARSER_VERSION,
       });
     }
 

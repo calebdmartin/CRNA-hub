@@ -7,7 +7,9 @@ import {
   isQgendaFeedUrl,
   maskFeedUrl,
   parseQgendaICS,
+  QGENDA_PARSER_VERSION,
   qgendaShiftName,
+  refineQgendaBucketType,
 } from "./parse.ts";
 import { normalizeFacilityRules } from "../_shared/calendar.ts";
 
@@ -234,7 +236,11 @@ Deno.test("parseQgendaICS: QGenda fixture keeps distinct codes, canonical types,
   // Generic SUMMARY "Shift": the name comes from DESCRIPTION's Task line.
   assertEquals(pick("mix-6@qgenda.com"), { code: "Night Float", type: "12-hour shift", pay: "3000", hours: 12, facility: "Holzer", facilityKnown: true });
   // SUMMARY is just the facility name: the name comes from CATEGORIES.
-  assertEquals(pick("mix-7@qgenda.com"), { code: "Weekend Coverage", type: "Shift", pay: "", hours: 12, facility: "Holzer", facilityKnown: true });
+  // Round 2 (parser v2): its canonical type no longer stays the bare
+  // "Shift" bucket — a 12h timed span refines it to "12-hour shift"
+  // and the facility rule prices it (hourly x 12). The preserved name
+  // is unchanged.
+  assertEquals(pick("mix-7@qgenda.com"), { code: "Weekend Coverage", type: "12-hour shift", pay: "3000", hours: 12, facility: "Holzer", facilityKnown: true });
   // Location rescue: title led with a place word, location names Holzer.
   assertEquals(pick("mix-8@qgenda.com"), { code: "Gallipolis 8", type: "8-hour day", pay: "2125", hours: 8.5, facility: "Holzer", facilityKnown: true });
   // Genuinely nameless: code falls back to the canonical type.
@@ -248,6 +254,143 @@ Deno.test("parseQgendaICS: QGenda fixture keeps distinct codes, canonical types,
   assertEquals(codes.includes("Call (unclassified)"), false);
   assertEquals(codes.filter((c) => c === "Shift").length, 0);
   for (const sh of shifts) assertEquals(sh.status, "confirmed");
+});
+
+// --- Round 2 (Nov 8, 2026): terse facility-code titles -------------
+// Caleb's REAL feed does not spell "Holzer 8" in its summaries — the
+// observed output (facility column "HOLZ", every call row bucketed
+// "Call (unclassified)") is exactly what the shared parser's generic
+// fallback produces for terse code-style titles: "HOLZ Call" and
+// plain "HOLZ". Round 1's fixture used full-name summaries, so this
+// shape was never exercised. These events pin it:
+//  - the raw name survives in `code` ("HOLZ Call") even though the
+//    canonical `type` starts out a bucket;
+//  - a bucket type is refined from explicit DESCRIPTION text first,
+//    then from the event's own DTSTART/DTEND span;
+//  - date-only events (QGenda's classic export) carry no timing, so
+//    their buckets honestly stay buckets — the raw name is what the
+//    user sees and clarifies.
+const HOLZ_FEED = `BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//QGenda//EN\r
+BEGIN:VEVENT\r
+UID:holz-1@qgenda.com\r
+DTSTART;VALUE=DATE:20260822\r
+DTEND;VALUE=DATE:20260823\r
+SUMMARY:HOLZ Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-2@qgenda.com\r
+DTSTART;VALUE=DATE:20260823\r
+DTEND;VALUE=DATE:20260824\r
+SUMMARY:HOLZ\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-3@qgenda.com\r
+DTSTART:20260909T070000\r
+DTEND:20260910T070000\r
+SUMMARY:HOLZ Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-4@qgenda.com\r
+DTSTART:20260915T170000\r
+DTEND:20260916T070000\r
+SUMMARY:HOLZ Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-5@qgenda.com\r
+DTSTART:20260917T070000\r
+DTEND:20260917T150000\r
+SUMMARY:HOLZ Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-6@qgenda.com\r
+DTSTART:20261007T063000\r
+DTEND:20261007T150000\r
+SUMMARY:HOLZ\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-7@qgenda.com\r
+DTSTART:20261009T070000\r
+DTEND:20261009T173000\r
+SUMMARY:HOLZ\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-8@qgenda.com\r
+DTSTART:20261010T070000\r
+DTEND:20261010T150000\r
+SUMMARY:HOLZ Call\r
+DESCRIPTION:Task: HOLZ Call\\n2nd call coverage for the group\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:holz-9@qgenda.com\r
+DTSTART:20261020T170000\r
+DTEND:20261021T070000\r
+SUMMARY:Holzer Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+END:VCALENDAR\r
+`;
+
+Deno.test("parseQgendaICS: terse HOLZ titles keep raw code; buckets refined from text/timing", () => {
+  const { shifts, unknownFacilities } = parseQgendaICS(HOLZ_FEED, HOLZER, {
+    name: "Caleb Martin",
+  });
+  assertEquals(shifts.length, 9);
+  assertEquals(unknownFacilities, ["HOLZ"]);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  const pick = (uid: string) => {
+    const s = byUid.get(uid);
+    if (!s) throw new Error(`missing shift ${uid}`);
+    return { code: s.code, type: s.type, pay: s.pay, hours: s.hours, facility: s.facility, facilityKnown: s.facilityKnown };
+  };
+  // Date-only call: no timing anywhere — bucket stays, raw name kept.
+  assertEquals(pick("holz-1@qgenda.com"), { code: "HOLZ Call", type: "Call (unclassified)", pay: "", hours: null, facility: "HOLZ", facilityKnown: false });
+  // Date-only bare code title: an unclassifiable day row, honestly.
+  assertEquals(pick("holz-2@qgenda.com"), { code: "Shift", type: "Shift", pay: "", hours: null, facility: "HOLZ", facilityKnown: false });
+  // 24h span -> 1st-call window; the displayed name stays raw.
+  assertEquals(pick("holz-3@qgenda.com"), { code: "HOLZ Call", type: "24-hour call", pay: "", hours: 24, facility: "HOLZ", facilityKnown: false });
+  // Evening-start 14h overnight span -> 2nd-call window.
+  assertEquals(pick("holz-4@qgenda.com"), { code: "HOLZ Call", type: "Second call", pay: "", hours: 14, facility: "HOLZ", facilityKnown: false });
+  // Daytime 8h "call" span is ambiguous — bucket honestly stays.
+  assertEquals(pick("holz-5@qgenda.com"), { code: "HOLZ Call", type: "Call (unclassified)", pay: "", hours: 8, facility: "HOLZ", facilityKnown: false });
+  // Bare code titles with daytime spans refine to the day types;
+  // with no name anywhere, code falls back to the refined type.
+  assertEquals(pick("holz-6@qgenda.com"), { code: "8-hour day", type: "8-hour day", pay: "", hours: 8.5, facility: "HOLZ", facilityKnown: false });
+  assertEquals(pick("holz-7@qgenda.com"), { code: "10-hour shift", type: "10-hour shift", pay: "", hours: 10.5, facility: "HOLZ", facilityKnown: false });
+  // DESCRIPTION text beats timing inference (daytime span, but the
+  // description says 2nd call outright).
+  assertEquals(pick("holz-8@qgenda.com"), { code: "HOLZ Call", type: "Second call", pay: "", hours: 8, facility: "HOLZ", facilityKnown: false });
+  // Known facility, evening span: refined AND priced from its rule.
+  assertEquals(pick("holz-9@qgenda.com"), { code: "Holzer Call", type: "Second call", pay: "3000", hours: 14, facility: "Holzer", facilityKnown: true });
+});
+
+Deno.test("refineQgendaBucketType: conservative edges", () => {
+  // No timing -> untouched, whatever the bucket.
+  assertEquals(refineQgendaBucketType("Call (unclassified)", null, null), "Call (unclassified)");
+  assertEquals(refineQgendaBucketType("Shift", null, null), "Shift");
+  // Non-bucket types are never overridden.
+  assertEquals(refineQgendaBucketType("Second call", 24, 420), "Second call");
+  assertEquals(refineQgendaBucketType("8-hour day", 14, 1020), "8-hour day");
+  // Call: 24h window from a morning start is still the 1st-call span.
+  assertEquals(refineQgendaBucketType("Call (unclassified)", 24, 420), "24-hour call");
+  // Call: evening start is required for the 2nd-call inference.
+  assertEquals(refineQgendaBucketType("Call (unclassified)", 14, 420), "Call (unclassified)");
+  // Shift: out-of-band durations stay unclassified.
+  assertEquals(refineQgendaBucketType("Shift", 6, 420), "Shift");
+  assertEquals(refineQgendaBucketType("Shift", 16, 420), "Shift");
+});
+
+Deno.test("parser version is exported for client staleness checks", () => {
+  assertEquals(QGENDA_PARSER_VERSION, 2);
 });
 
 Deno.test("qgendaShiftName: priority, cleaning, and no mangling of shift words", () => {
