@@ -110,7 +110,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
   run(`
     db.shifts=[]; schedulePreview=null; scheduleImportError=''; scheduleAiStatus='';
     globalThis.__aiCalls=0; globalThis.__ocrCalls=0;
-    callExtractSchedule = async () => { globalThis.__aiCalls++; if(globalThis.__aiCalls===1) throw new Error('sync_timed_out'); return ${JSON.stringify(GRID_EXTRACTION)}; };
+    callExtractSchedule = async (f, n, o) => { if (o && (o.locate || o.band)) return { ok: true, mode: 'schedule', is_grid: false }; globalThis.__aiCalls++; if(globalThis.__aiCalls===1) throw new Error('sync_timed_out'); return ${JSON.stringify(GRID_EXTRACTION)}; };
     ocrImageFile = async () => { globalThis.__ocrCalls++; return ''; };
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
@@ -133,7 +133,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
   t('AI unavailable + OCR garbage: honest couldnt-read message',
     run(`scheduleImportError`).includes("couldn't read this grid") &&
-    run(`scheduleImportError`).includes('closer, straight-on photo') &&
+    run(`scheduleImportError`).includes('one straight-on photo of the whole grid') &&
     run(`scheduleImportError`).includes('Nothing was saved'));
   t('AI unavailable + OCR garbage: NO preview, NO approvable rows, nothing saved',
     run(`schedulePreview`) === null && run(`db.shifts.length`) === 0);

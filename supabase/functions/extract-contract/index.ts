@@ -63,6 +63,8 @@ import {
   normalizeAiPaystub,
   normalizeAiPortalCheck,
   normalizeAiScheduleRead,
+  normalizeAiGridLocate,
+  normalizeAiBandRead,
   normalizeAiRule,
   extractAiContent,
   parseAiResponseText,
@@ -79,6 +81,18 @@ const MODEL = "gpt-4o-mini";
 // The model choice was measured, not assumed — see the reliability
 // test header for the run data.
 const SCHEDULE_MODEL = MODEL;
+// Grid band sub-modes (Nov 7, 2026) use gpt-4o, measured live on
+// the fixture grid the same day: on the band composite, mini
+// anchored its transcription to the wide shaded label columns and
+// placed every code ~4 columns early (0/5 across a dozen runs and
+// four composite variants), while gpt-4o read the composite
+// exactly — 5/5 cells in the right columns, 2/2 runs — AND its
+// locate pass enumerated all 43 rows including the 2 blank-label
+// rows mini silently skipped (41). This does NOT contradict the
+// Nov 6 note above: that measurement was the FULL-PHOTO grid read,
+// where 4o invented cells. Full-photo schedule reads stay on mini;
+// only the two new band sub-modes (locate, band) use 4o.
+const GRID_BAND_MODEL = "gpt-4o";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const MAX_IMAGES = 4;
 // A resized JPEG data URL is ~100-400KB of base64; 4 pages stay well
@@ -134,6 +148,51 @@ function schedulePrompt(scheduleName: string): string {
     "Blank cells are not shifts — skip them. " +
     "Before answering, re-check every cell you listed: its column number must line up under the header date you gave it, and the code must come from '" + scheduleName + "'s row only. " +
     "NEVER interpret a grid code: do not turn it into hours, times, or a shift-type name, and do not copy codes from anyone else's row."
+  );
+}
+
+// Grid LOCATE pass (Nov 7, 2026, schedule sub-mode locate: true):
+// structure only — the header dates and every data row's name
+// label, in order. Deliberately NO bounding boxes: measured live,
+// the model's freehand coordinates were far too coarse to crop by.
+// The client pairs these labels with geometric line detection on
+// the original photo to find the matched row's exact band.
+function gridLocatePrompt(): string {
+  return (
+    "This photo shows a staff schedule GRID: people's names run down the left side and dates run across a header row near the top, with short codes in the cells. " +
+    "This is a locating task only — do NOT transcribe any shift codes. " +
+    "Return ONLY a JSON object with these keys: is_grid (true when this layout is present), " +
+    "header_dates (the header row's date labels, one per date column, left to right, exactly as printed), " +
+    "row_labels (an array with the name label of EVERY data row, top to bottom, exactly as printed — include a row even when its label is blank, as an empty string; do NOT include the header row or any totals / footer rows). " +
+    "Count the data rows carefully — one entry per row, in order."
+  );
+}
+
+// Grid BAND pass (Nov 7, 2026, schedule sub-mode band: true): the
+// image is a composite the app built from ONE grid photo — the date
+// header band stacked directly above the matched person's row band,
+// both from the original full-resolution photo, columns aligned,
+// with a red column number printed in the margin above each column.
+// The model transcribes it as a per-column cells array so position
+// comes from the array itself. Measured on Caleb's fixture grid
+// (gpt-4o, dates-only composite): 5/5 true cells in the right
+// columns, 2/2 runs, vs 0/5 for the full-photo read. (gpt-4o-mini
+// mis-anchored the same composite by ~4 columns — see
+// GRID_BAND_MODEL.) Any residual disagreement with the full-photo
+// read is surfaced by the client's cross-check, never silently
+// trusted.
+function gridBandPrompt(scheduleName: string): string {
+  return (
+    "This image is a close-up composite made from ONE grid schedule photo. It has TWO horizontal strips from the same photo, lined up column for column: " +
+    "the TOP strip is the grid's date header row, and the BOTTOM strip is the single schedule row for '" + scheduleName + "', enlarged. " +
+    "A red number is printed in the top margin above each column, starting at 1. " +
+    "This is a transcription task: copy exactly what is printed in the BOTTOM strip, nothing more. " +
+    "Return ONLY a JSON object with these keys: cells (an array), header_dates (an array), and raw_text. " +
+    "header_dates: read the TOP strip — one entry per date column, left to right, exactly as printed. " +
+    "cells: an array with EXACTLY one entry per column, in the same left-to-right order as header_dates — the entry is the code printed in the BOTTOM strip's cell for that column, copied EXACTLY (for example '5**', '5*', '7', 'NC1'), or an empty string \"\" when that cell is blank. " +
+    "Include EVERY column, blank or not — the array length must equal the number of header_dates. Do not skip blank columns and do not merge columns. " +
+    "Everything visible in the bottom strip belongs to the one row — there is no other person's row in this image. " +
+    "NEVER interpret a code: do not turn it into hours, times, or a shift-type name."
   );
 }
 
@@ -296,7 +355,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? schedulePrompt(scheduleName) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
+        text: mode === "schedule" ? (body.locate === true ? gridLocatePrompt() : body.band === true ? gridBandPrompt(scheduleName) : schedulePrompt(scheduleName)) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -315,7 +374,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: mode === "schedule" ? SCHEDULE_MODEL : MODEL,
+          model: mode === "schedule" ? (body.locate === true || body.band === true ? GRID_BAND_MODEL : SCHEDULE_MODEL) : MODEL,
           messages: [{ role: "user", content }],
           response_format: { type: "json_object" },
           max_tokens: 2000,
@@ -373,6 +432,31 @@ Deno.serve(async (req: Request): Promise<Response> => {
         },
         502,
       );
+    }
+    if (mode === "schedule" && body.locate === true) {
+      const loc = normalizeAiGridLocate(raw);
+      return json({
+        ok: true,
+        mode: "schedule",
+        locate: true,
+        is_grid: loc.isGrid,
+        header_dates: loc.headerDates,
+        row_labels: loc.rowLabels,
+        model: GRID_BAND_MODEL,
+      });
+    }
+    if (mode === "schedule" && body.band === true) {
+      const read = normalizeAiBandRead(raw, scheduleName);
+      const rawText = (raw as Record<string, unknown>)["raw_text"];
+      return json({
+        ok: true,
+        mode: "schedule",
+        band: true,
+        shifts: read.shifts,
+        header_dates: read.headerDates,
+        raw_text: typeof rawText === "string" ? rawText : "",
+        model: GRID_BAND_MODEL,
+      });
     }
     if (mode === "schedule") {
       const read = normalizeAiScheduleRead(raw);

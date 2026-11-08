@@ -82,12 +82,14 @@ t('toggle uses the exact C/P pattern (details.csp-info + summary)',
   upload.includes(TOGGLE) &&
   fs.readFileSync(R + 'app.js', 'utf8').includes('<details class="csp-info"><summary>What do C and P mean?</summary>'));
 t('all three tip lines ship, one idea per line',
-  upload.includes('<p class="muted">A closer, straight-on photo reads best.</p>') &&
-  upload.includes('<p class="muted">Show the whole grid — the dates across the top and your name row.</p>') &&
-  upload.includes('<p class="muted">Cropping to just the grid helps more than you\'d think.</p>'));
+  upload.includes('<p class="muted">One photo of the whole grid is best — dates across the top and your name row both in frame.</p>') &&
+  upload.includes('<p class="muted">Straight-on and sharp helps — the app zooms into your row for a close-up read, so there\'s no need to crop.</p>') &&
+  upload.includes('<p class="muted">Check the preview before approving — cells the reads couldn\'t agree on are flagged for you.</p>'));
+t('no crop advice remains anywhere in the upload guidance (Nov 7: the user never crops — the app zooms)',
+  !upload.includes('Cropping to just the grid'));
 t('tips sit before the upload form so they are seen before choosing a file',
   upload.indexOf(TOGGLE) >= 0 && upload.indexOf(TOGGLE) < upload.indexOf('id="scheduleForm"'));
 t('toggle appears nowhere outside the upload panel',
   !html.slice(0, iU).includes('Taking a photo of a paper schedule?'));
-t('service worker cache bumped to v65', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v73'));
+t('service worker cache bumped to v65', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v74'));
 console.log(failures ? failures + ' FAILURES' : 'ALL PASS');

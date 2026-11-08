@@ -162,9 +162,9 @@ t('saved grid shifts arrive confirmed (sourced — status model Nov 6, 2026)',
     ocrImageFile = async () => '';
   `);
   await run(`readScheduleWithAI([{name:'schedule-grid-martin.jpg', type:'image/jpeg'}])`);
-  t('zero-yield grid says "couldn\'t read this grid — try a closer, straight-on photo"',
+  t('zero-yield grid says "couldn\'t read this grid — try one straight-on photo of the whole grid"',
     run(`scheduleImportError`).includes("couldn't read this grid") &&
-    run(`scheduleImportError`).includes('closer, straight-on photo') &&
+    run(`scheduleImportError`).includes('one straight-on photo of the whole grid') &&
     run(`scheduleImportError`).includes('Nothing was saved'));
   t('zero-yield leaves no preview and no shifts',
     run(`schedulePreview`) === null && run(`db.shifts.length`) === 0);

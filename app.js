@@ -3217,7 +3217,7 @@ function scheduleImportHTML(){
   // Upload a schedule is its own top-level panel now (Nov 6, 2026) — a
   // sibling of Live calendar sync and QGenda, same visual rank — and
   // the .ics import/export fallback lives inside it.
-  const body=`<p class="muted">No live calendar? Upload a schedule instead — we’ll pick out only your shifts.</p>${scheduleImportContext==='qgenda'?'<p class="hint">Signed in to QGenda? Upload a screenshot of the schedule page or a Reports export here — the app reads it and shows a preview before saving anything. QGenda sessions expire, so re-sign in and re-check for fresh shifts; this path does not sync in the background.</p>':''}<details class="csp-info"><summary>Taking a photo of a paper schedule?</summary><p class="muted">A closer, straight-on photo reads best.</p><p class="muted">Show the whole grid — the dates across the top and your name row.</p><p class="muted">Cropping to just the grid helps more than you'd think.</p></details><form id="scheduleForm"><div class="form-grid">${field('scheduleNameUpload','Name as it appears on your schedule','text',nm,'placeholder="e.g. C. Martin"')}${field('scheduleFile','Choose a schedule file','file','','accept=".csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.heic,text/plain,text/csv"')}${area('scheduleText','Or paste schedule text','','2026-11-10, Holzer, 8-hour day\nNov 12 — C. Martin — Holzer 8/2nd call')}</div><div class="form-actions"><button type="submit">Read schedule — preview only (nothing saved yet)</button><button type="button" class="secondary" data-action="save-schedule-name">Save name only</button></div></form>${scheduleAiStatus?`<p class="hint">${escapeHTML(scheduleAiStatus)}</p>`:''}${scheduleImportError?`<p class="hint">${escapeHTML(scheduleImportError)}</p>`:''}<div style="margin-top:14px">${schedulePreviewHTML()}</div><details><summary>Manual fallback — import or export a .ics file</summary><h3>Import shifts from a calendar (.ics)</h3><p class="muted">Export your calendar as a .ics file and import it here — duplicates are skipped, never doubled.</p><form id="calendarForm"><div class="form-grid">${field('calFile','Choose .ics file','file','','accept=".ics,text/calendar"')}${select('calSource','Which calendar is this from?',['Google Calendar','Apple Calendar','Outlook','Calendar file'],'Calendar file')}</div><div class="form-actions"><button type="submit">Parse calendar — preview only (nothing saved yet)</button></div></form>${calImportError?`<p class="hint">${escapeHTML(calImportError)}</p>`:''}<div style="margin-top:14px">${calPreviewHTML()}</div><h3>Export shifts to a calendar (.ics)</h3><div class="toolbar"><button data-action="export-cal-all">Download all shifts (.ics)</button><button data-action="export-cal-month">Download this month (.ics)</button></div></details>`;
+  const body=`<p class="muted">No live calendar? Upload a schedule instead — we’ll pick out only your shifts.</p>${scheduleImportContext==='qgenda'?'<p class="hint">Signed in to QGenda? Upload a screenshot of the schedule page or a Reports export here — the app reads it and shows a preview before saving anything. QGenda sessions expire, so re-sign in and re-check for fresh shifts; this path does not sync in the background.</p>':''}<details class="csp-info"><summary>Taking a photo of a paper schedule?</summary><p class="muted">One photo of the whole grid is best — dates across the top and your name row both in frame.</p><p class="muted">Straight-on and sharp helps — the app zooms into your row for a close-up read, so there's no need to crop.</p><p class="muted">Check the preview before approving — cells the reads couldn't agree on are flagged for you.</p></details><form id="scheduleForm"><div class="form-grid">${field('scheduleNameUpload','Name as it appears on your schedule','text',nm,'placeholder="e.g. C. Martin"')}${field('scheduleFile','Choose a schedule file','file','','accept=".csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.heic,text/plain,text/csv"')}${area('scheduleText','Or paste schedule text','','2026-11-10, Holzer, 8-hour day\nNov 12 — C. Martin — Holzer 8/2nd call')}</div><div class="form-actions"><button type="submit">Read schedule — preview only (nothing saved yet)</button><button type="button" class="secondary" data-action="save-schedule-name">Save name only</button></div></form>${scheduleAiStatus?`<p class="hint">${escapeHTML(scheduleAiStatus)}</p>`:''}${scheduleImportError?`<p class="hint">${escapeHTML(scheduleImportError)}</p>`:''}<div style="margin-top:14px">${schedulePreviewHTML()}</div><details><summary>Manual fallback — import or export a .ics file</summary><h3>Import shifts from a calendar (.ics)</h3><p class="muted">Export your calendar as a .ics file and import it here — duplicates are skipped, never doubled.</p><form id="calendarForm"><div class="form-grid">${field('calFile','Choose .ics file','file','','accept=".ics,text/calendar"')}${select('calSource','Which calendar is this from?',['Google Calendar','Apple Calendar','Outlook','Calendar file'],'Calendar file')}</div><div class="form-actions"><button type="submit">Parse calendar — preview only (nothing saved yet)</button></div></form>${calImportError?`<p class="hint">${escapeHTML(calImportError)}</p>`:''}<div style="margin-top:14px">${calPreviewHTML()}</div><h3>Export shifts to a calendar (.ics)</h3><div class="toolbar"><button data-action="export-cal-all">Download all shifts (.ics)</button><button data-action="export-cal-month">Download this month (.ics)</button></div></details>`;
   return collapsePanelHTML('schedule-import-panel','Upload a schedule',body,open);
 }
 function schedulePreviewHTML(){
@@ -3278,13 +3278,17 @@ function approveScheduleImport(){
 // "schedule" mode: the server prompt returns only shifts for the
 // schedule name, and the client still classifies every row before
 // showing the preview — an AI row for someone else stays excluded.
-async function callExtractSchedule(files,scheduleNm){
+async function callExtractSchedule(files,scheduleNm,opts){
   if(!SUPABASE_CONFIGURED)throw new Error('Supabase is not configured yet.');
   if(!cloudSession)throw new Error('Not signed in — sign in on the Account tab first.');
-  const images=await aiContractImagesDataURLs(files);
+  const o=opts||{};
+  const images=o.images?o.images:await aiContractImagesDataURLs(files);
   if(!images.length)throw new Error('Could not read these photos in this browser — try JPG or PNG exports.');
+  const payload={action:'extract-contract',mode:'schedule',scheduleName:scheduleNm,images};
+  if(o.locate)payload.locate=true;
+  if(o.band)payload.band=true;
   let data;
-  try{data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'schedule',scheduleName:scheduleNm,images})}
+  try{data=await liveSyncPost('extract-contract',payload)}
   catch(e){if(e&&e.data&&e.data.error==='openai_key_missing'){const k=new Error(AI_KEY_MISSING_MESSAGE);k.data=e.data;throw k}throw e}
   if(data&&data.error==='openai_key_missing')throw new Error(AI_KEY_MISSING_MESSAGE);
   if(!data||data.ok===false)throw new Error((data&&data.message)||(data&&data.error)||'AI reading failed.');
@@ -3306,7 +3310,7 @@ function applyAiToSchedulePreview(data,fileName){
     const match=rowName?(scheduleNamesMatch(rowName,name)?'matched':(name?'other':'uncertain')):'uncertain';
     const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,{date,facility,type}));
     const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(match==='other')flags.push('other person — excluded'); if(match==='uncertain')flags.push('uncertain — check to include'); if(facility&&!facilityByNameOrAlias(facility))flags.push('new facility — will be suggested, not created'); if(code)flags.push('grid code "'+code+'" — not a known shift type; saved as-is, unpriced (rename it here if you know it)'); if(sh.check)flags.push('check this one — '+(sh.checkReason||'the two reads of this photo disagreed here'));
-    return {date,facility,type,code,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched',duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
+    return {date,facility,type,code,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched'&&sh.includeDefault!==false,duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
   });
   schedulePreview={fileName,source:'schedule-import-ai',matchedName:name,rows,noNamesInFile:false,ai:true};
   return rows.length>0;
@@ -3316,7 +3320,7 @@ function applyAiToSchedulePreview(data,fileName){
 // as if it were the answer.
 function scheduleGridUnreadMessage(){
   const nm=scheduleName();
-  return 'No shifts could be read from these photos'+(nm?' for "'+nm+'"':'')+'. If this is a grid schedule (names down the side, dates across the top), I couldn\'t read this grid — try a closer, straight-on photo that shows the whole grid, your name row included. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';
+  return 'No shifts could be read from these photos'+(nm?' for "'+nm+'"':'')+'. If this is a grid schedule (names down the side, dates across the top), I couldn\'t read this grid — try one straight-on photo of the whole grid, dates across the top and your name row both in frame. Check the name as it appears on the schedule (above), or paste the schedule text instead. Nothing was saved.';
 }
 // Evidence rule for photo reads (Nov 6, 2026): a row counts as a
 // real schedule row only if something ties it to an actual schedule
@@ -3398,6 +3402,253 @@ function reconcileGridReads(a,b){
   out.sort((p,q)=>String(p.date).localeCompare(String(q.date))||((parseInt(p.column,10)||0)-(parseInt(q.column,10)||0)));
   return {shifts:out,gridSeen};
 }
+// --- Grid band extraction (Nov 7, 2026) ---
+// Caleb: "If I crop a picture of my grid style schedule then the
+// AI won't be able to see what dates I'm working those shifts."
+// Right — so the user NEVER crops. The app zooms instead:
+//   1. LOCATE: the server returns the grid's header dates and every
+//      data row's name label, in order (structure only — measured
+//      live, the model's freehand bounding boxes are far too coarse
+//      to crop by, so no coordinates are ever requested).
+//   2. GEOMETRY (below, on-device, deterministic): the grid's ruled
+//      lines are found by pixel scanning the ORIGINAL photo; the
+//      model's label list is aligned to the detected row bands,
+//      with blank-label rows found by their empty label cells (the
+//      model sometimes skips them when counting). That pins the
+//      matched name's row band and every date column's span exactly.
+//   3. COMPOSITE: the header band and the matched row band are
+//      drawn from the original full-resolution photo onto one
+//      canvas, columns aligned, with the column numbers burned
+//      into a margin — the row is now huge and legible and the
+//      dates sit right above their columns.
+//   4. BAND READ (server, twice, reconciled like any grid read):
+//      the model returns one cells entry per column, so a cell's
+//      position comes from the array, not from counting.
+//   5. CROSS-CHECK: band cells are compared with the full-photo
+//      read; any cell the two methods disagree on (different code,
+//      or seen by only one method) is flagged "check this one" —
+//      full-photo-only cells also start UNCHECKED, because the
+//      full read is the one known to bleed a neighbour's row in.
+// Measured live on Caleb's fixture grid (Martin row, Dec 1-5),
+// through the deployed function: full-photo read 0/5 correct cells
+// with Mitchell's "endo 3" bleeding in; band read (gpt-4o, dates-
+// only composite) 5/5 correct, 2/2 runs, no phantom cells. The
+// cross-check below still guards every cell. Any failure anywhere
+// in this pipeline falls back to the ordinary full-photo double
+// read — never to invented rows.
+function gridLineRuns(frac,threshold){
+  // frac: dark-pixel fraction per pixel line. Returns the centre of
+  // each run above threshold (a ruled line, possibly 2-3px thick).
+  const runs=[]; let start=-1;
+  for(let i=0;i<frac.length;i++){
+    if(frac[i]>threshold&&start<0)start=i;
+    else if(frac[i]<=threshold&&start>=0){runs.push(Math.round((start+i-1)/2)); start=-1;}
+  }
+  if(start>=0)runs.push(Math.round((start+frac.length-1)/2));
+  return runs;
+}
+function detectGridGeometry(imgData,W,H,headerCount,labelCount){
+  // imgData: Uint8ClampedArray RGBA of the full-resolution photo.
+  const darkAt=(x,y)=>{const o=(y*W+x)*4; return (imgData[o]+imgData[o+1]+imgData[o+2])/3<110?1:0;};
+  // Text ink for the label test: real grid text is a smooth
+  // anti-aliased glyph — MANY pixels in the mid-grey band where a
+  // JPEG of a ruled line is almost binary. Measured on the fixture:
+  // a name cell scores 6-20% mid-grey; a blank cell ~0-1% (line
+  // JPEG ringing only). Counting only near-black pixels missed
+  // most glyphs, because the JPEG-soft name text peaks mid-grey.
+  const midAt=(x,y)=>{const o=(y*W+x)*4; const v=(imgData[o]+imgData[o+1]+imgData[o+2])/3; return (v>=110&&v<200)?1:0;};
+  const step=Math.max(1,Math.floor(Math.min(W,H)/400));
+  // Horizontal lines: dark fraction across the width.
+  const rowFrac=new Array(H).fill(0);
+  let nx=0; for(let x=0;x<W;x+=step)nx++;
+  for(let y=0;y<H;y++){let d=0; for(let x=0;x<W;x+=step)d+=darkAt(x,y); rowFrac[y]=d/nx;}
+  const hLines=gridLineRuns(rowFrac,0.4);
+  if(hLines.length<4)return null;
+  // Typical band height from the line spacing.
+  const spacings=[]; for(let i=1;i<hLines.length;i++)spacings.push(hLines[i]-hLines[i-1]);
+  spacings.sort((a,b)=>a-b);
+  const bandH=spacings[Math.floor(spacings.length/2)]||0;
+  if(!(bandH>=8&&bandH<=H/4))return null;
+  // Row bands between consecutive lines; the header band is the
+  // band-height strip immediately ABOVE the first line (the dates
+  // sit above the first data row's top border in these grids).
+  const bands=[]; for(let i=0;i<hLines.length-1;i++)bands.push({y0:hLines[i],y1:hLines[i+1]});
+  const headerBand={y0:Math.max(0,hLines[0]-bandH-2),y1:hLines[0]+2};
+  // Align labels to bands: walk bands top-down; a band whose label
+  // cell (left ~18% of the grid width) has almost no ink is a
+  // blank-label row and consumes one label slot as "".
+  const inkOf=(y0,y1,x0,x1)=>{let d=0,n=0; for(let y=y0;y<y1;y+=step)for(let x=x0;x<x1;x+=step){d+=midAt(x,y); n++;} return n?d/n:0;};
+  // Vertical lines for the column spans (dark fraction down the
+  // grid's vertical extent).
+  const colFrac=new Array(W).fill(0);
+  let ny=0; for(let y=0;y<H;y+=step)ny++;
+  for(let x=0;x<W;x++){let d=0; for(let y=0;y<H;y+=step)d+=darkAt(x,y); colFrac[x]=d/ny;}
+  const vLines=gridLineRuns(colFrac,0.4);
+  if(vLines.length<headerCount+1)return null;
+  // Column spans between consecutive vertical lines.
+  const spans=[]; for(let i=0;i<vLines.length-1;i++)spans.push({x0:vLines[i],x1:vLines[i+1]});
+  // Layout (measured on the fixture): ONE wide name span, then
+  // the date columns; a shaded per-person sub-column hides INSIDE
+  // the first date column's span (no full-height rule of its own),
+  // and a trailing partial column can sit past the last date.
+  // Date columns are therefore spans[1 .. headerCount] — never
+  // the last headerCount spans (the trailing partial column
+  // shifted those by one, putting every band cell a column
+  // early), and the composite must start at the first date span,
+  // not at the sub-column.
+  const dateSpans=spans.slice(1,1+headerCount).length===headerCount?spans.slice(1,1+headerCount):spans.slice(Math.max(0,spans.length-headerCount));
+  if(dateSpans.length<headerCount)return null;
+  // The span before the dates is the per-person sub-column
+  // (narrow, shaded in these exports); the span before THAT is
+  // the wide name column holding the row labels. (On the fixture:
+  // names at x 29-181, sub-column 181-250, dates from 250.) The
+  // label cell for the ink test spans name column + sub-column.
+  const nameSpan=dateSpans[0]===spans[1]?spans[0]:null;
+  const labelX0=nameSpan?nameSpan.x0:dateSpans[0].x0;
+  const labelX1=dateSpans[0].x0;
+  // Coverage gate: a name occupies roughly a fifth of the row
+  // height and most bands are empty, so a genuinely blank label
+  // cell has essentially NO ink coverage, while any set name —
+  // even a short one — covers several percent of its cell. Pin the
+  // threshold in that measured gap.
+  const aligned=[];
+  let li=0;
+  for(const b of bands){
+    if(li>=labelCount&&aligned.length>=labelCount)break;
+    const ink=inkOf(b.y0+3,b.y1-3,labelX0+3,Math.max(labelX0+4,labelX1-3));
+    if(ink<0.04){ aligned.push({band:b,label:''}); }
+    else { aligned.push({band:b,label:null}); li++; }
+    if(aligned.filter(a=>a.label===null).length>labelCount)break;
+  }
+  const namedCount=aligned.filter(a=>a.label===null).length;
+  if(namedCount!==labelCount)return null;
+  let n=0;
+  const rows=aligned.map(a=>({y0:a.band.y0,y1:a.band.y1,label:a.label===null?(''+(n++)) : ''}));
+  // rows[i].label holds the INDEX (as a string) into the model's
+  // label list for inked rows, '' for blank-label rows — the caller
+  // maps it through the locate result.
+  return {headerBand,rows,dateSpans,gridX0:labelX0,gridX1:dateSpans[dateSpans.length-1].x1};
+}
+async function buildGridBandComposite(file,geom,rowIndex,headerCount){
+  try{
+    if(typeof createImageBitmap!=='function')return null;
+    const bmp=await createImageBitmap(file);
+    const W=bmp.width||0,H=bmp.height||0;
+    if(!W||!H){if(bmp.close)bmp.close(); return null;}
+    const row=geom.rows[rowIndex]; if(!row)return null;
+    // DATE COLUMNS ONLY in the composite (measured Nov 7, 2026):
+    // including the wide shaded label columns made the reader
+    // anchor its column positions to them and shift every code
+    // ~4 columns early. The name column is identification, not
+    // data — the row was already matched before we get here.
+    const x0=geom.dateSpans[0].x0,x1=geom.gridX1;
+    const outW=1800,scale=outW/(x1-x0);
+    const margin=36,sep=8;
+    // Bands are vertically stretched ~2.2x: at natural proportions
+    // the composite is a very short, wide strip and the reader's
+    // column placement measurably degrades.
+    const hH=Math.max(10,Math.round((geom.headerBand.y1-geom.headerBand.y0)*scale*2.2));
+    const rH=Math.max(10,Math.round((row.y1-row.y0)*scale*2.2));
+    const cv=document.createElement('canvas'); cv.width=outW; cv.height=margin+hH+sep+rH;
+    const ctx=cv.getContext('2d'); if(!ctx){if(bmp.close)bmp.close(); return null;}
+    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.drawImage(bmp,x0,geom.headerBand.y0,x1-x0,geom.headerBand.y1-geom.headerBand.y0,0,margin,outW,hH);
+    ctx.drawImage(bmp,x0,row.y0,x1-x0,row.y1-row.y0,0,margin+hH+sep,outW,rH);
+    ctx.fillStyle='#c80000'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center';
+    for(let i=0;i<headerCount;i++){
+      const c=geom.dateSpans[i]; if(!c)continue;
+      const cx=((c.x0+c.x1)/2-x0)*scale;
+      ctx.fillText(String(i+1),cx,26);
+    }
+    if(bmp.close)bmp.close();
+    const url=typeof cv.toDataURL==='function'?cv.toDataURL('image/jpeg',0.9):null;
+    return (typeof url==='string'&&url.indexOf('data:image/jpeg;base64,')===0)?url:null;
+  }catch(e){ return null }
+}
+function crossCheckGridReads(bandShifts,fullData){
+  // Compare the band read (already double-read reconciled) with the
+  // full-photo read, cell by cell (keyed by column). Agreement is
+  // silent; disagreement flags the cell. Band cells stand as the
+  // primary read; full-photo-only cells are appended flagged and
+  // UNCHECKED by default — the full read is the method known to
+  // bleed the row below into this one.
+  const keyOf=(s)=>{const c=parseInt(s&&s.column,10); return Number.isFinite(c)&&c>0?'col:'+c:'date:'+String((s&&s.date)||'')};
+  const full=new Map();
+  for(const s of (Array.isArray(fullData&&fullData.shifts)?fullData.shifts:[])){
+    if(!String(s.code||'').trim())continue;
+    const k=keyOf(s); if(!full.has(k))full.set(k,s);
+  }
+  const out=[];
+  const seen=new Set();
+  for(const s of bandShifts){
+    const k=keyOf(s); seen.add(k);
+    const f=full.get(k);
+    if(!f){ out.push({...s,check:true,checkReason:'the full-photo read did not see this cell — the close-up read did'}); }
+    else if(String(f.code).trim()!==String(s.code).trim()){ out.push({...s,check:true,checkReason:'the close-up read and the full-photo read disagreed on this cell'}); }
+    else out.push({...s});
+  }
+  for(const [k,f] of full){
+    if(seen.has(k))continue;
+    out.push({...f,check:true,checkReason:'only the full-photo read saw this cell — the close-up read did not (it may belong to a neighbouring row)',includeDefault:false});
+  }
+  out.sort((p,q)=>String(p.date).localeCompare(String(q.date))||((parseInt(p.column,10)||0)-(parseInt(q.column,10)||0)));
+  return out;
+}
+async function tryGridBandRead(images,fullData){
+  // Single-photo grids only — the composite is built from one
+  // original. Returns {shifts,status} or null on ANY failure (the
+  // caller then uses the full-photo double read).
+  try{
+    if(!images||images.length!==1)return null;
+    const file=images[0];
+    const nm=scheduleName();
+    const loc=await callExtractSchedule([file],nm,{locate:true});
+    if(!loc||loc.is_grid!==true)return null;
+    const labels=Array.isArray(loc.row_labels)?loc.row_labels.map(x=>String(x||'')):[];
+    const headerDates=Array.isArray(loc.header_dates)?loc.header_dates.filter(d=>String(d||'').trim()):[];
+    if(headerDates.length<3||!labels.length)return null;
+    const matchIdx=labels.findIndex(l=>l&&scheduleNamesMatch(l,nm));
+    if(matchIdx<0)return null;
+    scheduleAiStatus='Found your row — zooming into it for a close-up read…'; render();
+    if(typeof createImageBitmap!=='function')return null;
+    const bmp=await createImageBitmap(file);
+    const W=bmp.width||0,H=bmp.height||0;
+    if(!W||!H){if(bmp.close)bmp.close(); return null;}
+    const scv=document.createElement('canvas'); scv.width=W; scv.height=H;
+    const sctx=scv.getContext('2d'); if(!sctx){if(bmp.close)bmp.close(); return null;}
+    sctx.drawImage(bmp,0,0); if(bmp.close)bmp.close();
+    const idata=sctx.getImageData(0,0,W,H);
+    const geom=detectGridGeometry(idata.data,W,H,headerDates.length,labels.filter(l=>l.trim()).length);
+    if(!geom)return null;
+    // Map the model's label index to a geometry row: rows carry a
+    // label-slot index for inked rows ('' = blank-label row). The
+    // model's list may itself include blank rows; count inked rows
+    // whose model label is non-blank.
+    const inkedLabels=labels.map((l,i)=>({l,i})).filter(x=>x.l.trim());
+    let rowIndex=-1,slot=-1;
+    for(let r=0;r<geom.rows.length;r++){
+      if(geom.rows[r].label==='')continue;
+      slot++;
+      const want=inkedLabels[slot];
+      if(want&&want.i===matchIdx){rowIndex=r; break;}
+    }
+    if(rowIndex<0)return null;
+    const composite=await buildGridBandComposite(file,geom,rowIndex,headerDates.length);
+    if(!composite)return null;
+    let b1;
+    try{ b1=await callExtractSchedule([file],nm,{band:true,images:[composite]}); }
+    catch(e1){ b1=await callExtractSchedule([file],nm,{band:true,images:[composite]}); }
+    if(!scheduleReadIsGrid(b1)&&!(Array.isArray(b1.shifts)&&b1.shifts.length))return null;
+    let b2=null;
+    try{ b2=await callExtractSchedule([file],nm,{band:true,images:[composite]}); }catch(e2){ b2=null; }
+    const rec=reconcileGridReads(b1,b2);
+    if(!rec.shifts.length)return null;
+    const shifts=crossCheckGridReads(rec.shifts,fullData);
+    const checked=shifts.filter(s=>s.check).length;
+    const status=checked?('Close-up read of your row, double-checked: '+checked+' cell(s) the reads could not agree on are flagged "check this one" in the preview.'):'Close-up read of your row — the reads agreed on every cell.';
+    return {shifts,status};
+  }catch(e){ return null }
+}
 async function readScheduleWithAI(images){
   scheduleImportError='';
   scheduleAiStatus='Sending '+images.length+' photo(s) to AI for reading — this can take a few seconds…'; render();
@@ -3414,6 +3665,18 @@ async function readScheduleWithAI(images){
       data=await callExtractSchedule(images.slice(0,4),scheduleName());
     }
     if(scheduleReadIsGrid(data)){
+      // Grid band extraction (Nov 7, 2026): with ONE photo, first
+      // try the close-up read of the user's own row (locate +
+      // geometry + composite, above). It beats the full-photo read
+      // on the fixture by a wide margin; any failure falls through
+      // to the full-photo double read below, unchanged.
+      if(images.length===1){
+        const band=await tryGridBandRead(images,data);
+        if(band&&band.shifts.length){
+          const okBand=applyAiToSchedulePreview({ok:true,mode:'schedule',shifts:band.shifts},fileName);
+          if(okBand){ scheduleAiStatus=band.status; scheduleImportError=''; render(); return; }
+        }
+      }
       // Grid: read it a second time and reconcile before showing
       // anything (see reconcileGridReads above).
       scheduleAiStatus='That looks like a grid schedule — reading it a second time to double-check…'; render();

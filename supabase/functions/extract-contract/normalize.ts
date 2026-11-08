@@ -563,3 +563,96 @@ export function normalizeAiRule(raw: unknown): AiRule {
   }
   return out;
 }
+
+// --- Grid band extraction (Nov 7, 2026) ---
+// Caleb's objection killed the old advice: cropping a grid photo by
+// hand throws away the date header the reader needs, so the USER
+// never crops — the app zooms. Pipeline (client-orchestrated):
+//   1. LOCATE (below): on the full photo, the model returns only the
+//      grid's header dates and EVERY data row's name label, in
+//      order. No codes, no coordinates — measured live Nov 7, the
+//      model's freehand bounding boxes were far too coarse to crop
+//      by (it placed the fixture's Martin row at y 300-400 of 1017;
+//      the row actually sits at ~850). The client instead detects
+//      the grid's ruled lines geometrically on a canvas (they are
+//      deterministic), spots blank-label rows by their label cells
+//      (real text is anti-aliased mid-grey; a blank cell is not),
+//      and so derives the matched row's exact pixel band.
+//   2. BAND (below): the client stacks the header band and the
+//      matched row's band from the ORIGINAL full-resolution photo
+//      into one composite (date columns only, vertically stretched
+//      ~2.2x, column numbers burned into the margin), and gpt-4o
+//      transcribes it as a per-column CELLS array — one entry per
+//      column, "" for blank — so a cell's position comes from the
+//      array, never from counting filled cells. Measured on the
+//      fixture: the full-photo read scored 0/5 correct cells with
+//      Mitchell's "endo 3" bleeding in; the band read scored 5/5
+//      correct, 2/2 runs. (gpt-4o-mini mis-anchored the composite
+//      by ~4 columns — the wide shaded label columns pulled its
+//      alignment — so the band sub-modes run on gpt-4o.)
+export interface AiGridLocate {
+  isGrid: boolean;
+  headerDates: string[];
+  rowLabels: string[];
+}
+
+export function normalizeAiGridLocate(raw: unknown): AiGridLocate {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { isGrid: false, headerDates: [], rowLabels: [] };
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawHeader = obj["header_dates"];
+  const headerDates: string[] = Array.isArray(rawHeader)
+    ? rawHeader.map((h) => coerceScheduleDate(h))
+    : [];
+  const rawLabels = obj["row_labels"];
+  const rowLabels: string[] = Array.isArray(rawLabels)
+    ? rawLabels.slice(0, 200).map((l) => (coerceAiText(l) ?? ""))
+    : [];
+  const isGrid = obj["is_grid"] === true &&
+    headerDates.filter((d) => d).length >= 3 && rowLabels.length >= 2;
+  return { isGrid, headerDates, rowLabels };
+}
+
+// Band transcription -> the same AiScheduleShift shape as a full
+// schedule read, so the client's anchoring + reconciliation +
+// preview code treats both identically. `cells[i]` is column i+1;
+// its date is re-derived from headerDates[i] (anchored) — the model
+// is never trusted for a band cell's date.
+export function normalizeAiBandRead(
+  raw: unknown,
+  scheduleName: string,
+): { shifts: AiScheduleShift[]; headerDates: string[] } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { shifts: [], headerDates: [] };
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawHeader = obj["header_dates"];
+  const headerDates: string[] = Array.isArray(rawHeader)
+    ? rawHeader.map((h) => coerceScheduleDate(h))
+    : [];
+  const cells = obj["cells"];
+  if (!Array.isArray(cells)) return { shifts: [], headerDates };
+  const out: AiScheduleShift[] = [];
+  const n = Math.min(cells.length, headerDates.length || cells.length);
+  for (let i = 0; i < n; i++) {
+    const code = (coerceAiText(cells[i]) ?? "").trim();
+    if (!code) continue;
+    const date = headerDates[i] || "";
+    if (!date) continue;
+    // Grid headers print no year; the importer's rule for a
+    // year-less date is the current year (same as the full read).
+    const yr = `${new Date().getFullYear()}-${date.slice(5)}`;
+    out.push({
+      date: yr,
+      facility: "",
+      type: code,
+      code,
+      name: scheduleName,
+      pay: "",
+      column: i + 1,
+      anchored: true,
+    });
+  }
+  return { shifts: out, headerDates };
+}

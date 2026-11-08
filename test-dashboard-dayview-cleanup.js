@@ -125,16 +125,11 @@ t('status change from the day view updates the shift (totals re-render from it)'
   run(`yearIncomeSplit(2026).c.ytd`) === 0);
 run(`setShiftStatus('d2', 'confirmed');`);
 
-// delete: imported shift -> confirmation sheet -> tombstone + local
-// removal + totals update (Nov 7, 2026: delete-shifts now opens the
-// delete confirmation sheet — see test-delete-calendar-choice.js —
-// and shift-delete-confirm performs the deletion; unticked, the
-// behaviour is the long-standing one asserted here)
+// delete: imported shift -> tombstone + local removal + totals update
 run(`
   globalThis.__grossBefore = db.shifts.filter(x=>x.date.startsWith('2026-01')).reduce((s,x)=>s+num(x.pay),0);
   globalThis.__cBefore = yearIncomeSplit(2026).c.ytd;
   actions('delete-shifts', 'd1');
-  actions('shift-delete-confirm', 'd1');
 `);
 t('deleting the imported shift records a tombstone (two-way rule: source calendar untouched, CRNA Hub copy removed at sync)',
   JSON.stringify(sandbox.__tombstones) === JSON.stringify(['d1']));
@@ -147,8 +142,8 @@ t('re-rendered Dashboard/day view no longer show the deleted shift',
   !sandbox.__dayAfterDelete.includes('data-shift-status="d1"') && sandbox.__dayAfterDelete.includes('data-shift-status="d2"'));
 
 // delete: app-created shift deletes directly too
-run(`globalThis.__cBefore2 = yearIncomeSplit(2026).c.ytd; actions('delete-shifts', 'd2'); actions('shift-delete-confirm', 'd2');`);
-t('app-created shift deletes through the same confirmation (removed, tombstone harmless)',
+run(`globalThis.__cBefore2 = yearIncomeSplit(2026).c.ytd; actions('delete-shifts', 'd2');`);
+t('app-created shift deletes directly (removed, tombstone harmless)',
   !run(`db.shifts.some(x=>x.id==='d2')`));
 t('C year-to-date drops by the confirmed shift pay after its delete',
   sandbox.__cBefore2 - run(`yearIncomeSplit(2026).c.ytd`) === 2500);

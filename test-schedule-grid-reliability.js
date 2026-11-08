@@ -158,7 +158,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
   run(`
     db.shifts=[]; schedulePreview=null; scheduleImportError=''; scheduleAiStatus='';
     globalThis.__queue=[${JSON.stringify(READ_A)}, ${JSON.stringify(READ_A)}];
-    callExtractSchedule = async () => globalThis.__queue.shift();
+    callExtractSchedule = async (f, n, o) => { if (o && (o.locate || o.band)) return { ok: true, mode: 'schedule', is_grid: false }; return globalThis.__queue.shift(); };
     ocrImageFile = async () => '';
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
@@ -171,7 +171,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
   run(`
     db.shifts=[]; schedulePreview=null; scheduleImportError=''; scheduleAiStatus='';
     globalThis.__queue=[${JSON.stringify(READ_A)}, ${JSON.stringify(READ_B)}];
-    callExtractSchedule = async () => globalThis.__queue.shift();
+    callExtractSchedule = async (f, n, o) => { if (o && (o.locate || o.band)) return { ok: true, mode: 'schedule', is_grid: false }; return globalThis.__queue.shift(); };
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
   t('flow: disagreeing reads -> preview flags the disputed cells "check this one"',
@@ -182,7 +182,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
   run(`
     db.shifts=[]; schedulePreview=null; scheduleImportError=''; scheduleAiStatus='';
     globalThis.__queue=[${JSON.stringify(READ_A)}, ${JSON.stringify(READ_B)}];
-    callExtractSchedule = async () => globalThis.__queue.shift();
+    callExtractSchedule = async (f, n, o) => { if (o && (o.locate || o.band)) return { ok: true, mode: 'schedule', is_grid: false }; return globalThis.__queue.shift(); };
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
   t('flow: same pair of reads -> byte-identical preview (deterministic reconciliation)',
@@ -194,7 +194,7 @@ const IMG = [{ name: 'IMG_1428.jpeg', type: 'image/jpeg' }];
     db.shifts=[]; schedulePreview=null; scheduleImportError=''; scheduleAiStatus='';
     globalThis.__ocrCalls=0;
     globalThis.__queue=[${JSON.stringify(EMPTY_GRID)}, ${JSON.stringify(EMPTY_GRID)}];
-    callExtractSchedule = async () => globalThis.__queue.shift();
+    callExtractSchedule = async (f, n, o) => { if (o && (o.locate || o.band)) return { ok: true, mode: 'schedule', is_grid: false }; return globalThis.__queue.shift(); };
     ocrImageFile = async () => { globalThis.__ocrCalls++; return 'Dec 6, 2026'; };
   `);
   await run(`readScheduleWithAI(${JSON.stringify(IMG)})`);
