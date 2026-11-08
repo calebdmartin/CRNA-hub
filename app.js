@@ -4235,6 +4235,10 @@ if(action==='skip-income-goal'){const gl=$('f_incomeGoalStep1');if(gl)gl.value='
 if(action==='save-profile'){const nm=$('f_profileName'),et=$('f_profileEmploymentType'),gl=$('f_profileIncomeGoal');applyProfileValues({name:nm?String(nm.value||'').trim():'',employmentType:et?String(et.value||'').trim():'',monthlyIncomeGoal:gl&&String(gl.value||'').trim()!==''?num(gl.value):0});cloudSaveProfile();profileEditing=false;return render()}
 if(action==='cloud-signout'){cloudSignOut();return}
 if(action==='cloud-signout-clear'){cloudSignOutAndClearDevice();return}
+if(action==='wipe-open'){wipeConfirm={text:'',armed:false,busy:false,step:'',error:'',report:null};render();return}
+if(action==='wipe-cancel'){if(!wipeConfirm||!wipeConfirm.busy){wipeConfirm=null;render()}return}
+if(action==='wipe-erase'){wipeEraseTap();return}
+if(action==='wipe-retry'){if(wipeConfirm&&!wipeConfirm.busy){wipeConfirm.report=null;wipeConfirm.error='';wipeEraseRun()}return}
 if(action==='goto-account')return setTab('Account');if(action==='goto-mileage')return setTab('Mileage');
 
 if(action==='facility-contract-approve')return approveFacilityContract();
@@ -5625,6 +5629,157 @@ async function cloudSignOutAndClearDevice() {
   try { localStorage.removeItem('crna-hub-last-sync'); } catch (e) {}
   render();
 }
+// =====================================================================
+// TESTING UTILITY — Start over (testing): erase my account & this
+// device (Nov 7, 2026, Caleb). NOT a product feature: Caleb asked for
+// it to test the first-run experience from his real account after
+// learning that (a) the on-device store is shared across accounts, so
+// signing in with a new email merged his phone data INTO that account,
+// and (b) the app had no way to un-copy it. He explicitly declined a
+// backup ("I'm ok with not backing it up and starting from scratch on
+// even on my actual account") — so this makes NO backup, on purpose.
+//
+// Placement is deliberately subdued: a collapsed "Testing tools" panel
+// at the bottom of the Account tab, signed-in only, no onboarding or
+// Getting Started mentions. Whether beta users ever see it is a later
+// decision. REMOVAL is clean by construction: everything lives in this
+// block plus three one-line tendrils — the testingToolsMountHTML()
+// call at the end of accountPage()'s signed-in return, and the four
+// wipe-* lines in the click dispatcher next to cloud-signout-clear.
+// Delete those and this block, and nothing else references it.
+//
+// How it differs from "Sign out & clear this device" (which stays
+// exactly as-is, right above): that tool clears ONLY this phone and
+// keeps the account — sign back in and everything returns. This one
+// erases the ACCOUNT's cloud data first (every user-scoped table,
+// deleted through the user's own token so RLS scopes each delete to
+// the caller — a second user's rows are unreachable), clears the
+// profile fields stored in Auth user_metadata, and only then clears
+// this device and signs out, through the same tail as
+// cloudSignOutAndClearDevice.
+//
+// Auth decision: the Supabase Auth USER is kept — same email/password
+// signs back in to a genuinely empty account (Caleb's stated goal:
+// "start from scratch on my actual account"). Deleting the auth user
+// would also work (every table references auth.users on delete
+// cascade), but it needs the service-role key — which this app never
+// ships to the browser — and would force a fresh sign-up; wiping the
+// data + metadata leaves no residue the app can read back.
+//
+// Safety properties (do not weaken):
+//  * Serious confirmation: a sheet naming the account email and
+//    exactly what is erased, requiring the user to TYPE "ERASE" and
+//    then tap an armed second confirm. One casual tap does nothing.
+//  * Honest failure: steps run in order and STOP at the first failure.
+//    The device is NOT cleared and the session is NOT ended unless
+//    every server step succeeded; the sheet reports exactly which
+//    sections were erased, which failed, and which were not attempted.
+//    Re-running is safe: every step is an idempotent delete.
+//  * No resurrection: the cloud tables end empty AND the local
+//    tombstones/store are wiped by resetDeviceLocalState, so the next
+//    sign-in merge finds nothing on either side. Calendar pairings
+//    and connections are erased server-side too, so the account comes
+//    back with no connected providers (the confirmation says the user
+//    will need to reconnect their calendar).
+// =====================================================================
+let wipeConfirm = null;
+function testingToolsMountHTML() { return testingToolsHTML() + wipeOverlayHTML(); }
+function testingToolsHTML() {
+  if (!cloudSession) return '';
+  return collapsePanelHTML('testing-tools-panel', 'Testing tools',
+    `<p class="muted">Helpers for testing the app — not part of the normal setup. “Sign out &amp; clear this device” above keeps your account; the tool below does not.</p><div class="item"><div><div class="item-title">Start over (testing) — erase my account &amp; this device</div><div class="muted">Erases everything saved in this account and on this device, then signs you out. No backup is made. Your sign-in still works afterwards — the account just comes back empty.</div></div><div class="item-actions"><button type="button" class="secondary tiny" data-action="wipe-open">Start over…</button></div></div>`,
+    false);
+}
+function wipeOverlayHTML() {
+  if (!wipeConfirm || !cloudSession) return '';
+  const email = escapeHTML(cloudSession.email || '');
+  if (wipeConfirm.report) {
+    const r = wipeConfirm.report;
+    const list = (arr) => arr.length ? `<ul>${arr.map(x => `<li>${escapeHTML(x)}</li>`).join('')}</ul>` : '<p class="muted">None.</p>';
+    return `<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-label="Start over stopped"><div class="sheet-head"><h2>Start over stopped</h2></div><p><strong>Nothing on this device was changed, and you are still signed in as ${email}.</strong></p><p>Erased from your account before it stopped:</p>${list(r.erased)}<p>Could not erase: <strong>${escapeHTML(r.failed)}</strong>${r.message ? ` — ${escapeHTML(r.message)}` : ''}</p><p>Not attempted:</p>${list(r.remaining)}<p class="muted">Trying again is safe — erasing an already-empty section just finds nothing.</p><div class="toolbar"><button type="button" data-action="wipe-retry">Try again</button><button type="button" class="secondary" data-action="wipe-cancel">Close</button></div></div>`;
+  }
+  const busy = wipeConfirm.busy, armed = wipeConfirm.armed;
+  return `<div class="sheet-backdrop"></div><div class="sheet" role="dialog" aria-label="Start over — erase everything"><div class="sheet-head"><h2>Start over — erase everything?</h2></div><p>Signed in as <strong>${email}</strong>. This erases, for this account only:</p><ul><li>Everything in your account in the cloud — shifts, facilities, mileage, vehicles, pay stubs, licenses, CE records, NBCRNA &amp; AANA records, portal connections, certification documents and their uploaded files, settings and addresses.</li><li>Your calendar connections and pairings (Apple, Google, Outlook, QGenda) — you will need to reconnect your calendar afterwards.</li><li>Everything saved on this device.</li></ul><p><strong>No backup is made, and this cannot be undone.</strong> Your sign-in (email &amp; password) still works — the account comes back empty, like a brand-new account.</p>${busy ? `<p><strong>Erasing: ${escapeHTML(wipeConfirm.step || '…')}</strong></p>` : `<div class="form-grid"><label>Type ERASE to confirm<input id="f_wipeText" type="text" value="${escapeHTML(wipeConfirm.text || '')}" autocomplete="off" placeholder="ERASE"></label></div>${wipeConfirm.error ? `<p class="hint">${escapeHTML(wipeConfirm.error)}</p>` : ''}<div class="toolbar"><button type="button" class="danger" data-action="wipe-erase">${armed ? 'Tap again to erase — this cannot be undone' : 'Erase everything'}</button><button type="button" class="secondary" data-action="wipe-cancel">Cancel</button></div>`}</div>`;
+}
+function wipeEraseTap() {
+  if (!wipeConfirm || wipeConfirm.busy) return;
+  const el = $('f_wipeText');
+  const val = el ? String(el.value || '') : (wipeConfirm.text || '');
+  wipeConfirm.text = val;
+  if (val !== 'ERASE') { wipeConfirm.armed = false; wipeConfirm.error = 'Type ERASE (all capitals) to continue — nothing has been erased.'; render(); return; }
+  wipeConfirm.error = '';
+  if (!wipeConfirm.armed) { wipeConfirm.armed = true; render(); return; }
+  wipeEraseRun();
+}
+function wipeEraseSteps() {
+  const uid = cloudUid(), q = '?user_id=eq.' + encodeURIComponent(uid);
+  const del = (t) => () => sbReq('/rest/v1/' + t + q, 'DELETE');
+  return [
+    { label: 'Uploaded certification files', run: wipeEraseStorageFiles },
+    { label: 'Profile (name, employment type, income goal)', run: async () => { await cloudUpdateUserMetadata({ schedule_name: null, employment_type: null, monthly_income_goal: null }); } },
+    { label: 'Shifts', run: del('shifts') },
+    { label: 'Facilities', run: del('facilities') },
+    { label: 'Mileage trips', run: del('mileage_trips') },
+    { label: 'Pay stubs & pay schedules', run: del('pay_stubs') },
+    { label: 'Vehicles', run: del('vehicles') },
+    { label: 'Licenses', run: del('licenses') },
+    { label: 'CE records', run: del('ce_records') },
+    { label: 'NBCRNA record', run: del('nbcrna_profiles') },
+    { label: 'AANA record', run: del('aana_memberships') },
+    { label: 'Portal connections', run: del('portal_connections') },
+    { label: 'Certification documents', run: del('documents') },
+    { label: 'Calendar connections (Apple, Google, Outlook, QGenda)', run: del('calendar_connections') },
+    { label: 'Calendar pairings', run: del('calendar_sync_map') },
+    { label: 'Calendar import pairings', run: del('calendar_import_map') },
+    { label: 'Pending calendar deletions', run: del('calendar_pending_deletions') },
+    { label: 'Calendar sign-in leftovers', run: del('calendar_oauth_states') },
+    { label: 'Sync log', run: del('sync_log') },
+    { label: 'Settings, addresses & feature choices', run: del('user_settings') },
+  ];
+}
+async function wipeEraseStorageFiles() {
+  const uid = cloudUid();
+  const rows = await sbReq('/rest/v1/documents?select=storage_path&user_id=eq.' + encodeURIComponent(uid), 'GET');
+  const paths = new Set();
+  (rows || []).forEach(r => { if (r && r.storage_path) paths.add(r.storage_path); });
+  (db.documents || []).forEach(d => { if (d && d.storagePath) paths.add(d.storagePath); });
+  for (const p of paths) {
+    const res = await sbStorageReq('/storage/v1/object/certification-documents/' + String(p).split('/').map(encodeURIComponent).join('/'), 'DELETE');
+    if (res && res.ok === false) throw new Error('an uploaded file could not be deleted (' + res.status + ')');
+  }
+}
+async function wipeEraseRun() {
+  if (!wipeConfirm || wipeConfirm.busy || !cloudSession) return;
+  wipeConfirm.busy = true; wipeConfirm.error = ''; wipeConfirm.report = null; wipeConfirm.step = 'Getting ready'; render();
+  const steps = wipeEraseSteps();
+  try { await cloudEnsureToken(); } catch (e) {
+    wipeConfirm.busy = false; wipeConfirm.step = '';
+    wipeConfirm.report = { erased: [], failed: 'Your sign-in session (it may have expired — sign in again, then retry)', remaining: steps.map(s => s.label), message: (e && e.message) || '' };
+    render(); return;
+  }
+  const erased = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    wipeConfirm.step = s.label; render();
+    try { await s.run(); erased.push(s.label); } catch (e) {
+      wipeConfirm.busy = false; wipeConfirm.step = '';
+      wipeConfirm.report = { erased: erased.slice(), failed: s.label, remaining: steps.slice(i + 1).map(x => x.label), message: (e && e.message) || String(e) };
+      render(); return;
+    }
+  }
+  // Every server step succeeded — now the device half, mirroring
+  // cloudSignOutAndClearDevice's tail EXCEPT the backup: this tool
+  // exists because the user chose no backup (see the banner above).
+  try { if (cloudSession) await sbAuthReq('/auth/v1/logout', {}, { token: cloudSession.access_token }); } catch (e) {}
+  cloudSession = null; cloudActive = false; cloudOffline = false; cloudError = ''; cloudLastSync = ''; cloudSyncTimes = {}; cloudAuthStatus = ''; cloudPortals = []; portalAttemptFailed = {}; portalHealed = {};
+  wipeConfirm = null;
+  resetDeviceLocalState();
+  cloudPersistSession();
+  try { localStorage.removeItem('crna-hub-last-sync'); } catch (e) {}
+  cloudAuthStatus = 'Start over (testing) is done: this account and this device were erased. Sign in to a fresh, empty account.';
+  render();
+}
+// --- End of TESTING UTILITY block ------------------------------
 function cloudDocumentRow(x) { return { id: x.id, user_id: cloudUid(), cert_type: x.certType || null, file_name: x.fileName || null, storage_path: x.storagePath || null, issue_date: x.issue || null, expiration_date: x.expiry || null, expiry_source: x.expirySource || 'user_entered', storage_status: x.storageStatus || 'local_details_only', uploaded_at: x.uploadedAt || cloudNow() }; }
 async function cloudSaveDocument(rec) { if (!cloudSyncEnabled()) return; try { await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } }
 function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const rec = (db.documents || []).find(x => x.id === entryId); (async () => { try { if (rec && rec.storagePath) { await cloudEnsureToken(); await sbStorageReq('/storage/v1/object/certification-documents/' + rec.storagePath.split('/').map(encodeURIComponent).join('/'), 'DELETE'); } await sbReq('/rest/v1/documents?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
@@ -5867,7 +6022,7 @@ function accountPage() {
   if (!SUPABASE_CONFIGURED) return onboardDirectionHTML(1) + `<section class="panel"><h2>Account</h2><p><strong>Sign-in isn’t available yet.</strong> Everything is saved on this device only.</p></section>` + home + syncSectionHTML() + backupHTML();
   if (!cloudSession) return onboardDirectionHTML(1) + `<section class="panel"><h2>Account — sign in to sync credentials</h2><p class="muted">Create your account, add the name as it appears on your schedule and licenses, pick W-2, 1099, or both, and set a monthly income goal — or skip it.</p><form id="cloudAuthForm"><div class="form-grid">${field('email', 'Email', 'email', '', 'required autocomplete="email"')}${field('password', 'Password', 'password', '', 'required autocomplete="current-password"')}${field('scheduleName', 'Name as it appears on your schedule and licenses', 'text', (db.settings && db.settings.scheduleName) || '', 'placeholder="e.g. C. Martin" autocomplete="off"')}${selectLabeled('employmentType','Employment type',[['','Select employment type'],['w2','W-2 — employed'],['1099','1099 — independent contractor'],['both','Both W-2 and 1099']],employmentType())}${field('incomeGoalStep1', 'Monthly income goal ($) — optional', 'number', monthlyIncomeGoal()>0?monthlyIncomeGoal():'', 'min="0" step="1" placeholder="e.g. 40000"')}</div><div class="toolbar"><button type="button" class="secondary tiny" data-action="skip-income-goal">Skip — I\u2019ll set this later</button></div><p class="muted">No goal yet? No worries — skip it and set one later.</p>${formEnd('Sign in')}</form>${cloudAuthStatus ? `<p class="hint" id="cloudAuthStatus">${escapeHTML(cloudAuthStatus)}</p>` : ''}<div class="toolbar"><button type="button" class="secondary" data-action="cloud-signup">Create account</button></div><p class="muted">If we email you a confirmation, tap it, then sign in.</p></section>` + home + syncSectionHTML() + backupHTML();
   const profileSection = profileSectionHTML();
-  return onboardDirectionHTML(1) + profileSection + `<section class="panel"><h2>Account</h2><p><strong>Signed in as ${escapeHTML(cloudSession.email || '')}.</strong></p>${cloudLastSync ? `<p class="muted">Last sync: ${escapeHTML(cloudFmtWhen(cloudLastSync))}</p>` : ''}${cloudError ? `<p class="muted">Last sync problem: ${escapeHTML(cloudError)}</p>` : ''}<p class="muted">Your records sync with your account automatically — newest edit wins, and nothing one-sided is ever overwritten or deleted.</p><div class="toolbar"><button class="secondary" data-action="cloud-signout">Sign out</button><button class="secondary" data-action="cloud-signout-clear">Sign out &amp; clear this device</button></div></section>` + home + syncSectionHTML() + backupHTML();
+  return onboardDirectionHTML(1) + profileSection + `<section class="panel"><h2>Account</h2><p><strong>Signed in as ${escapeHTML(cloudSession.email || '')}.</strong></p>${cloudLastSync ? `<p class="muted">Last sync: ${escapeHTML(cloudFmtWhen(cloudLastSync))}</p>` : ''}${cloudError ? `<p class="muted">Last sync problem: ${escapeHTML(cloudError)}</p>` : ''}<p class="muted">Your records sync with your account automatically — newest edit wins, and nothing one-sided is ever overwritten or deleted.</p><div class="toolbar"><button class="secondary" data-action="cloud-signout">Sign out</button><button class="secondary" data-action="cloud-signout-clear">Sign out &amp; clear this device</button></div></section>` + home + syncSectionHTML() + backupHTML() + testingToolsMountHTML();
 }
 if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') { try { window.addEventListener('online', () => { if (cloudSession) cloudAutoMerge(); }); } catch (e) {} }
 async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; try { await cloudEnsureToken(); } catch (e) { cloudSession = null; cloudActive = false; cloudPersistSession(); render(); return; } await cloudAutoMerge(); render(); monitorBackgroundSweep(); qgendaBootCheck(); }

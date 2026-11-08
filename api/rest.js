@@ -10,7 +10,11 @@
 //
 // Security notes:
 // - This is NOT an open proxy. Only allowlisted paths are forwarded:
-//   /rest/v1/<table> for the credential/calendar tables below, and
+//   /rest/v1/<table> for the app's own user-scoped tables below (the
+//   credential/calendar tables from migrations 001–006, plus the
+//   record tables migrations 007–012 added for full cloud sync —
+//   sbReq routes those sync calls through this proxy too, and the
+//   testing start-over wipe deletes through it), and
 //   /storage/v1/object/certification-documents/<user-path> for the one
 //   private certification bucket. Everything else is rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client key
@@ -34,8 +38,16 @@ const REST_TABLES = new Set([
   'documents',
   'calendar_connections',
   'calendar_sync_map',
+  'calendar_import_map',
   'calendar_pending_deletions',
+  'calendar_oauth_states',
   'sync_log',
+  'shifts',
+  'facilities',
+  'mileage_trips',
+  'pay_stubs',
+  'vehicles',
+  'user_settings',
 ]);
 
 const METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
