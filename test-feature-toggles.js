@@ -146,7 +146,7 @@ const t = (name, cond) => {
     persist();
   `);
   t('credentials on: page renders the NBCRNA panel', run(`credentialsPage()`).includes('Connect NBCRNA'));
-  t('credentials on: dashboard shows the credential deadlines stat', run(`dashboard()`).includes('Credential deadlines'));
+  t('credentials on: dashboard shows the credential deadlines stat', run(`dashboard()`).includes('Credential & certification deadlines (90 days)'));
   await run(`monitorBackgroundSweep()`);
   const cycleOn = run(`(ensurePortalMonitoring().find(m => m.source === 'nbcrna') || {}).autoAttemptCycle || ''`);
   t('credentials on: background sweep attempts the due public check', cycleOn !== '');
@@ -154,7 +154,7 @@ const t = (name, cond) => {
   const credOff = run(`credentialsPage()`);
   t('credentials off: tab collapses to the off line (no Checks due strip, no panels)',
     credOff.includes('Credential tracking &amp; portal monitoring is off') && !credOff.includes('Checks due') && !credOff.includes('Connect NBCRNA'));
-  t('credentials off: dashboard credential stat collapses', !run(`dashboard()`).includes('Credential deadlines'));
+  t('credentials off: dashboard credential stat collapses', !run(`dashboard()`).includes('Credential & certification deadlines'));
   await run(`monitorBackgroundSweep()`);
   t('credentials off: background sweep stays quiet (no check attempted)',
     run(`(ensurePortalMonitoring().find(m => m.source === 'nbcrna') || {}).autoAttemptCycle || ''`) === '');

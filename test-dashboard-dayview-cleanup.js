@@ -80,7 +80,7 @@ const dash = sandbox.__dash;
 t('Dashboard has no "Credential deadlines" card',
   !dash.includes('<h2>Credential deadlines</h2>') && !dash.includes('No credential deadlines within their reminder windows'));
 t('deadline data still exists for the top reminders / Credentials tab (function kept)',
-  run(`credentialDeadlines().length`) >= 1 && run(`credentialDeadlinesPanel().includes('Credential deadlines')`));
+  run(`credentialDeadlines().length`) >= 1 && run(`credentialDeadlinesPanel().includes('Credential & certification deadlines')`));
 t('Dashboard has no mileage review card, even with a review week due',
   !dash.includes('Mileage review due') && !dash.includes('Mileage review overdue') && !dash.includes('data-action="mileage-review-goto"'));
 t('Mileage tab still renders the weekly review flow',
