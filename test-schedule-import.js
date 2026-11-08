@@ -217,7 +217,11 @@ t('QGenda panel: subscription URL, secret handling, and the sign-in fallback',
   sandbox.__qg.includes('never shown in full') &&
   sandbox.__qg.includes('No QGenda password is ever asked for or stored') &&
   sandbox.__qg.includes('I signed in to QGenda') &&
-  sandbox.__qg.includes('no background sync'));
+  // Copy updated Nov 7, 2026: the connected feed IS auto-checked on
+  // app open now, so the panel says that instead of the old
+  // "no background sync" claim.
+  sandbox.__qg.includes('checks it each time you open CRNA Hub') &&
+  !sandbox.__qg.includes('no background sync'));
 t('QGenda panel carries no roadmap/API scaffolding (Nov 6 sweep)',
   !sandbox.__qg.includes('official QGenda API') &&
   !sandbox.__qg.includes('later step'));
