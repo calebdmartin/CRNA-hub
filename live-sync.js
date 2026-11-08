@@ -648,7 +648,9 @@ async function liveSyncAppleConnect() {
   const idEl = document.getElementById('f_liveAppleId');
   const pwEl = document.getElementById('f_liveApplePw');
   const appleId = idEl ? idEl.value.trim() : '';
-  const password = pwEl ? pwEl.value : '';
+  // Apple shows the password grouped (xxxx-xxxx-xxxx-xxxx); the real
+  // password has no separators, so a paste is cleaned before it is sent.
+  const password = pwEl ? pwEl.value.replace(/[\s-]+/g, '') : '';
   if (!appleId || !password) { alert('Enter your Apple ID and the app-specific password.'); return; }
   // The password is cleared from the field now but kept in memory only
   // until this connect attempt resolves (it is needed again if iCloud
@@ -919,7 +921,7 @@ function liveSyncProviderCard(provider) {
     // PREVIEW STAND-IN — a web page cannot use EventKit, so this
     // preview connects through CalDAV with a one-time app-specific
     // password instead. It is never presented as the designed path.
-    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div><div class="muted">Connect with a one-time <strong>app-specific password</strong>: create one in your Apple account (appleid.apple.com → Sign-In and Security → App-Specific Passwords), then enter it here once. It is stored encrypted and never shown again. Never enter your normal Apple password here.</div><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
+    return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div><div class="item-actions"><a class="button" href="https://appleid.apple.com/account/manage/section/security" target="_blank" rel="noopener">Create it at Apple →</a></div><ol class="muted"><li>Tap the button and sign in at Apple.</li><li>Generate an app-specific password named “CRNA Hub”.</li><li>Paste it here.</li></ol><p class="muted">Beta note: this password step is only for the web version — in the final app you’ll just tap Allow when your iPhone asks.</p><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><p class="muted">Stored encrypted and never shown again. Never enter your normal Apple password here.</p><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
   }
   return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
 }
