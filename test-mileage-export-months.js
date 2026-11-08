@@ -141,7 +141,7 @@ const t = (name, cond) => {
   const csv = downloads[0].parts.join('');
   const lines = csv.split('\r\n');
   t('CSV header matches the existing mileage columns',
-    lines[0] === 'date,facility,purpose,miles,tripType,oneWayMiles,milesSource,origin,hotelAddress,status');
+    lines[0] === 'date,facility,purpose,miles,tripType,oneWayMiles,milesSource,origin,hotelAddress,status,vehicle');
   t('CSV has exactly the 4 selected confirmed rows', lines.length === 5);
   t('CSV rows are date-sorted and carry the right dates',
     lines[1].startsWith(FX.prev2) && lines[4].startsWith(FX.cur));
@@ -193,7 +193,7 @@ const t = (name, cond) => {
     !appSrc.includes(`exportCsv('crna-hub-mileage.csv'`) && !appSrc.includes('crna-hub-mileage.csv'));
   t('export-mileage now opens the picker', appSrc.includes(`action==='export-mileage'){mileageExportInit();mileageExportOpen=true`));
   t('download goes through the selection', appSrc.includes('mileageExportDownload()'));
-  t('service worker cache bumped to v67', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v77'));
+  t('service worker cache bumped to v67', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v78'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();
