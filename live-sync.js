@@ -376,10 +376,21 @@ function liveSyncApplyChanges(provider, data) {
     } else if (ch.action === 'update' && ch.shift) {
       const s = ch.shift, x = db.shifts.find((y) => y.id === s.id);
       if (!x) return;
+      // Newest edit wins (Nov 7, 2026) — the rule stated at the top of
+      // this file. When the user's local copy carries a STRICTLY NEWER
+      // edit stamp than the incoming provider copy, the "update" is
+      // the pre-edit version coming back around; applying it would
+      // silently revert a manual edit (type, pay, date, facility).
+      // Skip the field overwrite in that case — the source merge and
+      // the updated count below still run. When either stamp is
+      // missing, the provider copy applies as before.
+      const localNewer = !!(x.updatedAt && s.updatedAt && String(x.updatedAt) > String(s.updatedAt));
+      if (!localNewer) {
       x.date = s.date; x.facility = s.facility; x.type = s.type;
       if (s.pay) { x.pay = String(s.pay); x.incomplete = false; }
       x.note = s.note || '';
       x.source = s.source || x.source || ('calendar-' + provider); x.updatedAt = s.updatedAt || x.updatedAt;
+      }
       if (typeof shiftSourcesList === 'function') { const sl = shiftSourcesList(x); const ns = s.source || ('calendar-' + provider); if (!sl.includes(ns)) { sl.push(ns); x.sources = sl; } }
       updated++;
     } else if (ch.action === 'delete' && ch.shiftId) {

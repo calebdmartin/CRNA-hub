@@ -254,7 +254,7 @@ t('calendar shows paycheck chips labelled by agency, amounts calculated from shi
 t('calendar carries the paystub disclaimer on paychecks',
   sandbox.__cal.includes('calculated from your shifts for each pay period'));
 t('dashboard upcoming-paychecks panel lists both agencies',
-  sandbox.__dash.includes('Upcoming paychecks (estimated)') &&
+  sandbox.__dash.includes('Upcoming paychecks</h2>') &&
   sandbox.__dash.includes('Premier Anesthesia Group') &&
   sandbox.__dash.includes('Holzer Locums'));
 t('estimated paychecks are NOT added into the raw C/P shift-income totals',
@@ -380,13 +380,22 @@ t('income table note spells out the swap with Caleb\'s numbers (+$1,257.50 vs pr
   sandbox.__pcCSP.includes('$12,757.50') &&
   sandbox.__pcCSP.includes('$11,500.00') &&
   sandbox.__pcCSP.includes('+$1,257.50'));
-t('upcoming panel: Nov 10 actual from pay stub; Nov 24 headline is the full $27,075.00 with the proposed share noted',
+t('upcoming panel condensed (Nov 7, 2026): one line per check — date, period range, prominent total, pill',
+  sandbox.__pcUpHTML.includes('Nov 10, 2026') &&
+  sandbox.__pcUpHTML.includes('(Oct 19 – Nov 1)') &&
   sandbox.__pcUpHTML.includes('$12,757.50') &&
-  sandbox.__pcUpHTML.includes('actual') &&
-  sandbox.__pcUpHTML.includes('from pay stub') &&
-  sandbox.__pcUpHTML.includes('Estimated $27,075.00 gross') &&
-  sandbox.__pcUpHTML.includes('includes $17,700.00 from proposed shifts') &&
+  sandbox.__pcUpHTML.includes('>actual<') &&
+  sandbox.__pcUpHTML.includes('Nov 24, 2026') &&
+  sandbox.__pcUpHTML.includes('(Nov 2 – Nov 15)') &&
+  sandbox.__pcUpHTML.includes('$27,075.00') &&
+  !sandbox.__pcUpHTML.includes('Estimated $27,075.00 gross') &&
+  !sandbox.__pcUpHTML.includes('includes $17,700.00 from proposed shifts') &&
   !sandbox.__pcUpHTML.includes('$12,757.50 net'));
+t('the row detail moved into the paycheck editor: Nov 24 breakdown; Nov 10 stub source-of-truth',
+  run(`paycheckEditorHTML(paystubOccurrences(db.payStubs.find(s=>s.id==='pc'),'2026-11-01','2026-11-30').find(o=>o.date==='2026-11-24'))`).includes('Estimated $27,075.00 gross') &&
+  run(`paycheckEditorHTML(paystubOccurrences(db.payStubs.find(s=>s.id==='pc'),'2026-11-01','2026-11-30').find(o=>o.date==='2026-11-24'))`).includes('includes $17,700.00 from proposed shifts') &&
+  run(`paycheckEditorHTML(paystubOccurrences(db.payStubs.find(s=>s.id==='pc'),'2026-11-01','2026-11-30').find(o=>o.date==='2026-11-10'))`).includes('from pay stub') &&
+  run(`paycheckEditorHTML(paystubOccurrences(db.payStubs.find(s=>s.id==='pc'),'2026-11-01','2026-11-30').find(o=>o.date==='2026-11-10'))`).includes('source of truth'));
 // ---------- Month headline: partial coverage + no schedule (Nov 7) ----------
 // One voice per month (Caleb, Nov 7, 2026): with a pay schedule, the
 // headline is what LANDS in the month; facilities with no schedule
