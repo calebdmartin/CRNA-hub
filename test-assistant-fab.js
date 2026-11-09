@@ -232,7 +232,7 @@ t('fixture: next paycheck total is $27,075', run(`paystubOccurrences(db.payStubs
     css.includes('.assistant-sheet .chat-form{flex:0 0 auto}') && css.includes('.assistant-sheet .chat{flex:1 1 auto'));
   const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   t('keyboard handling wired (visualViewport pins sheet height)', appSrc.includes('visualViewport') && appSrc.includes("e.target.id==='assistantInput'"));
-  t('service worker cache bumped to v80', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v100'));
+  t('service worker cache bumped to v80', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v101'));
 
   console.log(fails ? `\n${fails} FAILURES` : '\nALL PASS');
 })();

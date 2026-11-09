@@ -21,7 +21,11 @@ import {
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v4, Nov 9, 2026: the
+// Bump whenever the parse semantics change (v5, Nov 9, 2026: feed
+// housekeeping events — the "AutoSync from QGenda" sync markers —
+// are filtered out and counted instead of landing as raw rows, and
+// the name cleaner drops bracketed assignee annotations in their
+// partial forms too ("[Caleb ]" / "[Martin]" remnants); v4, Nov 9, 2026: the
 // name cleaner also drops bracket groups the assignee strip empties
 // — QGenda appends the assignee in brackets, and the leftover
 // "[ ]" was riding into shift codes and calendar chips; v3, Nov 8, 2026: the
@@ -33,7 +37,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 4;
+export const QGENDA_PARSER_VERSION = 5;
 
 export interface QgendaShift {
   date: string;
@@ -149,39 +153,85 @@ export function cleanQgendaShiftName(raw: string, userName = ""): string {
     phrases.add(parts.join(" "));
     phrases.add([...parts].reverse().join(" "));
   }
-  for (const phrase of phrases) {
-    s = s.replace(
-      new RegExp(escapeRegExp(phrase).replace(/\s+/g, "[\\s,]+"), "gi"),
+  const stripNames = (t: string): string => {
+    let out = t;
+    for (const phrase of phrases) {
+      out = out.replace(
+        new RegExp(escapeRegExp(phrase).replace(/\s+/g, "[\\s,]+"), "gi"),
+        " ",
+      );
+    }
+    for (const part of parts) {
+      out = out.replace(new RegExp(`\\b${escapeRegExp(part)}\\b`, "gi"), " ");
+    }
+    return out;
+  };
+  // Date noise.
+  const stripDates = (t: string): string => {
+    let out = t;
+    out = out.replace(/\b\d{4}-\d{2}-\d{2}\b/g, " ");
+    out = out.replace(/\b\d{4}[/.]\d{1,2}[/.]\d{1,2}\b/g, " ");
+    out = out.replace(/\b\d{1,2}[/.]\d{1,2}[/.](?:\d{2}|\d{4})\b/g, " ");
+    out = out.replace(
+      new RegExp(`\\b(?:${MONTHS_RE})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, "gi"),
       " ",
     );
-  }
-  for (const part of parts) {
-    s = s.replace(new RegExp(`\\b${escapeRegExp(part)}\\b`, "gi"), " ");
-  }
-  // Date noise.
-  s = s.replace(/\b\d{4}-\d{2}-\d{2}\b/g, " ");
-  s = s.replace(/\b\d{4}[/.]\d{1,2}[/.]\d{1,2}\b/g, " ");
-  s = s.replace(/\b\d{1,2}[/.]\d{1,2}[/.](?:\d{2}|\d{4})\b/g, " ");
+    out = out.replace(
+      new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS_RE})\\.?\\b`, "gi"),
+      " ",
+    );
+    out = out.replace(
+      /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)\b/gi,
+      " ",
+    );
+    out = out.replace(/\b(?:19|20)\d{2}\b/g, " ");
+    return out;
+  };
+  // Bracket groups (parser v5): QGenda appends the assignee in
+  // brackets ("... [Caleb Martin]") — the annotation is never part
+  // of the shift's name, but it survives the strips above whenever
+  // the name the client provided covers only part of what QGenda
+  // printed: the name on file is "Martin" and the bracket holds the
+  // full "[Caleb Martin]" (v4 left "[Caleb ]"), or the bracket holds
+  // just the last name ("[Martin]"). So bracket groups are judged
+  // on their own content and dropped when they ARE the annotation:
+  //   (a) the content is nothing but the assignee's name parts —
+  //       first, last, full, reversed, or initials — in any subset;
+  //   (b) the name strips removed a name part from the content and
+  //       what remains is only name-like words (the rest of the
+  //       assignee's name the fetch never provided);
+  //   (c) the strips emptied the group of every letter and digit
+  //       (the v4 "[ ]" rule).
+  // A group whose content the name strips never touched and that
+  // carries other text ("[OR 2]", "[Night Float]") is part of the
+  // name and is restored verbatim.
+  const partSet = new Set(parts.map((p) => p.toLowerCase()));
+  const bracketDecision = (content: string): string => {
+    const toks = content.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
+    const isPartTok = (t: string) =>
+      partSet.has(t.toLowerCase().replace(/\.$/, "")) ||
+      /^[A-Za-z]\.?$/.test(t);
+    if (toks.length && toks.every(isPartTok)) return " ";
+    const nameStripped = stripNames(content).replace(/\s+/g, " ").trim();
+    if (!/[A-Za-z0-9]/.test(stripDates(nameStripped))) return " ";
+    if (
+      nameStripped !== content.replace(/\s+/g, " ").trim() &&
+      /^[A-Za-z][A-Za-z\s,]*$/.test(nameStripped)
+    ) {
+      return " ";
+    }
+    return "[" + content + "]";
+  };
+  const bracketGroups: string[] = [];
+  s = s.replace(/\[[^\[\]]*\]/g, (m) => {
+    bracketGroups.push(m.slice(1, -1));
+    return `\u0001${bracketGroups.length - 1}\u0002`;
+  });
+  s = stripDates(stripNames(s));
   s = s.replace(
-    new RegExp(`\\b(?:${MONTHS_RE})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, "gi"),
-    " ",
+    /\u0001(\d+)\u0002/g,
+    (_m, i) => bracketDecision(bracketGroups[Number(i)]),
   );
-  s = s.replace(
-    new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${MONTHS_RE})\\.?\\b`, "gi"),
-    " ",
-  );
-  s = s.replace(
-    /\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)\b/gi,
-    " ",
-  );
-  s = s.replace(/\b(?:19|20)\d{2}\b/g, " ");
-  // Bracket groups the strips above emptied: QGenda appends the
-  // assignee in brackets ("... [Caleb Martin]"), so once the name is
-  // stripped the group holds no letters or digits and is pure
-  // punctuation noise — drop it, or it rides into the saved code
-  // and the calendar chip ("HOLZ - G Main (8) [ ]"). A bracket group
-  // still carrying real text is part of the name and stays.
-  s = s.replace(/\[[^\[\]]*\]/g, (m) => /[A-Za-z0-9]/.test(m) ? m : " ");
   s = s.replace(/\s+/g, " ").trim();
   // Leading/trailing separators (possibly several in a row once a
   // name token has been removed: "Martin - X" -> "- X" -> "X").
@@ -563,6 +613,31 @@ function splitQgendaSummary(
   return { code, task };
 }
 
+// Feed housekeeping (parser v5, Nov 9, 2026): a QGenda subscription
+// feed carries sync bookkeeping events alongside the assignments —
+// their SUMMARY is a marker like "AutoSync from QGenda: 2:11PM" (the
+// time is when that sync ran). They are not shifts, but v3's
+// no-silent-skips rule turned every dated event into a raw row, so
+// the marker surfaced in Caleb's preview as a fake shift and the
+// clarification prompt asked him what "AutoSync from QGenda:
+// 2:11PM" was ("I have no idea what auto sync is on Qgenda"). The
+// filter is deliberately narrow and marker-based: it matches the
+// explicit housekeeping signature only — the "AutoSync from
+// QGenda" phrase anywhere in the summary, or a leading "AutoSync"
+// marker — never a "doesn't look like a shift" judgement. A real
+// assignment with an unusual name (even a non-assignment with no
+// marker, like "Team lunch") still lands as a raw row exactly as
+// v3 promised; the trade-off is documented in the tests. Filtered
+// events are counted (droppedHousekeeping) so the fetch stays
+// auditable: eventCount = rows + droppedHousekeeping +
+// droppedNoDate. (The client mirrors this test for stale previews —
+// isHousekeepingShiftName in app.js; keep the two in sync.)
+export function isQgendaHousekeepingSummary(summary: string): boolean {
+  const s = String(summary || "").trim();
+  if (!s) return false;
+  return /\bautosync\s+from\s+qgenda\b/i.test(s) || /^autosync\b/i.test(s);
+}
+
 // Parse a QGenda ICS feed into shift rows with the same
 // facilities-driven parser the calendar sync uses, so a QGenda event
 // and a work-calendar event for the same shift read identically.
@@ -572,8 +647,12 @@ function splitQgendaSummary(
 // preview as an unclassified row — its name exactly as read, its
 // facility from its code prefix when the summary carries one — so
 // the clarification prompt asks about it like any other unread
-// code. (An event with no date still cannot become a row: there is
-// nothing to place on a calendar.) Unknown facilities come back
+// code. The one exception (v5): feed housekeeping events (the
+// "AutoSync from QGenda" sync markers — see
+// isQgendaHousekeepingSummary) are filtered and counted, never
+// rowed. (An event with no date still cannot become a row: there is
+// nothing to place on a calendar — it is counted in droppedNoDate.)
+// Unknown facilities come back
 // with facilityKnown false and pay blank — the client reports them
 // as ask-first suggestions, never as priced shifts.
 export function parseQgendaICS(
@@ -584,12 +663,16 @@ export function parseQgendaICS(
   shifts: QgendaShift[];
   unknownFacilities: string[];
   eventCount: number;
+  droppedHousekeeping: number;
+  droppedNoDate: number;
 } {
   const userName = typeof opts?.name === "string" ? opts.name : "";
   const clean = unfoldIcs(icsText);
   const blocks = clean.split(/BEGIN:VEVENT/i).slice(1);
   const shifts: QgendaShift[] = [];
   const unknown = new Map<string, number>();
+  let droppedHousekeeping = 0;
+  let droppedNoDate = 0;
   for (const b of blocks) {
     const getRaw = (k: string): string => {
       const m = b.match(new RegExp(k + "(?:;[^:]*)?:(.*)", "i"));
@@ -599,8 +682,18 @@ export function parseQgendaICS(
     const dtStartRaw = getRaw("DTSTART");
     const dtEndRaw = getRaw("DTEND");
     const date = icsDateToIso(dtStartRaw);
-    if (!date) continue;
+    if (!date) {
+      droppedNoDate++;
+      continue;
+    }
     const summary = get("SUMMARY").replace(/\n/g, " ");
+    // Housekeeping markers are feed bookkeeping, not assignments:
+    // filtered here, before any parse path can row them, and
+    // counted so the fetch totals stay auditable.
+    if (isQgendaHousekeepingSummary(summary)) {
+      droppedHousekeeping++;
+      continue;
+    }
     const location = get("LOCATION").replace(/\n/g, " ");
     const description = get("DESCRIPTION");
     // CATEGORIES entries are comma-separated in the raw value;
@@ -908,5 +1001,11 @@ export function parseQgendaICS(
       unknown.set(facility, (unknown.get(facility) ?? 0) + 1);
     }
   }
-  return { shifts, unknownFacilities: [...unknown.keys()], eventCount: blocks.length };
+  return {
+    shifts,
+    unknownFacilities: [...unknown.keys()],
+    eventCount: blocks.length,
+    droppedHousekeeping,
+    droppedNoDate,
+  };
 }

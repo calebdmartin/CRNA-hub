@@ -396,7 +396,128 @@ function paystubShiftClaimTier(stub,x){
   if(ak&&fk&&(ak===fk||(ak.length>=3&&fk.length>=3&&(ak.includes(fk)||fk.includes(ak)))))return 2;
   return 3;
 }
-function paystubShiftClaims(){const claims=new Map();const stubs=(db.payStubs||[]).slice().sort((a,b)=>String(a.agency||'').localeCompare(String(b.agency||''))||String(a.id||'').localeCompare(String(b.id||'')));const shifts=(db.shifts||[]).filter(x=>x&&x.id&&psValidISO(x.date));for(const tier of [1,2,3]){for(const stub of stubs){if(!stub.id)continue;for(const x of shifts){if(claims.has(x.id))continue;if(paystubShiftClaimTier(stub,x)===tier)claims.set(x.id,stub.id)}}}return claims}
+// --- One effective schedule per payer (Nov 9, 2026) ---
+// One payer can hold more than one stored record. A pay schedule
+// entered at import is saved under the name the import knew — the
+// facility ("Holzer"); a pay stub uploaded later is saved under
+// the payer named on the document ("Premier Anesthesia Group,
+// PC"). The save flows' one-schedule-per-agency guard matches the
+// agency string exactly, so the two records never saw each other —
+// and each generated its OWN paycheck series: on Nov 10 the stub's
+// actual ($12,757.50) and the schedule's estimate ($11,000) stacked
+// as two chips, and the month headline counted both ($49,957.50
+// for a month whose real figure is $39,832.50). Caleb's rule: "If
+// a paystub is uploaded it should always be the default."
+// The fix is a read-time unification — stored records are never
+// rewritten, so nothing needs migrating and the result is the same
+// whichever flow ran first: records that are the same payer
+// collapse into ONE effective schedule for everything the paycheck
+// engine does (shift claims, occurrences on every surface,
+// reconciliations). Merging money needs stricter evidence than
+// the forgiving matching claims use — two DIFFERENT agencies can
+// pay for the same facility, so a shared facility never links
+// records on its own. Two records are the same payer when their
+// AGENCY names identify them (equal, or one containing the other —
+// the same payer named slightly differently on two documents), or
+// when their series are identical (same frequency, paydays on the
+// same rhythm, anchor periods tiling identically) and nothing
+// contradicts it: at most one of them states an amount (two
+// uploaded stubs with no name in common stay two payers), and
+// they do not resolve to two different facilities. The bug pair
+// links by series: the import record's agency is just the facility
+// placeholder, but its cadence and period tiling are the stub's
+// own. In a unified group the record that states an amount — a
+// real stub — is canonical: its agency label, pay date, period
+// anchor and actual win (the stub is the default); blanks fill
+// from the others, per-check corrections from every record carry
+// over, and a second stub's amount is carried as a stub actual
+// for its own payday, so two stubs for one payer both show as
+// actuals. The Pay schedules list still shows the stored records
+// as saved; only the paycheck math unifies them.
+function paystubNameKey(v){return String(v||'').trim().toLowerCase().replace(/\s+/g,' ')}
+function paystubFacilityOf(rec){
+  if(!rec)return null;
+  try{return facilityByNameOrAlias(String(rec.facility||'').trim())||facilityByNameOrAlias(String(rec.agency||'').trim())||null}catch(e){return null}
+}
+function paystubPaydaysCongruent(a,b){
+  const e=String(a.payDate)<=String(b.payDate)?a:b,l=e===a?b:a;
+  let d=e.payDate,guard=0;
+  while(d&&d<l.payDate&&guard++<400){const n=paystubStepDate(d,e.frequency,+String(e.payDate).slice(8,10));if(!n||n<=d)return false;d=n}
+  return d===l.payDate;
+}
+function paystubSameTiling(a,b){
+  const pa=paystubAnchorPeriod(a),pb=paystubAnchorPeriod(b);if(!pa||!pb)return false;
+  const delta=Math.round((new Date(String(b.payDate)+'T12:00:00')-new Date(String(a.payDate)+'T12:00:00'))/864e5);
+  return psAddDays(pa.start,delta)===pb.start&&psAddDays(pa.end,delta)===pb.end;
+}
+function paystubSamePayer(a,b){
+  if(!a||!b)return false;
+  if(a.id&&b.id&&a.id===b.id)return true;
+  const an=paystubNameKey(a.agency),bn=paystubNameKey(b.agency);
+  if(an&&bn&&(an===bn||(an.length>=3&&bn.length>=3&&(an.includes(bn)||bn.includes(an)))))return true;
+  if(paystubStubActual(a)&&paystubStubActual(b))return false;
+  const fa=paystubFacilityOf(a),fb=paystubFacilityOf(b);
+  if(fa&&fb&&fa.id!==fb.id)return false;
+  if(!normalizePayFrequency(a.frequency)||a.frequency!==b.frequency)return false;
+  if(!psValidISO(a.payDate)||!psValidISO(b.payDate))return false;
+  return paystubPaydaysCongruent(a,b)&&paystubSameTiling(a,b);
+}
+function paystubUnifiedRecord(group){
+  const sorted=group.slice().sort((a,b)=>{
+    const aa=paystubStubActual(a)?1:0,bb=paystubStubActual(b)?1:0;
+    if(aa!==bb)return bb-aa;
+    if(aa)return String(b.payDate||'').localeCompare(String(a.payDate||''));
+    return String(a.id||'').localeCompare(String(b.id||''));
+  });
+  const base={...sorted[0]};
+  const rest=sorted.slice(1);
+  for(const r of rest){
+    if(!String(base.facility||'').trim()){
+      if(String(r.facility||'').trim())base.facility=r.facility;
+      else{const f=paystubFacilityOf(r);if(f)base.facility=f.name}
+    }
+    if(!psValidISO(base.periodStart)&&psValidISO(r.periodStart))base.periodStart=r.periodStart;
+    if(!psValidISO(base.periodEnd)&&psValidISO(r.periodEnd))base.periodEnd=r.periodEnd;
+  }
+  const ovs={};
+  for(const r of rest)if(r.occOverrides&&typeof r.occOverrides==='object')for(const k of Object.keys(r.occOverrides))if(!(k in ovs))ovs[k]=r.occOverrides[k];
+  if(base.occOverrides&&typeof base.occOverrides==='object')for(const k of Object.keys(base.occOverrides))ovs[k]=base.occOverrides[k];
+  if(Object.keys(ovs).length)base.occOverrides=ovs;else delete base.occOverrides;
+  // Another stub in the group (same payer, a different check): its
+  // amount is carried as a stub actual for its own payday
+  // (stubActualDates), so two uploaded stubs both show as actuals
+  // on the one series — stub-backed like the canonical stub's own
+  // check, not a per-check correction the editor can clear.
+  const sads={};
+  for(const r of rest){
+    const act=paystubStubActual(r);
+    if(act&&psValidISO(r.payDate)&&r.payDate!==base.payDate)sads[r.payDate]=String(act.amount);
+  }
+  if(Object.keys(sads).length)base.stubActualDates=sads;
+  base.mergedFrom=group.map(r=>r.id||'');
+  return base;
+}
+function paystubSchedules(){
+  const recs=(db.payStubs||[]).filter(x=>x&&typeof x==='object');
+  if(recs.length<2)return recs.slice();
+  const parent=new Map();
+  const find=id=>{let p=parent.get(id);while(parent.get(p)!==p)p=parent.get(p);let c=id;while(parent.get(c)!==p){const n=parent.get(c);parent.set(c,p);c=n}return p};
+  for(const r of recs)if(r.id)parent.set(r.id,r.id);
+  for(let i=0;i<recs.length;i++)for(let j=i+1;j<recs.length;j++){
+    const a=recs[i],b=recs[j];if(!a.id||!b.id)continue;
+    if(paystubSamePayer(a,b)){const ra=find(a.id),rb=find(b.id);if(ra!==rb)parent.set(ra,rb)}
+  }
+  const groups=new Map();
+  for(const r of recs){
+    const k=r.id?find(r.id):('noid:'+recs.indexOf(r));
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(r);
+  }
+  const out=[];
+  for(const g of groups.values())out.push(g.length===1?g[0]:paystubUnifiedRecord(g));
+  return out;
+}
+function paystubShiftClaims(){const claims=new Map();const stubs=paystubSchedules().slice().sort((a,b)=>String(a.agency||'').localeCompare(String(b.agency||''))||String(a.id||'').localeCompare(String(b.id||'')));const shifts=(db.shifts||[]).filter(x=>x&&x.id&&psValidISO(x.date));for(const tier of [1,2,3]){for(const stub of stubs){if(!stub.id)continue;for(const x of shifts){if(claims.has(x.id))continue;if(paystubShiftClaimTier(stub,x)===tier)claims.set(x.id,stub.id)}}}return claims}
 // One period's shifts for one stub, priced exactly like the C/P totals
 // (same isBillableShift pricing — call rates and all — and the same
 // unpriced rule: an unpriced shift is counted and flagged, never
@@ -444,13 +565,20 @@ function paystubStubActual(stub){if(!stub)return null;const g=rateOrNull(stub.gr
 // its shift sum. delta is what the swap moves a total by; deltaC uses
 // the confirmed shift sum, deltaP the proposed-inclusive one, matching
 // what each total actually contained for that period.
-function paystubReconciliations(){const out=[];const claims=paystubShiftClaims();for(const stub of (db.payStubs||[])){const act=paystubStubActual(stub);const anchor=paystubAnchorPeriod(stub);if(act&&anchor){const totals=paystubPeriodTotals(stub,anchor.start,anchor.end,claims);out.push({stubId:stub.id||'',agency:stub.agency||'',facility:stub.facility||'',payday:stub.payDate||'',periodStart:anchor.start,periodEnd:anchor.end,actual:act.amount,actualBasis:act.basis,shiftSum:totals.gross,shiftSumP:totals.grossWithProposed,shiftCount:totals.shiftCount,delta:Math.round((act.amount-totals.gross)*100)/100,deltaP:Math.round((act.amount-totals.grossWithProposed)*100)/100})}
+function paystubReconciliations(){const out=[];const claims=paystubShiftClaims();for(const stub of paystubSchedules()){const act=paystubStubActual(stub);const anchor=paystubAnchorPeriod(stub);if(act&&anchor){const totals=paystubPeriodTotals(stub,anchor.start,anchor.end,claims);out.push({stubId:stub.id||'',agency:stub.agency||'',facility:stub.facility||'',payday:stub.payDate||'',periodStart:anchor.start,periodEnd:anchor.end,actual:act.amount,actualBasis:act.basis,shiftSum:totals.gross,shiftSumP:totals.grossWithProposed,shiftCount:totals.shiftCount,delta:Math.round((act.amount-totals.gross)*100)/100,deltaP:Math.round((act.amount-totals.grossWithProposed)*100)/100})}
   // Entered actuals (calendar corrections, Nov 7, 2026): the same
   // reconciliation, one check each — the entered amount replaces that
   // period's shift sum in the YTD figures, exactly like a stub actual,
   // and teaches the schedule nothing (no forward rule is built).
   const ovs=(stub.occOverrides&&typeof stub.occOverrides==='object')?stub.occOverrides:{};
-  for(const sd of Object.keys(ovs)){if(sd===stub.payDate)continue;const oa=rateOrNull(ovs[sd]&&ovs[sd].actual);if(oa==null||oa<=0||!anchor)continue;const period=paystubPeriodForPayday(stub,sd,anchor);if(!period)continue;const totals=paystubPeriodTotals(stub,period.start,period.end,claims);out.push({stubId:stub.id||'',agency:stub.agency||'',facility:stub.facility||'',payday:psValidISO(ovs[sd].payDate)||sd,periodStart:period.start,periodEnd:period.end,actual:oa,actualBasis:'entered',shiftSum:totals.gross,shiftSumP:totals.grossWithProposed,shiftCount:totals.shiftCount,delta:Math.round((oa-totals.gross)*100)/100,deltaP:Math.round((oa-totals.grossWithProposed)*100)/100})}}return out}
+  for(const sd of Object.keys(ovs)){if(sd===stub.payDate)continue;const oa=rateOrNull(ovs[sd]&&ovs[sd].actual);if(oa==null||oa<=0||!anchor)continue;const period=paystubPeriodForPayday(stub,sd,anchor);if(!period)continue;const totals=paystubPeriodTotals(stub,period.start,period.end,claims);out.push({stubId:stub.id||'',agency:stub.agency||'',facility:stub.facility||'',payday:psValidISO(ovs[sd].payDate)||sd,periodStart:period.start,periodEnd:period.end,actual:oa,actualBasis:'entered',shiftSum:totals.gross,shiftSumP:totals.grossWithProposed,shiftCount:totals.shiftCount,delta:Math.round((oa-totals.gross)*100)/100,deltaP:Math.round((oa-totals.grossWithProposed)*100)/100})}
+  // Carried stub actuals on a unified schedule (Nov 9, 2026): a
+  // second stub for the same payer reconciles its own period the
+  // same way — its actual replaces that period's shift sum in the
+  // year figures, exactly like the canonical stub's own check.
+  const sads=(stub.stubActualDates&&typeof stub.stubActualDates==='object')?stub.stubActualDates:{};
+  for(const sd of Object.keys(sads)){if(sd===stub.payDate)continue;const sa=rateOrNull(sads[sd]);if(sa==null||sa<=0||!anchor)continue;const period=paystubPeriodForPayday(stub,sd,anchor);if(!period)continue;const totals=paystubPeriodTotals(stub,period.start,period.end,claims);out.push({stubId:stub.id||'',agency:stub.agency||'',facility:stub.facility||'',payday:sd,periodStart:period.start,periodEnd:period.end,actual:sa,actualBasis:'gross',shiftSum:totals.gross,shiftSumP:totals.grossWithProposed,shiftCount:totals.shiftCount,delta:Math.round((sa-totals.gross)*100)/100,deltaP:Math.round((sa-totals.grossWithProposed)*100)/100})}
+  }return out}
 // yearIncomeSplit with stubbed periods reconciled — presentation layer
 // only (the raw engine and the stored shifts are untouched). A period
 // counts as realized once it has fully ended (period end <= today);
@@ -472,15 +600,15 @@ function reconciledYearSplit(y,todayStr){const split=yearIncomeSplit(y,todayStr)
 // source of truth, so an override keyed to the stub's payday is never
 // applied over it (the editor refuses to create one, too).
 function paystubOccurrenceOverride(stub,schedDate){if(!stub||!stub.occOverrides||typeof stub.occOverrides!=='object')return null;const o=stub.occOverrides[schedDate];return o&&typeof o==='object'?o:null}
-function paystubStubBackedOccurrence(stub,schedDate){return !!(stub&&schedDate&&schedDate===stub.payDate&&paystubStubActual(stub))}
+function paystubStubBackedOccurrence(stub,schedDate){if(!stub||!schedDate)return false;if(schedDate===stub.payDate&&paystubStubActual(stub))return true;return !!(stub.stubActualDates&&typeof stub.stubActualDates==='object'&&rateOrNull(stub.stubActualDates[schedDate])!=null)}
 function paystubOccurrences(stub,fromISO,toISO,claimsIn){const out=[];if(!stub||!psValidISO(stub.payDate)||!normalizePayFrequency(stub.frequency))return out;const claims=claimsIn||paystubShiftClaims();const anchor=paystubAnchorPeriod(stub);const act=paystubStubActual(stub);const anchorDay=+stub.payDate.slice(8,10);
 // Generate over a WIDENED scheduled window and filter on the DISPLAY
 // date: a one-off pay-date correction can pull a check across a month
 // boundary in either direction, and the check belongs to the month it
 // now lands in.
-const lo=psAddDays(fromISO,-70),hi=psAddDays(toISO,70);let d=stub.payDate,guard=0;while(d>lo&&guard++<400){const p=paystubStepBackDate(d,stub.frequency,anchorDay);if(!p||p>=d)break;d=p}guard=0;while(d<=hi&&guard++<300){const period=anchor?paystubPeriodForPayday(stub,d,anchor):null;const totals=period?paystubPeriodTotals(stub,period.start,period.end,claims):{gross:0,grossWithProposed:0,total:0,shiftCount:0,pricedCount:0,unpriced:0};const stubBacked=!!(act&&d===stub.payDate);const ov=stubBacked?null:paystubOccurrenceOverride(stub,d);let date=d,enteredActual=null;if(ov){const od=psValidISO(ov.payDate);if(od)date=od;const oa=rateOrNull(ov.actual);if(oa!=null&&oa>0)enteredActual=oa}const isActual=stubBacked||enteredActual!=null;if(date>=fromISO&&date<=toISO)out.push({date,schedDate:d,dateOverridden:date!==d,periodStart:period?period.start:'',periodEnd:period?period.end:'',gross:totals.gross,grossWithProposed:totals.grossWithProposed,total:totals.total,unpriced:totals.unpriced,shiftCount:totals.shiftCount,agency:stub.agency||'',facility:stub.facility||'',stubId:stub.id||'',isActual,actual:stubBacked?act.amount:enteredActual,actualBasis:stubBacked?act.basis:(enteredActual!=null?'entered':''),enteredActual:enteredActual!=null,stubBacked});const n=paystubStepDate(d,stub.frequency,anchorDay);if(!n||n<=d)break;d=n}return out}
-function paystubOccurrencesOn(dateISO){const claims=paystubShiftClaims();const all=[];for(const s of (db.payStubs||[]))all.push(...paystubOccurrences(s,dateISO,dateISO,claims));all.sort((a,b)=>String(a.agency).localeCompare(String(b.agency)));return all}
-function paystubOccurrencesInMonth(prefix){if(!featureOn('featurePaychecks'))return[];const y=+prefix.slice(0,4),m=+prefix.slice(5,7),from=prefix+'-01',to=prefix+'-'+String(psDaysInMonth(y,m)).padStart(2,'0');const claims=paystubShiftClaims();const all=[];for(const s of (db.payStubs||[]))all.push(...paystubOccurrences(s,from,to,claims));all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.agency).localeCompare(String(b.agency)));return all}
+const lo=psAddDays(fromISO,-70),hi=psAddDays(toISO,70);let d=stub.payDate,guard=0;while(d>lo&&guard++<400){const p=paystubStepBackDate(d,stub.frequency,anchorDay);if(!p||p>=d)break;d=p}guard=0;while(d<=hi&&guard++<300){const period=anchor?paystubPeriodForPayday(stub,d,anchor):null;const totals=period?paystubPeriodTotals(stub,period.start,period.end,claims):{gross:0,grossWithProposed:0,total:0,shiftCount:0,pricedCount:0,unpriced:0};const ownStubBacked=!!(act&&d===stub.payDate);const extraStubAmt=!ownStubBacked&&stub.stubActualDates&&typeof stub.stubActualDates==='object'?rateOrNull(stub.stubActualDates[d]):null;const stubBacked=ownStubBacked||extraStubAmt!=null;const ov=stubBacked?null:paystubOccurrenceOverride(stub,d);let date=d,enteredActual=null;if(ov){const od=psValidISO(ov.payDate);if(od)date=od;const oa=rateOrNull(ov.actual);if(oa!=null&&oa>0)enteredActual=oa}const isActual=stubBacked||enteredActual!=null;if(date>=fromISO&&date<=toISO)out.push({date,schedDate:d,dateOverridden:date!==d,periodStart:period?period.start:'',periodEnd:period?period.end:'',gross:totals.gross,grossWithProposed:totals.grossWithProposed,total:totals.total,unpriced:totals.unpriced,shiftCount:totals.shiftCount,agency:stub.agency||'',facility:stub.facility||'',stubId:stub.id||'',isActual,actual:ownStubBacked?act.amount:(extraStubAmt!=null?extraStubAmt:enteredActual),actualBasis:ownStubBacked?act.basis:(extraStubAmt!=null?'gross':(enteredActual!=null?'entered':'')),enteredActual:enteredActual!=null,stubBacked});const n=paystubStepDate(d,stub.frequency,anchorDay);if(!n||n<=d)break;d=n}return out}
+function paystubOccurrencesOn(dateISO){const claims=paystubShiftClaims();const all=[];for(const s of paystubSchedules())all.push(...paystubOccurrences(s,dateISO,dateISO,claims));all.sort((a,b)=>String(a.agency).localeCompare(String(b.agency)));return all}
+function paystubOccurrencesInMonth(prefix){if(!featureOn('featurePaychecks'))return[];const y=+prefix.slice(0,4),m=+prefix.slice(5,7),from=prefix+'-01',to=prefix+'-'+String(psDaysInMonth(y,m)).padStart(2,'0');const claims=paystubShiftClaims();const all=[];for(const s of paystubSchedules())all.push(...paystubOccurrences(s,from,to,claims));all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.agency).localeCompare(String(b.agency)));return all}
 // --- One headline number per month (Caleb, Nov 7, 2026) ---
 // A month has two honest gross figures and they are NOT the same
 // number: the WORKED basis (shifts worked in the month, paid whenever
@@ -515,7 +643,7 @@ function monthHeadline(prefix){
   worked=Math.round(worked*100)/100;
   return {gross:Math.round((paycheckTotal+worked)*100)/100,paycheckTotal,worked,paychecks:occ.length,anyActual,scheduled,partial:scheduled&&worked>0,workedShifts};
 }
-function paystubUpcoming(limit,todayStr){const today=todayStr||localDate(new Date());const to=psAddDays(today,120);const claims=paystubShiftClaims();const all=[];for(const s of (db.payStubs||[]))all.push(...paystubOccurrences(s,today,to,claims));all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.agency).localeCompare(String(b.agency)));return all.slice(0,limit||6)}
+function paystubUpcoming(limit,todayStr){const today=todayStr||localDate(new Date());const to=psAddDays(today,120);const claims=paystubShiftClaims();const all=[];for(const s of paystubSchedules())all.push(...paystubOccurrences(s,today,to,claims));all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.agency).localeCompare(String(b.agency)));return all.slice(0,limit||6)}
 // A paycheck's calculated amount: EVERY priced shift in its period
 // (confirmed + proposed — see paystubPeriodTotals). Falls back to the
 // proposed-inclusive figure on any occurrence built without `total`.
@@ -634,7 +762,10 @@ function paycheckEditorHTML(x,from){
 // Find one occurrence by its identity (stub + SCHEDULED payday),
 // wherever a date correction has moved it to.
 function paycheckOccurrenceByKey(stubId,schedDate){
-  const stub=(db.payStubs||[]).find(s=>s.id===stubId);if(!stub||!psValidISO(schedDate))return null;
+  // Look the check up on the effective (unified) schedule, so the
+  // editor sees the same occurrence the calendar showed — a merged
+  // group's member id resolves to the group, too.
+  const stub=paystubSchedules().find(s=>s.id===stubId||(s.mergedFrom||[]).includes(stubId));if(!stub||!psValidISO(schedDate))return null;
   return paystubOccurrences(stub,psAddDays(schedDate,-90),psAddDays(schedDate,90)).find(o=>(o.schedDate||o.date)===schedDate)||null;
 }
 // The paycheck editor opens as a sheet OVER whatever is beneath it
@@ -2103,14 +2234,42 @@ function payUnitControlHTML(preview,kind){const u=preview&&preview.payUnit==='ho
 // the same code prices automatically and never re-asks. Skipping is
 // remembered per facility (ratesPromptSkipped) so imports don't nag.
 function facilityCodeDefs(f){const cm=f&&f.codeMap;return (cm&&typeof cm==='object'&&!Array.isArray(cm))?cm:{}}
-// Code keys ignore empty-bracket noise: QGenda appends the assignee
-// in brackets, and feeds parsed before the server cleaner dropped
-// the emptied brackets left codes like "HOLZ - Call 2 [ ]" behind —
-// in saved codeMap keys, shift codes and shift types alike. A
-// bracket group still carrying letters or digits is real text and
-// stays; only the emptied shell is normalised away, so an old key
-// and its cleaned re-read still find each other.
-function normalizeCodeKey(code){return String(code||'').replace(/\[[^\[\]]*\]/g,m=>/[A-Za-z0-9]/.test(m)?m:' ').replace(/\s+/g,' ').trim()}
+// Feed housekeeping (Nov 9, 2026): QGenda feeds carry sync-marker
+// events that are not shifts — "AutoSync from QGenda: 2:11PM", the
+// time being when the feed last synced. The server parser filters
+// them before they become rows (qgenda-feed parse.ts,
+// isQgendaHousekeepingSummary — keep the two in sync); this client
+// mirror guards previews or saved data an older parser let through,
+// so the pattern can never be prompted about or (re)imported.
+// Narrow by design: an explicit marker only — an unusual real shift
+// name never matches and still lands as a raw row.
+function isHousekeepingShiftName(s){const t=String(s||'').trim();if(!t)return false;return /\bautosync\s+from\s+qgenda\b/i.test(t)||/^autosync\b/i.test(t)}
+// Code keys ignore assignee-bracket noise: QGenda appends the
+// assignee in brackets, and feeds parsed before the server cleaner
+// dropped the emptied brackets left codes like "HOLZ - Call 2 [ ]"
+// behind — in saved codeMap keys, shift codes and shift types
+// alike. A bracket group is dropped when it is the emptied shell,
+// or when its content is composed of the assignee's name parts
+// (first, last, full name, initials — the name the client holds is
+// the schedule name it sends with the fetch), mirroring the server
+// cleaner in qgenda-feed parse.ts (cleanQgendaShiftName). A bracket
+// group with unrelated content is real text and stays, so an old
+// key and its cleaned re-read still find each other.
+function codeKeyBracket(m){
+  const content=m.slice(1,-1);
+  if(!/[A-Za-z0-9]/.test(content))return ' ';
+  const parts=String(scheduleName()||'').split(/[\s,]+/).map(p=>p.replace(/\.+$/,'').toLowerCase()).filter(p=>p.length>=3);
+  if(parts.length){
+    const partSet=new Set(parts);
+    const tokens=content.split(/[\s,]+/).filter(Boolean);
+    if(tokens.length&&tokens.every(tok=>partSet.has(tok.toLowerCase().replace(/\.+$/,''))||/^[A-Za-z]\.?$/.test(tok)))return ' ';
+    let stripped=content;
+    for(const p of parts)stripped=stripped.replace(new RegExp('\\b'+p.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','gi'),' ');
+    if(stripped.replace(/\s+/g,' ').trim()!==content.replace(/\s+/g,' ').trim()&&/^[A-Za-z][A-Za-z\s,]*$/.test(stripped))return ' ';
+  }
+  return m;
+}
+function normalizeCodeKey(code){return String(code||'').replace(/\[[^\[\]]*\]/g,codeKeyBracket).replace(/\s+/g,' ').trim()}
 function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;const defs=facilityCodeDefs(f);if(defs[k])return defs[k];const nk=normalizeCodeKey(k);if(nk){for(const key of Object.keys(defs)){if(normalizeCodeKey(key)===nk)return defs[key]}}return null}
 // The canonical shift type a free-text label names, when it names
 // one the facility pay rule prices directly ("Second call",
@@ -2151,6 +2310,10 @@ function unclarifiedCodes(preview,target){
   for(const r of importTargetRows(preview,target.name)){
     if(!r.include)continue;
     const code=rowCodeKey(r);if(!code)continue;
+    // Housekeeping is never a question (Nov 9, 2026): a sync-marker
+    // row from a stale preview is skipped here even if it is priced
+    // or unpriced — the prompt asks about real shifts only.
+    if(isHousekeepingShiftName(code)||isHousekeepingShiftName(r.type))continue;
     const rowHours=(typeof r.hours==='number'&&isFinite(r.hours))?String(r.hours):(r.hours!=null&&String(r.hours).trim()!==''?String(r.hours).trim():'');
     if(!seen.has(code))seen.set(code,{code,hours:rowHours,ctype:canonicalTypeOf(r.type)});
     else{if(!seen.get(code).hours&&rowHours)seen.get(code).hours=rowHours;if(!seen.get(code).ctype)seen.get(code).ctype=canonicalTypeOf(r.type)}
@@ -3980,7 +4143,10 @@ async function importSchedule(e){
 }
 function approveScheduleImport(){
   if(!schedulePreview)return;
-  const rows=schedulePreview.rows.filter(r=>r.include&&r.match!=='other');
+  // Housekeeping rows are excluded at the door (Nov 9, 2026): a
+  // sync-marker "shift" from a stale preview can never be saved,
+  // whatever its include flag says.
+  const rows=schedulePreview.rows.filter(r=>r.include&&r.match!=='other'&&!isHousekeepingShiftName(rowCodeKey(r))&&!isHousekeepingShiftName(r.type));
   // One facility for the whole schedule (a grid prints none; a feed
   // may name a facility the user has not saved): applies to exactly
   // the rows whose facility is unresolved — blank, or matching no
@@ -4615,8 +4781,18 @@ async function fetchQgendaFeed(opts){
     if(!data||!Array.isArray(data.shifts)||!data.shifts.length){
       if(silent){persist(); return}
       schedulePreview=null; qgendaStatusError='The QGenda feed answered but listed no shifts. If you have no upcoming shifts in QGenda, that is correct — otherwise check the feed in QGenda.'; render(); return}
+    // Housekeeping guard (Nov 9, 2026): parser v5+ already excludes
+    // sync-marker events server-side; filter again here so a preview
+    // built from an older response can never carry one into the
+    // clarification prompt or an import. If filtering empties the
+    // list, the feed effectively listed no shifts — same handling
+    // as the empty answer above.
+    const shiftsIn=data.shifts.filter(sh=>!isHousekeepingShiftName(sh&&sh.code)&&!isHousekeepingShiftName(sh&&sh.type));
+    if(!shiftsIn.length){
+      if(silent){persist(); return}
+      schedulePreview=null; qgendaStatusError='The QGenda feed answered but listed no shifts. If you have no upcoming shifts in QGenda, that is correct — otherwise check the feed in QGenda.'; render(); return}
     const name=scheduleName();
-    const rows=data.shifts.map(sh=>{
+    const rows=shiftsIn.map(sh=>{
       const date=String(sh.date||''),facility=String(sh.facility||'').trim(),type=String(sh.type||'Other');
       const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,{date,facility,type}));
       const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(!sh.facilityKnown)flags.push('new facility — will be suggested, not created');
@@ -5573,7 +5749,19 @@ function approvePaystub(){
   // replaces that agency's schedule only — every other agency is
   // untouched. An edit of the same record keeps its id.
   const ex=paystubForAgency(agency);
-  if(ex&&ex.id!==rec.id){db.payStubs=(db.payStubs||[]).filter(x=>x.id!==ex.id);cloudRecordTombstone('payStubs',ex.id);}
+  if(ex&&ex.id!==rec.id){
+    // The replaced record's own stub actual is never lost (Nov 9,
+    // 2026): if it was the actual for a DIFFERENT payday than the
+    // new stub's, it rides on the new record as that check's
+    // entered actual — two stubs for one agency, uploaded one
+    // after another, both keep showing as actuals. Its per-check
+    // corrections carry over the same way.
+    const carried={...(ex.occOverrides&&typeof ex.occOverrides==='object'?ex.occOverrides:{})};
+    const exAct=paystubStubActual(ex);
+    if(exAct&&psValidISO(ex.payDate)&&ex.payDate!==rec.payDate&&rateOrNull((carried[ex.payDate]||{}).actual)==null)carried[ex.payDate]={actual:String(exAct.amount),payDate:ex.payDate};
+    if(Object.keys(carried).length)rec.occOverrides={...carried,...(rec.occOverrides&&typeof rec.occOverrides==='object'?rec.occOverrides:{})};
+    db.payStubs=(db.payStubs||[]).filter(x=>x.id!==ex.id);cloudRecordTombstone('payStubs',ex.id);
+  }
   const i=(db.payStubs||[]).findIndex(x=>x.id===rec.id);
   if(i>=0)db.payStubs[i]={...db.payStubs[i],...rec};
   else db.payStubs.push(rec);

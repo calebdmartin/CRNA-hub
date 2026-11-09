@@ -185,6 +185,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         shifts: parsed.shifts,
         unknownFacilities: parsed.unknownFacilities,
         eventCount: parsed.eventCount,
+        droppedHousekeeping: parsed.droppedHousekeeping,
+        droppedNoDate: parsed.droppedNoDate,
         masked: maskFeedUrl(url),
         fetchedAt: new Date().toISOString(),
         parserVersion: QGENDA_PARSER_VERSION,

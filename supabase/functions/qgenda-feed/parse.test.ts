@@ -5,6 +5,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   cleanQgendaShiftName,
   isQgendaFeedUrl,
+  isQgendaHousekeepingSummary,
   maskFeedUrl,
   parseQgendaICS,
   QGENDA_PARSER_VERSION,
@@ -616,7 +617,7 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 4);
+  assertEquals(QGENDA_PARSER_VERSION, 5);
 });
 
 Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
@@ -654,6 +655,120 @@ Deno.test("bracketed assignee suffix: the emptied brackets never reach the code"
   assertEquals(byUid.get("br-2@qgenda.com")?.type, "Second call");
   // Sunday Nov 8, 2026: the weekend second-call flat from the rule.
   assertEquals(byUid.get("br-2@qgenda.com")?.pay, "2000");
+});
+
+// --- Round 5 (Nov 9, 2026): feed housekeeping + partial brackets --
+// Caleb's live feed carried a sync marker — "AutoSync from QGenda:
+// 2:11PM" — and the round-3 no-silent-skips catch-all turned it
+// into a raw row, so the clarification prompt asked him what it
+// was. Housekeeping is filtered on an EXPLICIT marker only: an
+// unusual real shift name still lands raw (the "Team lunch" case
+// below is the documented trade-off, unchanged from round 3 — it
+// carries no marker, so it lands and the user dismisses it in the
+// preview like any other non-shift).
+Deno.test("isQgendaHousekeepingSummary: explicit AutoSync markers only", () => {
+  assertEquals(isQgendaHousekeepingSummary("AutoSync from QGenda: 2:11PM"), true);
+  assertEquals(isQgendaHousekeepingSummary("AutoSync from QGenda"), true);
+  assertEquals(isQgendaHousekeepingSummary("autosync from qgenda: 9:03AM"), true);
+  assertEquals(isQgendaHousekeepingSummary("AutoSync"), true);
+  assertEquals(isQgendaHousekeepingSummary("AutoSync completed"), true);
+  // Real or merely unusual names never match.
+  assertEquals(isQgendaHousekeepingSummary("HOLZ - Call 2"), false);
+  assertEquals(isQgendaHousekeepingSummary("HOLZ - G Main (8)"), false);
+  assertEquals(isQgendaHousekeepingSummary("Team lunch"), false);
+  assertEquals(isQgendaHousekeepingSummary("HOLZ - Educ Day"), false);
+  assertEquals(isQgendaHousekeepingSummary(""), false);
+});
+
+Deno.test("housekeeping feed: AutoSync filtered, real shifts land, counters audit", () => {
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VEVENT",
+    "UID:hk-1@qgenda.com",
+    "DTSTART:20261109T141100",
+    "DTEND:20261109T141100",
+    "SUMMARY:AutoSync from QGenda: 2:11PM",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-2@qgenda.com",
+    "DTSTART:20261110T060000",
+    "DTEND:20261110T060000",
+    "SUMMARY:AutoSync",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-3@qgenda.com",
+    "DTSTART:20261110T070000",
+    "DTEND:20261110T170000",
+    "SUMMARY:HOLZ - G Main (10) [Caleb Martin]",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-4@qgenda.com",
+    "DTSTART:20261111T070000",
+    "DTEND:20261111T150000",
+    "SUMMARY:HOLZ - G Main (8)",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-5@qgenda.com",
+    "DTSTART:20261112T090000",
+    "DTEND:20261112T170000",
+    "SUMMARY:HOLZ - Educ Day",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-6@qgenda.com",
+    "DTSTART:20261113T120000",
+    "DTEND:20261113T130000",
+    "SUMMARY:Team lunch",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:hk-7@qgenda.com",
+    "SUMMARY:HOLZ - G Main (8)",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  // The client sends only the last name for this account — the
+  // partial-name case that used to leave "[Caleb Martin]" behind
+  // as "[Caleb]".
+  const { shifts, eventCount, droppedHousekeeping, droppedNoDate } = parseQgendaICS(ics, HOLZER_FULL, { name: "Martin" });
+  assertEquals(eventCount, 7);
+  assertEquals(droppedHousekeeping, 2);
+  assertEquals(droppedNoDate, 1);
+  assertEquals(shifts.length, 4);
+  // The audit identity: every event is accounted for.
+  assertEquals(shifts.length + droppedHousekeeping + droppedNoDate, eventCount);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  // The partial bracket is gone and the shift prices off the rule.
+  assertEquals(byUid.get("hk-3@qgenda.com")?.code, "HOLZ - G Main (10)");
+  assertEquals(byUid.get("hk-3@qgenda.com")?.type, "10-hour shift");
+  assertEquals(byUid.get("hk-3@qgenda.com")?.pay, "2625");
+  assertEquals(byUid.get("hk-4@qgenda.com")?.code, "HOLZ - G Main (8)");
+  assertEquals(byUid.get("hk-4@qgenda.com")?.pay, "2125");
+  // Unusual-but-real names survive raw (no-silent-skips stands).
+  assertEquals(byUid.get("hk-5@qgenda.com")?.code, "HOLZ - Educ Day");
+  assertEquals(byUid.get("hk-5@qgenda.com")?.pay, "");
+  // "Team lunch" still lands — no housekeeping marker (documented
+  // round-3 trade-off, unchanged).
+  assertEquals(byUid.get("hk-6@qgenda.com")?.code, "Team lunch");
+  // Nothing the prompt could ask about matches the marker.
+  const promptCodes = [...new Set(shifts.map((s) => s.code))];
+  assertEquals(promptCodes.some((c) => /autosync/i.test(c)), false);
+  assertEquals(promptCodes.sort(), ["HOLZ - Educ Day", "HOLZ - G Main (10)", "HOLZ - G Main (8)", "Team lunch"]);
+});
+
+Deno.test("bracketed assignee suffix: partial name forms drop, real content stays", () => {
+  // Content composed of the assignee's name parts drops, whatever
+  // subset of the name the client provided.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Martin]", "Caleb Martin"), "HOLZ - G Main (10)");
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Caleb Martin]", "Martin"), "HOLZ - G Main (10)");
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Caleb Martin]", "Caleb"), "HOLZ - G Main (10)");
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Martin, Caleb]", "Caleb Martin"), "HOLZ - G Main (10)");
+  // An initial plus a name part is still just the assignee.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [C. Martin]", "Caleb Martin"), "HOLZ - G Main (10)");
+  // Unrelated bracket content is real text and stays.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [OR 2]", "Caleb Martin"), "HOLZ - G Main (10) [OR 2]");
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Night Float]", "Caleb Martin"), "HOLZ - G Main (10) [Night Float]");
+  // A name part plus anything else is not composed of name parts.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (10) [Martin OR 2]", "Caleb Martin"), "HOLZ - G Main (10) [Martin OR 2]");
 });
 
 Deno.test("qgendaShiftName: priority, cleaning, and no mangling of shift words", () => {
