@@ -88,10 +88,15 @@ END:VEVENT\r
 END:VCALENDAR\r
 `;
 
-Deno.test("parseQgendaICS: Holzer shifts priced, unknown facility flagged, lunch skipped", () => {
+Deno.test("parseQgendaICS: Holzer shifts priced, unknown facility flagged, lunch lands as an unclassified row", () => {
   const { shifts, unknownFacilities, eventCount } = parseQgendaICS(FEED, HOLZER);
   assertEquals(eventCount, 4);
-  assertEquals(shifts.length, 3);
+  // Parser v3 (Nov 8, 2026): no silent skips — the "Team lunch"
+  // event that used to vanish now rides in as an unclassified row
+  // (facility "", named as read, unpriced) for the clarification
+  // prompt, so FOUR rows come back for four dated events. Its
+  // facility stays "" — the parser never invents one.
+  assertEquals(shifts.length, 4);
   assertEquals(shifts[0].date, "2026-11-10");
   assertEquals(shifts[0].facility, "Holzer");
   assertEquals(shifts[0].type, "8-hour day");
@@ -110,6 +115,14 @@ Deno.test("parseQgendaICS: Holzer shifts priced, unknown facility flagged, lunch
   assertEquals(shifts[1].code, "Holzer 8/2nd call");
   assertEquals(shifts[1].hours, null);
   assertEquals(shifts[2].code, "St. Mary 12-hour shift");
+  // The v3 unclassified row for the lunch: raw name as code AND
+  // type, no facility guessed, unpriced, still a confirmed import.
+  assertEquals(shifts[3].date, "2026-11-15");
+  assertEquals(shifts[3].code, "Team lunch");
+  assertEquals(shifts[3].type, "Team lunch");
+  assertEquals(shifts[3].facility, "");
+  assertEquals(shifts[3].facilityKnown, false);
+  assertEquals(shifts[3].pay, "");
   // Status model (Nov 6, 2026 — supersedes the Bug 1 date rule this
   // test originally asserted): a shift arriving from a calendar /
   // schedule source is 'confirmed' WHATEVER its date; the old
@@ -389,8 +402,221 @@ Deno.test("refineQgendaBucketType: conservative edges", () => {
   assertEquals(refineQgendaBucketType("Shift", 16, 420), "Shift");
 });
 
+// HOLZER mirrors the test rules plus the contract's 1st-call terms
+// (Nov 8, 2026: hourlyCall1st 175 alongside the premium hourly 250)
+// so "24-hour call" prices by the shared formula — the same rule a
+// contract import saves for Caleb's real Holzer facility.
+const HOLZER_FULL = normalizeFacilityRules([
+  {
+    name: "Holzer",
+    aliases: [],
+    hourlyRate: 250,
+    hourlyCall1st: 175,
+    rate8: 2125,
+    rate10: 2625,
+    rateSecond: 3000,
+    weekendRateSecond: 2000,
+    callBonus: 1000,
+    paidHours8: 8.5,
+  },
+]);
+
+// --- Round 3 (Nov 8, 2026): QGenda's real task grammar ------------
+// Ground truth from Caleb's own QGenda app (screenshots, Nov 8,
+// 2026): tasks are "<FACILITY CODE> - <Task>" — "HOLZ - G Main (8)"
+// for his regular day shifts (Tue Nov 10 – Fri Nov 13 in the app,
+// Holzer 8 on his calendar) and "HOLZ - Call 2" for second call
+// (Sun Nov 8). Under parser v2 every "G Main (8)" event died inside
+// parseWorkShiftEvent ("HOLZ" hits no facility rule, "(8)" is no
+// hour pattern, "G Main" matches nothing) and parseQgendaICS
+// skipped the null — ONLY the call events (reachable through the
+// bare word "call") ever appeared in his preview. v3 parses the
+// grammar in the QGenda path, and the location is Gallipolis — note
+// it does NOT name Holzer, so the facility resolution below comes
+// from the code alone.
+// Dates chosen against the 2026 calendar: Nov 8, 2026 is a SUNDAY
+// (weekend Call 2 = $2,000), Nov 7 a Saturday (weekend Call 1 =
+// 175 x 24 = $4,200); Nov 10 Tue / Nov 11 Wed / Nov 12 Thu are
+// weekday G Main (8) at $2,125; Aug 22 Sat is a bare "Call" (stays
+// unclassified); Aug 20/21 are a "Backup" pair under an UNKNOWN
+// code (XYZ) — nothing classifies them, and v3 must still carry
+// them in as unclassified rows instead of dropping them.
+const GRAMMAR_FEED = `BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//QGenda//EN\r
+BEGIN:VEVENT\r
+UID:g-1@qgenda.com\r
+DTSTART;VALUE=DATE:20261108\r
+DTEND;VALUE=DATE:20261109\r
+SUMMARY:HOLZ - Call 2\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-2@qgenda.com\r
+DTSTART;VALUE=DATE:20261110\r
+DTEND;VALUE=DATE:20261111\r
+SUMMARY:HOLZ - G Main (8)\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-3@qgenda.com\r
+DTSTART;VALUE=DATE:20261111\r
+DTEND;VALUE=DATE:20261112\r
+SUMMARY:HOLZ - G Main (8)\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-4@qgenda.com\r
+DTSTART;VALUE=DATE:20261112\r
+DTEND;VALUE=DATE:20261113\r
+SUMMARY:Martin - HOLZ - G Main (8)\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-5@qgenda.com\r
+DTSTART;VALUE=DATE:20261107\r
+DTEND;VALUE=DATE:20261108\r
+SUMMARY:HOLZ - Call 1\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-6@qgenda.com\r
+DTSTART;VALUE=DATE:20260822\r
+DTEND;VALUE=DATE:20260823\r
+SUMMARY:HOLZ - Call\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-7@qgenda.com\r
+DTSTART:20260915T070000\r
+DTEND:20260915T153000\r
+SUMMARY:HOLZ - G Main (10)\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-8@qgenda.com\r
+DTSTART;VALUE=DATE:20260820\r
+DTEND;VALUE=DATE:20260821\r
+SUMMARY:XYZ - Backup\r
+LOCATION:Somewhere, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:g-9@qgenda.com\r
+DTSTART;VALUE=DATE:20260821\r
+DTEND;VALUE=DATE:20260822\r
+SUMMARY:XYZ - Backup\r
+LOCATION:Somewhere, OH\r
+END:VEVENT\r
+END:VCALENDAR\r
+`;
+
+Deno.test("parseQgendaICS: real QGenda grammar — G Main (8) lands priced, Call 1/2 classified, nothing dated dropped", () => {
+  const { shifts, unknownFacilities, eventCount } = parseQgendaICS(
+    GRAMMAR_FEED,
+    HOLZER_FULL,
+    { name: "Caleb Martin" },
+  );
+  // No silent skips: every dated event is a row.
+  assertEquals(eventCount, 9);
+  assertEquals(shifts.length, 9);
+  assertEquals(unknownFacilities, ["XYZ"]);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  const pick = (uid: string) => {
+    const s = byUid.get(uid);
+    if (!s) throw new Error(`missing shift ${uid}`);
+    return { date: s.date, code: s.code, type: s.type, pay: s.pay, hours: s.hours, facility: s.facility, facilityKnown: s.facilityKnown };
+  };
+  // Sun Nov 8 — "Call 2" is Second call; weekend rate from the rule.
+  assertEquals(pick("g-1@qgenda.com"), { date: "2026-11-08", code: "HOLZ - Call 2", type: "Second call", pay: "2000", hours: null, facility: "Holzer", facilityKnown: true });
+  // Tue/Wed Nov 10/11 — the day shifts that used to vanish: 8-hour
+  // day at the facility's confirmed rate; hours stated by "(8)".
+  assertEquals(pick("g-2@qgenda.com"), { date: "2026-11-10", code: "HOLZ - G Main (8)", type: "8-hour day", pay: "2125", hours: 8, facility: "Holzer", facilityKnown: true });
+  assertEquals(pick("g-3@qgenda.com"), { date: "2026-11-11", code: "HOLZ - G Main (8)", type: "8-hour day", pay: "2125", hours: 8, facility: "Holzer", facilityKnown: true });
+  // Assignee prefix on the ICS summary: the name strips, the task
+  // name — call number included — survives whole.
+  assertEquals(pick("g-4@qgenda.com"), { date: "2026-11-12", code: "HOLZ - G Main (8)", type: "8-hour day", pay: "2125", hours: 8, facility: "Holzer", facilityKnown: true });
+  // Sat Nov 7 — "Call 1" is First call (canonical 24-hour call);
+  // weekend price = 1st-call hourly x 24 from the contract terms.
+  assertEquals(pick("g-5@qgenda.com"), { date: "2026-11-07", code: "HOLZ - Call 1", type: "24-hour call", pay: "4200", hours: 24, facility: "Holzer", facilityKnown: true });
+  // Bare "Call": honestly unclassified — the prompt will ask.
+  assertEquals(pick("g-6@qgenda.com"), { date: "2026-08-22", code: "HOLZ - Call", type: "Call (unclassified)", pay: "", hours: null, facility: "Holzer", facilityKnown: true });
+  // A (10) main prices as the 10-hour shift.
+  assertEquals(pick("g-7@qgenda.com"), { date: "2026-09-15", code: "HOLZ - G Main (10)", type: "10-hour shift", pay: "2625", hours: 10, facility: "Holzer", facilityKnown: true });
+  // Unknown code + unrecognisable task: STILL rows — unclassified,
+  // named as read, facility as read, unpriced.
+  assertEquals(pick("g-8@qgenda.com"), { date: "2026-08-20", code: "XYZ - Backup", type: "XYZ - Backup", pay: "", hours: null, facility: "XYZ", facilityKnown: false });
+  assertEquals(pick("g-9@qgenda.com"), { date: "2026-08-21", code: "XYZ - Backup", type: "XYZ - Backup", pay: "", hours: null, facility: "XYZ", facilityKnown: false });
+  // The codes the clarification prompt will ask about for the
+  // UNPRICED rows are per distinct raw name — never a bucket.
+  const promptCodes = [...new Set(shifts.filter((s) => !s.pay).map((s) => s.code))].sort();
+  assertEquals(promptCodes, ["HOLZ - Call", "XYZ - Backup"]);
+  for (const sh of shifts) assertEquals(sh.status, "confirmed");
+});
+
+// --- A different facility's grammar (generality, Nov 8, 2026) -----
+// Caleb's design question: "how will this work for a user who has
+// different grammar at a different facility?" Answer pinned here:
+// the parser holds NO "STM" knowledge — an invented facility code
+// and task words it has never seen. Every row must still land, the
+// unrecognised names must be exactly what the clarification prompt
+// asks about (server side: type = the raw name, unpriced), and the
+// one generic pattern present ("NOC 12" — the shared night/12-hour
+// token rule every source uses) is the only head start given.
+const STM_FEED = `BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//QGenda//EN\r
+BEGIN:VEVENT\r
+UID:stm-1@qgenda.com\r
+DTSTART;VALUE=DATE:20261110\r
+DTEND;VALUE=DATE:20261111\r
+SUMMARY:STM - OR Day\r
+LOCATION:St. Mary Campus\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:stm-2@qgenda.com\r
+DTSTART;VALUE=DATE:20261111\r
+DTEND;VALUE=DATE:20261112\r
+SUMMARY:STM - NOC 12\r
+LOCATION:St. Mary Campus\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:stm-3@qgenda.com\r
+DTSTART;VALUE=DATE:20261112\r
+DTEND;VALUE=DATE:20261113\r
+SUMMARY:STM - Backup\r
+LOCATION:St. Mary Campus\r
+END:VEVENT\r
+END:VCALENDAR\r
+`;
+
+Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknown names stay raw for the prompt", () => {
+  const { shifts, unknownFacilities, eventCount } = parseQgendaICS(
+    STM_FEED,
+    HOLZER_FULL,
+    { name: "Caleb Martin" },
+  );
+  assertEquals(eventCount, 3);
+  assertEquals(shifts.length, 3);
+  assertEquals(unknownFacilities, ["STM"]);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  const pick = (uid: string) => {
+    const s = byUid.get(uid);
+    if (!s) throw new Error(`missing shift ${uid}`);
+    return { code: s.code, type: s.type, pay: s.pay, facility: s.facility, facilityKnown: s.facilityKnown };
+  };
+  // No pattern in "OR Day" the generic table claims: raw, unpriced.
+  assertEquals(pick("stm-1@qgenda.com"), { code: "STM - OR Day", type: "STM - OR Day", pay: "", facility: "STM", facilityKnown: false });
+  // "NOC 12": the generic 12-hour token rule recognises the shape
+  // (a head start, not a price — the facility is unknown).
+  assertEquals(pick("stm-2@qgenda.com"), { code: "STM - NOC 12", type: "12-hour shift", pay: "", facility: "STM", facilityKnown: false });
+  assertEquals(pick("stm-3@qgenda.com"), { code: "STM - Backup", type: "STM - Backup", pay: "", facility: "STM", facilityKnown: false });
+  // Prompt codes = the raw names themselves, distinct.
+  const promptCodes = [...new Set(shifts.map((s) => s.code))].sort();
+  assertEquals(promptCodes, ["STM - Backup", "STM - NOC 12", "STM - OR Day"]);
+});
+
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 2);
+  assertEquals(QGENDA_PARSER_VERSION, 3);
 });
 
 Deno.test("qgendaShiftName: priority, cleaning, and no mangling of shift words", () => {

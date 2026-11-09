@@ -11,6 +11,7 @@
 // characters). It is never logged and never returned in full.
 
 import {
+  importStatusForDate,
   parseWorkShiftEvent,
   parseWorkShiftTitle,
   priceShiftWithFacility,
@@ -20,10 +21,16 @@ import {
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v2, Nov 8, 2026: the
-// generic "Call (unclassified)"/"Shift" buckets are refined from
-// DESCRIPTION text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 2;
+// Bump whenever the parse semantics change (v3, Nov 8, 2026: the
+// QGenda "<FACILITY CODE> - <Task>" grammar is parsed explicitly —
+// "G Main (N)" day shifts, numbered "Call 1"/"Call 2" — facility
+// codes resolve against a facility's name and aliases in
+// abbreviated form, and NO dated event is silently dropped anymore:
+// an event that still cannot be classified rides into the preview
+// as an unclassified row named exactly as read; v2 refined the
+// generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
+// text and event timing; v1 returned the raw buckets).
+export const QGENDA_PARSER_VERSION = 3;
 
 export interface QgendaShift {
   date: string;
@@ -343,13 +350,222 @@ export function refineQgendaBucketType(
   return type;
 }
 
+// --- QGenda task grammar (parser v3, Nov 8, 2026) -----------------
+//
+// QGenda names an assignment "<FACILITY CODE> - <Task>": Caleb's
+// real feed reads "HOLZ - G Main (8)" for a regular day shift and
+// "HOLZ - Call 2" for second call (screenshots, Nov 8, 2026). The
+// shared calendar parser knows none of this grammar: "HOLZ" never
+// matches its \bholzer\b Holzer rule, "(8)" is not one of its hour
+// patterns, and "G Main" matches nothing — so parseWorkShiftEvent
+// returned null for every day shift and parseQgendaICS silently
+// skipped them; ONLY the call events (which reach the generic
+// fallback through the bare word "call") ever appeared. Round 3
+// parses the grammar explicitly, in the QGenda path only:
+//
+// - The facility code before the " - " resolves through the user's
+//   facility rules: an exact name/alias token wins first, then the
+//   abbreviated form — a code matches when it is a prefix of the
+//   name/alias's consonant skeleton (HOLZ -> Holzer), or the name
+//   starts with the code. This is table-driven matching over the
+//   user's own facility list, not a Holzer special case: any
+//   facility's code resolves the same way, and an unresolved code
+//   becomes the facility AS READ (facilityKnown=false -> the client
+//   asks, and the code is remembered as that facility's alias).
+// - The task half is classified by generic token patterns only:
+//   "Call 1"/"Call 2" (also "First/Second call", "1st/2nd call"),
+//   a parenthesised hour count "(N)", "N-hour"/"Nh" counts,
+//   leading/trailing bare hour numbers, day/night wording, and the
+//   bare word "call". Nothing here names a facility or a hospital's
+//   local task words: a task with no recognisable token ("OR Day",
+//   "Backup") classifies as nothing and rides in unclassified (see
+//   below) until the user clarifies it — the clarification prompt
+//   is the universal adapter for any facility's grammar, and the
+//   learned codeMap on the facility is what prices it thereafter.
+// - Rates are never parsed here: paid-hours quirks (Holzer's 8.5)
+//   live in the facility's own pay rule, which prices the canonical
+//   type exactly as it does for every other source.
+
+// Canonical type from an ALREADY-CLASSIFIED text (description
+// refinement in the main loop): generic classification of a whole
+// name against a rule's own names.
+function qgendaTaskCanonical(text: string): string | null {
+  const s = String(text || "").toLowerCase();
+  if (/\b2nd\s*call\b|\bsecond\s*call\b|\bcall\s*2\b/.test(s)) return "Second call";
+  if (/\b1st\s*call\b|\bfirst\s*call\b|\bcall\s*1\b|\b24\s*\/\s*1st\b/.test(s)) {
+    return "24-hour call";
+  }
+  if (/\b24\s*-?\s*hour\b|\b24h\b/.test(s)) return "24-hour call";
+  if (/\b12\s*-?\s*hour\b|\b12h\b|\bnight\b/.test(s)) return "12-hour shift";
+  if (/\b10\s*-?\s*hour\b|\b10h\b/.test(s)) return "10-hour shift";
+  if (/\b8\s*-?\s*hour\b|\b8h\b|\bday\s+shift\b/.test(s)) return "8-hour day";
+  const paren = /\(\s*(8|10|12|24)\s*(?:h|hr|hrs|hour|hours)?\s*\)/.exec(s);
+  if (paren) {
+    return paren[1] === "24"
+      ? "24-hour call"
+      : paren[1] === "12"
+      ? "12-hour shift"
+      : paren[1] === "10"
+      ? "10-hour shift"
+      : "8-hour day";
+  }
+  const lead = /^\s*(8|10|12|24)\b/.exec(s);
+  const trail = /(?:^|\s)(8|10|12|24)\s*$/.exec(s);
+  const num = (lead ?? trail)?.[1];
+  if (num) {
+    return num === "24"
+      ? "24-hour call"
+      : num === "12"
+      ? "12-hour shift"
+      : num === "10"
+      ? "10-hour shift"
+      : "8-hour day";
+  }
+  if (/\bcall\b/.test(s)) return "Call (unclassified)";
+  return null;
+}
+
+// Classify ONE QGenda task (the part after the facility code — or a
+// whole code-less summary). Returns the canonical type and the
+// hour count the task itself states, when it states one: a
+// parenthesised "(N)" gives N even for counts the canonical buckets
+// don't enumerate ("(6)"), so the clarification prompt can pre-fill
+// the user's hours from the name itself. A task that matches no
+// pattern returns type null — the caller keeps it as an
+// unclassified row; it is never dropped and never force-bucketed.
+function classifyQgendaTask(task: string): { type: string | null; hours: number | null } {
+  const s = String(task || "").trim().toLowerCase();
+  if (!s) return { type: null, hours: null };
+  const paren = /\(\s*(\d{1,2})\s*(?:h|hr|hrs|hour|hours)?\s*\)/.exec(s);
+  const parenHours = paren ? Number(paren[1]) : null;
+  const type = qgendaTaskCanonical(s);
+  if (type) {
+    // Stated hours: a "(N)" gives N; the "-hour" canonical types
+    // state their count in the name. "Second call" (and a bare
+    // "Call") state NO duration — call windows differ per facility,
+    // so the row's hours come from the feed's span, else the
+    // clarification prompt asks.
+    const stated = parenHours ?? (
+      type === "24-hour call"
+        ? 24
+        : type === "12-hour shift"
+        ? 12
+        : type === "10-hour shift"
+        ? 10
+        : type === "8-hour day"
+        ? 8
+        : null
+    );
+    return { type, hours: stated };
+  }
+  return { type: null, hours: parenHours };
+}
+
+// Consonant skeleton of a facility name/alias, for abbreviated-code
+// matching: vowels dropped after the first letter, non-letters
+// dropped ("Holzer" -> "hlzr", matching the code "HOLZ" as a
+// prefix). Deliberately crude and total: it runs over the user's
+// own facility names/aliases, so a code either resolves to the one
+// facility whose skeleton it prefixes, or to none.
+function facilitySkeleton(v: string): string {
+  const letters = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!letters) return "";
+  return letters[0] + letters.slice(1).replace(/[aeiou]/g, "");
+}
+
+// Resolve a facility CODE as read ("HOLZ") against the user's
+// rules. Exact name/alias token first; then the abbreviated form:
+// the code prefixes the skeleton of a name/alias (code length >= 3,
+// so short stray tokens can't collide), or the lowercased name
+// starts with the code. Ambiguity (two facilities match) resolves
+// to none — an unresolved code is safer than a wrong facility, and
+// the client asks in that case.
+function resolveFacilityCode(
+  codeRaw: string,
+  facilities: FacilityPayRule[],
+): FacilityPayRule | null {
+  const code = String(codeRaw || "").trim();
+  if (!code) return null;
+  const cl = code.toLowerCase();
+  for (const r of facilities) {
+    for (const n of [r.name, ...(r.aliases ?? [])]) {
+      if (n && containsToken(code, n)) return r;
+    }
+  }
+  if (cl.length < 3) return null;
+  const hits = new Map<string, FacilityPayRule>();
+  for (const r of facilities) {
+    for (const n of [r.name, ...(r.aliases ?? [])]) {
+      if (!n) continue;
+      const nl = n.trim().toLowerCase();
+      const skel = facilitySkeleton(n);
+      if ((skel.length >= cl.length && skel.startsWith(cl)) || nl.startsWith(cl)) {
+        hits.set(r.name, r);
+      }
+    }
+  }
+  return hits.size === 1 ? [...hits.values()][0] : null;
+}
+
+// Split a raw summary on QGenda's " - " grammar: the facility code
+// is the first segment, the task is the second; anything after a
+// SECOND separator belongs to neither ("Martin - HOLZ - G Main (8)"
+// is the assignee-first shape — its code is the second segment, and
+// matching on the first produced a phantom facility "Martin").
+// Only fires on the feed's own shape: the code segment is short and
+// code-like (letters/digits, no lowercase prose, <= 12 chars) AND
+// the task segment carries a recognisable assignment token (call /
+// main / an hour count / a day-night word). The task test is what
+// keeps ordinary prose titles out — "Martin - 8/2nd call" and
+// "Team lunch"-style titles keep flowing through the shared parser
+// exactly as before, and a task with NO known token ("XYZ -
+// Backup") is left to the no-silent-skip row below, which names
+// the row by its whole summary instead of inventing a facility.
+function splitQgendaSummary(
+  summary: string,
+  userName = "",
+): { code: string; task: string } | null {
+  const segs = String(summary || "")
+    .split(/\s+[-\u2013\u2014]\s+|\s+[-\u2013\u2014]\s*$|^\s*[-\u2013\u2014]\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (segs.length !== 2) return null;
+  const [code, task] = segs;
+  if (code.length > 12 || !/^[A-Za-z0-9][A-Za-z0-9 .&']*$/.test(code)) {
+    return null;
+  }
+  // The user's own name is never a facility code: an assignee-first
+  // summary ("Martin - 8/2nd call") splits into a name segment and a
+  // task segment, and taking the name as a code would shadow the
+  // shared parser's own reading (which resolves the event by its
+  // location/title instead). Such summaries keep flowing to the
+  // shared parser exactly as before.
+  const nameTokens = String(userName || "").toLowerCase().split(/[^a-z]+/)
+    .filter((t) => t.length >= 2);
+  if (nameTokens.includes(code.toLowerCase())) return null;
+  if (/^(19|20)\d{2}$/.test(code)) return null; // a year, not a code
+  if (
+    !/\bcall\b|\bmain\b|\(\s*\d{1,2}\s*(?:h|hr|hrs|hour|hours)?\s*\)|\b\d{1,2}\s*-?\s*(?:hour|hr|h)\b|\bnight\b|\bday\b|\bnoc\b/i
+      .test(task)
+  ) {
+    return null;
+  }
+  return { code, task };
+}
+
 // Parse a QGenda ICS feed into shift rows with the same
 // facilities-driven parser the calendar sync uses, so a QGenda event
 // and a work-calendar event for the same shift read identically.
-// Events that do not parse as shifts (no facility + shift pattern)
-// are skipped, never invented. Unknown facilities come back with
-// facilityKnown false and pay blank — the client reports them as
-// ask-first suggestions, never as priced shifts.
+// QGenda-grammar events ("<CODE> - <Task>") are read by the grammar
+// parser above first. NO dated event is silently dropped (parser
+// v3): an event that still cannot be classified rides into the
+// preview as an unclassified row — its name exactly as read, its
+// facility from its code prefix when the summary carries one — so
+// the clarification prompt asks about it like any other unread
+// code. (An event with no date still cannot become a row: there is
+// nothing to place on a calendar.) Unknown facilities come back
+// with facilityKnown false and pay blank — the client reports them
+// as ask-first suggestions, never as priced shifts.
 export function parseQgendaICS(
   icsText: string,
   facilities: FacilityPayRule[],
@@ -386,8 +602,112 @@ export function parseQgendaICS(
       ).filter(Boolean)
       : [];
     const uid = get("UID") || `${date}|${summary}|${location}`;
+    const hours = icsDurationHours(dtStartRaw, dtEndRaw);
+
+    // Grammar parse (v3) runs BEFORE the shared parser: a
+    // "<CODE> - <Task>" summary is a QGenda assignment name, and
+    // the shared parser cannot read it (the day-shift death this
+    // fixes). Rows built here keep the full name as read in `code`.
+    // An assignee-first summary ("Martin - HOLZ - G Main (8)") has
+    // one segment too many for the raw split; retry on the
+    // name-cleaned summary, which strips the user's name and leaves
+    // the assignment name ("HOLZ - G Main (8)").
+    const split = splitQgendaSummary(summary, userName) ??
+      splitQgendaSummary(cleanQgendaShiftName(summary, userName), userName);
+    if (split) {
+      const rule = resolveFacilityCode(split.code, facilities);
+      const taskClass = classifyQgendaTask(split.task);
+      const descClass = taskClass.type
+        ? null
+        : (description ? classifyQgendaTask(description.replace(/\n/g, " ")) : null);
+      const gType = taskClass.type ?? descClass?.type ?? null;
+      const gHours = taskClass.hours ?? descClass?.hours ?? hours;
+      const gName = qgendaShiftName({
+        summary,
+        description,
+        categories,
+        facility: rule ? rule.name : split.code,
+        name: userName,
+      });
+      const gCode = gName || cleanQgendaShiftName(summary, userName) || summary;
+      let gPay = "";
+      if (rule && gType) gPay = priceShiftWithFacility(gType, rule, date);
+      shifts.push({
+        date,
+        facility: rule ? rule.name : split.code,
+        type: gType ?? gCode,
+        pay: gPay,
+        facilityKnown: !!rule,
+        status: importStatusForDate(date),
+        uid,
+        code: gCode,
+        hours: gHours,
+      });
+      if (!rule) unknown.set(split.code, (unknown.get(split.code) ?? 0) + 1);
+      continue;
+    }
+
     const parsed = parseWorkShiftEvent(summary, location, date, facilities);
-    if (!parsed) continue;
+    if (!parsed) {
+      // No silent skips (v3): a dated event the parsers cannot
+      // classify still becomes a preview row, named exactly as
+      // read, unpriced, so the clarification prompt can ask about
+      // it. The row's facility comes from the summary's own code
+      // prefix when it carries one ("XYZ - Backup" -> facility
+      // "XYZ", reported in unknownFacilities like any other
+      // unresolved code); otherwise the facility stays "" — the
+      // parser never invents one. Only a truly nameless event
+      // falls back to the bare type word "Shift", and only an
+      // event with no date at all is skipped (handled above —
+      // there is nothing to place on a calendar).
+      const segs = summary
+        .split(/\s+[-\u2013\u2014]\s+|\s+[-\u2013\u2014]\s*$|^\s*[-\u2013\u2014]\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const uPrefix = segs.length >= 2 && segs[0].length <= 12 &&
+          /^[A-Za-z0-9][A-Za-z0-9 .&']*$/.test(segs[0]) &&
+          !/^(19|20)\d{2}$/.test(segs[0])
+        ? segs[0]
+        : "";
+      const uName = qgendaShiftName({
+        summary,
+        description,
+        categories,
+        facility: uPrefix,
+        name: userName,
+      });
+      const uDesc = description
+        ? classifyQgendaTask(description.replace(/\n/g, " "))
+        : null;
+      // An "<CODE> - <Task>" summary IS the shift's name: keep it
+      // whole. The name picker above mangles that shape — the
+      // name strip eats a name token out of it and the summary
+      // cleaner then trims the dangling separator away, leaving
+      // the code ("XYZ") or the bare word "Shift" — so when the
+      // summary carries a code prefix, the row is named by the
+      // summary cleaned of the user's name ONLY (the same strip
+      // that preserves "HOLZ - G Main (8)" in the grammar branch).
+      // Without a prefix, the picked name stands.
+      const uSummary = cleanQgendaShiftName(summary, userName);
+      const uCode = uPrefix
+        ? (uSummary && uSummary !== "Shift" ? uSummary : (uName || uSummary))
+        : (uName || uSummary || uDesc?.type || "Shift");
+      shifts.push({
+        date,
+        facility: uPrefix,
+        type: uCode,
+        pay: "",
+        facilityKnown: false,
+        status: importStatusForDate(date),
+        uid,
+        code: uCode,
+        hours: uDesc?.hours ?? hours,
+      });
+      if (uPrefix) {
+        unknown.set(uPrefix, (unknown.get(uPrefix) ?? 0) + 1);
+      }
+      continue;
+    }
 
     let facility = parsed.facility;
     let type = parsed.type;
@@ -467,7 +787,7 @@ export function parseQgendaICS(
     // below) is never touched — refinement only sharpens the
     // canonical type that pricing reads. When the facility is known
     // and the row was unpriced, price the refined type from its rule.
-    const hours = icsDurationHours(dtStartRaw, dtEndRaw);
+    // (`hours` was computed once, before the grammar branch above.)
     if (type === "Call (unclassified)" || type === "Shift") {
       let refined = "";
       if (description) {
@@ -508,15 +828,70 @@ export function parseQgendaICS(
       ? finalName
       : type;
 
+    // Facility code on the row (parser v3): QGenda feeds name their
+    // facility by a short code in the summary ("HOLZ", the "STM" of
+    // a "<CODE> - <Task>" title). When this row's facility is still
+    // unknown and the summary carries such a prefix segment, the
+    // code AS READ is the facility on the row — never the phrase
+    // the generic fallback scraped together ("Martin", "St. Mary")
+    // — so the client's facility question names the code, and the
+    // user's answer is remembered as that facility's alias. This
+    // mirrors what the grammar branch does for parsed tasks and
+    // what the no-silent-skip row does for unparseable ones.
+    let pPrefix = "";
+    if (!facilityKnown) {
+      const segs = summary
+        .split(/\s+[-\u2013\u2014]\s+|\s+[-\u2013\u2014]\s*$|^\s*[-\u2013\u2014]\s+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (
+        segs.length >= 2 && segs[0].length <= 12 &&
+        /^[A-Za-z0-9][A-Za-z0-9 .&']*$/.test(segs[0]) &&
+        !/^(19|20)\d{2}$/.test(segs[0])
+      ) {
+        facility = segs[0];
+        pPrefix = segs[0];
+      }
+      // A scraped unknown facility phrase can swallow the shift's
+      // own hour count ("St. Mary 12-hour shift" -> facility
+      // "St. Mary 12"): the trailing bare number is the duration,
+      // not part of the place's name, so it comes off — a facility
+      // is never named "... 12".
+      if (!pPrefix) {
+        const trimmed = facility.replace(/\s+\d{1,2}\s*$/, "").trim();
+        if (trimmed && trimmed !== facility) facility = trimmed;
+      }
+    }
+
+    // "<CODE> - <Task>" row on the parsed path: the shared parser
+    // buckets such a title to the generic type "Shift" (its
+    // bare-facility branch), which would leave the row's code AND
+    // type as the bare word "Shift" and hide the real assignment
+    // name from the clarification prompt. Keep the summary exactly
+    // as read as both — the same unclassified shape the
+    // no-silent-skip row uses — so the prompt asks about the real
+    // name and the learned codeMap prices it thereafter.
+    let pCode = code;
+    let pType = type;
+    if (
+      pPrefix && !facilityKnown && !pay && type === "Shift"
+    ) {
+      const pSummary = cleanQgendaShiftName(summary, userName);
+      if (pSummary && pSummary !== "Shift") {
+        pCode = pSummary;
+        pType = pSummary;
+      }
+    }
+
     shifts.push({
       date,
       facility,
-      type,
+      type: pType,
       pay,
       facilityKnown,
       status: parsed.status,
       uid,
-      code,
+      code: pCode,
       hours,
     });
     if (!facilityKnown) {
