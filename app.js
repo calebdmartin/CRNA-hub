@@ -196,7 +196,7 @@ function countByStatus(list,statuses){return list.filter(x=>statuses.includes(no
 function shiftStatusRank(s){const v=normalizeShiftStatus(s);return v==='completed'?4:v==='confirmed'?3:v==='proposed'?1:0}
 function shiftStartOf(x){return String((x&&(x.startTime||x.start))||'').trim()}
 function shiftFacilityKeyOf(x){const raw=String((x&&x.facility)||'');let f=null;try{f=facilityByNameOrAlias(raw)}catch(e){}return normFacilityName(f?f.name:raw).replace(/\s+/g,' ')}
-function shiftTypeKeyOf(x){return String((x&&x.type)||'').trim().toLowerCase().replace(/\s+/g,' ')}
+function shiftTypeKeyOf(x){return normalizeCodeKey(String((x&&x.type)||'').toLowerCase())}
 function shiftsSameShift(a,b){if(!a||!b)return false;const da=String(a.date||''),dbb=String(b.date||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(da)||da!==dbb)return false;const ta=shiftTypeKeyOf(a),tb=shiftTypeKeyOf(b);if(!ta||ta!==tb)return false;if(shiftFacilityKeyOf(a)!==shiftFacilityKeyOf(b))return false;const sa=shiftStartOf(a),sb=shiftStartOf(b);if(sa&&sb&&sa!==sb)return false;return true}
 function findSameShift(rec,list){return (list||[]).find(y=>y&&y!==rec&&shiftsSameShift(y,rec))||null}
 function shiftSourcesList(x){const out=[];const add=v=>{const s=String(v||'').trim();if(s&&!out.includes(s))out.push(s)};if(x){if(Array.isArray(x.sources))x.sources.forEach(add);add(x.source)}return out}
@@ -1666,7 +1666,7 @@ function captureMileageLogDraft(){
 }
 function render(){ captureMileageLogDraft(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));
 document.querySelectorAll('.previewPayUnit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.payUnit=el.value==='hourly'?'hourly':'daily';render()}}));
-document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.facContractKind').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f||!el.dataset.field||el.value===el.dataset.field)return;f.rates=f.rates||{};if(f.rates[el.dataset.field]!=null){f.rates[el.value]=f.rates[el.dataset.field];delete f.rates[el.dataset.field]}render()}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
+document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.clarifyCodeWeekday').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekdayPay=el.value}}));document.querySelectorAll('.clarifyCodeWeekend').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekendPay=el.value}}));document.querySelectorAll('.facContractKind').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f||!el.dataset.field||el.value===el.dataset.field)return;f.rates=f.rates||{};if(f.rates[el.dataset.field]!=null){f.rates[el.value]=f.rates[el.dataset.field];delete f.rates[el.dataset.field]}render()}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
 function area(name,label,value='',placeholder=''){return `<div class="field wide"><label for="f_${name}">${label}</label><textarea id="f_${name}" name="${name}" placeholder="${escapeHTML(placeholder)}">${escapeHTML(value)}</textarea></div>`}
 function select(name,label,options,value){return `<div class="field"><label for="f_${name}">${label}</label><select name="${name}" id="f_${name}">${options.map(o=>`<option value="${escapeHTML(o)}" ${o===value?'selected':''}>${escapeHTML(o)}</option>`).join('')}</select></div>`}
@@ -1837,7 +1837,7 @@ function shiftFacilityLabel(x){const f=String((x&&x.facility)||'').trim();if(f)r
 // and are deliberately NOT changed here.)
 function shiftChipLabel(x){
   if(!x)return 'Shift';
-  const code=String(x.code||'').trim();if(code)return code;
+  const code=normalizeCodeKey(x.code||'');if(code)return code;
   const fac=x.facility?facilityByNameOrAlias(x.facility):null;
   if(fac){const defs=facilityCodeDefs(fac);const t=String(x.type||'').trim();for(const k of Object.keys(defs)){const lab=String((defs[k]&&defs[k].label)||'').trim();if(lab&&lab===t)return k}}
   return shiftShortTypeLabel(x.type);
@@ -2103,7 +2103,25 @@ function payUnitControlHTML(preview,kind){const u=preview&&preview.payUnit==='ho
 // the same code prices automatically and never re-asks. Skipping is
 // remembered per facility (ratesPromptSkipped) so imports don't nag.
 function facilityCodeDefs(f){const cm=f&&f.codeMap;return (cm&&typeof cm==='object'&&!Array.isArray(cm))?cm:{}}
-function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;return facilityCodeDefs(f)[k]||null}
+// Code keys ignore empty-bracket noise: QGenda appends the assignee
+// in brackets, and feeds parsed before the server cleaner dropped
+// the emptied brackets left codes like "HOLZ - Call 2 [ ]" behind —
+// in saved codeMap keys, shift codes and shift types alike. A
+// bracket group still carrying letters or digits is real text and
+// stays; only the emptied shell is normalised away, so an old key
+// and its cleaned re-read still find each other.
+function normalizeCodeKey(code){return String(code||'').replace(/\[[^\[\]]*\]/g,m=>/[A-Za-z0-9]/.test(m)?m:' ').replace(/\s+/g,' ').trim()}
+function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;const defs=facilityCodeDefs(f);if(defs[k])return defs[k];const nk=normalizeCodeKey(k);if(nk){for(const key of Object.keys(defs)){if(normalizeCodeKey(key)===nk)return defs[key]}}return null}
+// The canonical shift type a free-text label names, when it names
+// one the facility pay rule prices directly ("Second call",
+// "24-hour call", "8-hour day", ...). Generic patterns only — a
+// facility's own numbers always come from its saved rates.
+function canonicalTypeOf(text){const t=String(text||'').toLowerCase();if(!t)return '';if(/call/.test(t)&&(/second/.test(t)||/(?:^|\D)2nd\b/.test(t)))return 'Second call';if(/call/.test(t)&&(/\b24\b/.test(t)||/first/.test(t)||/(?:^|\D)1st\b/.test(t)))return '24-hour call';const m=t.match(/(\d{1,2})\s*-\s*hour|(\d{1,2})\s*hour/);if(m){const n=+(m[1]||m[2]);if(n===8)return '8-hour day';if(n===10)return '10-hour shift';if(n===12)return '12-hour shift';if(n===24)return '24-hour call'}return ''}
+// True when a call type's weekday/weekend split is nowhere in the
+// facility's saved rates — no weekend flat, no weeknight flat, no
+// call-bonus structure the pricer could apply by day of week. Only
+// then does the clarification prompt ask the weekend question.
+function callSplitMissing(f,ctype){if(ctype==='Second call'){if(!f)return true;return rateOrNull(f.weekendRateSecond)==null&&rateOrNull(f.rateSecond)==null&&rateOrNull(f.callBonus)==null}if(ctype==='24-hour call'){if(!f)return true;return rateOrNull(f.weekendRate24)==null&&rateOrNull(f.rate24)==null&&rateOrNull(f.hourlyCall1st)==null}return false}
 function rowCodeKey(r){return String((r&&(r.code!=null&&String(r.code).trim()))?r.code:(r?r.type:'')||'').trim()}
 function importTargetRows(preview,name){
   const rows=(preview.rows||[]).filter(r=>r.match!=='other');
@@ -2119,21 +2137,45 @@ function unclarifiedCodes(preview,target){
   // Order of first appearance. Each returned code carries the first
   // included row's non-null hours for that code (as a string), so the
   // clarification prompt can pre-fill hours the feed already gave.
+  // A code ALSO comes back — flagged splitType — when it is a call
+  // type (Second call / 24-hour call) whose price does not come from
+  // a weekday/weekend split in the facility's saved rates: hourly x
+  // hours can never express "3,000 on a weekday, 2,000 on a weekend"
+  // (Caleb, Nov 9, 2026 — his QGenda Call 2 priced $6,000 flat on
+  // both), so the prompt asks the one weekend question for that
+  // code. Once the split is saved the code never re-asks.
   const seen=new Map();
   const priced=new Set();
+  const rulePriced=new Set();
+  const daySpan=new Map();
   for(const r of importTargetRows(preview,target.name)){
     if(!r.include)continue;
     const code=rowCodeKey(r);if(!code)continue;
     const rowHours=(typeof r.hours==='number'&&isFinite(r.hours))?String(r.hours):(r.hours!=null&&String(r.hours).trim()!==''?String(r.hours).trim():'');
-    if(!seen.has(code))seen.set(code,{code,hours:rowHours});
-    else if(!seen.get(code).hours&&rowHours)seen.get(code).hours=rowHours;
+    if(!seen.has(code))seen.set(code,{code,hours:rowHours,ctype:canonicalTypeOf(r.type)});
+    else{if(!seen.get(code).hours&&rowHours)seen.get(code).hours=rowHours;if(!seen.get(code).ctype)seen.get(code).ctype=canonicalTypeOf(r.type)}
+    if(psValidISO(r.date)){const dow=new Date(r.date+'T12:00:00').getDay();const sp=daySpan.get(code)||{wd:false,we:false};if(dow===0||dow===6)sp.we=true;else sp.wd=true;daySpan.set(code,sp)}
     if(target.fac){
-      if(facilityPayFor(target.fac,code,r.date)>0)priced.add(code);
-      else if(facilityPayFor(target.fac,r.type,r.date)>0)priced.add(code);
+      if(facilityPayFor(target.fac,code,r.date)>0){priced.add(code);rulePriced.add(code)}
+      else if(facilityPayFor(target.fac,r.type,r.date)>0){priced.add(code);rulePriced.add(code)}
       else if(codeDefFor(target.fac,code))priced.add(code);
     }
   }
-  return [...seen.values()].filter(e=>!priced.has(e.code));
+  const out=[];
+  for(const e of seen.values()){
+    const def=target.fac?codeDefFor(target.fac,e.code):null;
+    const ctype=e.ctype||(def?canonicalTypeOf(def.canonicalType||def.label||''):'');
+    const sp=daySpan.get(e.code)||{wd:false,we:false};
+    // The split question fires when the facility's rates cannot
+    // express one AND the code's price does not already come from
+    // the facility rule on both kinds of days: a fresh code (asked
+    // anyway), a code spanning weekdays and weekends, or a code the
+    // rule prices on NO date (a definition's flat hourly x hours is
+    // the only price it has — the Nov 9, 2026 bug shape).
+    const splitType=(ctype==='Second call'||ctype==='24-hour call')&&callSplitMissing(target.fac,ctype)&&(!priced.has(e.code)||(sp.wd&&sp.we)||!rulePriced.has(e.code))?ctype:'';
+    if(!priced.has(e.code)||splitType)out.push({...e,ctype:ctype||'',splitType});
+  }
+  return out;
 }
 function importRatesTarget(preview){
   if(!preview||preview.ratesSkipped)return null;
@@ -2166,16 +2208,29 @@ function clarifyEntryFor(preview,code,suggestedHours){
   const defHours=payUnitHoursFor(code,null);
   const label=typedLabel||defLabel;
   const hours=typedHours||suggHours||(defHours!=null?String(defHours):'');
-  return {label,hours,touched:!!(typedLabel||typedHours),answered:!!(label||hours)};
+  return {label,hours,touched:!!(typedLabel||typedHours),answered:!!(label||hours),weekdayPay:e.weekdayPay!=null?String(e.weekdayPay):'',weekendPay:e.weekendPay!=null?String(e.weekendPay):''};
 }
 function importRatesPromptHTML(preview,kind){
   const t=importRatesTarget(preview);if(!t)return '';
   const d=clarifyDraftOf(preview);
   const codeRows=t.codes.map((c,ci)=>{
-    const e=clarifyEntryFor(preview,c.code,c.hours);
-    return `<div class="form-grid"><div class="field"><label for="impCodeLabel_${kind}_${ci}">What is “${escapeHTML(c.code)}”?</label><input id="impCodeLabel_${kind}_${ci}" class="clarifyCodeLabel" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="text" value="${escapeHTML(e.label)}" placeholder="e.g. 8-hour day shift"></div><div class="field"><label for="impCodeHours_${kind}_${ci}">Hours for “${escapeHTML(c.code)}”</label><input id="impCodeHours_${kind}_${ci}" class="clarifyCodeHours" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.25" value="${escapeHTML(e.hours)}" placeholder="e.g. 8.5"></div></div>`;
+    const e0=clarifyEntryFor(preview,c.code,c.hours);
+    // A re-asked code (it has a saved definition; only its call
+    // split is missing) shows its saved answers, not blanks.
+    const def=t.fac?codeDefFor(t.fac,c.code):null;
+    const e=e0.touched?e0:(def?{...e0,label:String(def.label||e0.label),hours:def.hours!=null&&String(def.hours)!==''?String(def.hours):e0.hours}:e0);
+    let split='';
+    if(c.splitType){
+      const wdKey=c.splitType==='Second call'?'rateSecond':'rate24',weKey=c.splitType==='Second call'?'weekendRateSecond':'weekendRate24';
+      const wdVal=e0.weekdayPay||(t.fac&&rateOrNull(t.fac[wdKey])!=null?String(rateOrNull(t.fac[wdKey])):'');
+      const weVal=e0.weekendPay||(t.fac&&rateOrNull(t.fac[weKey])!=null?String(rateOrNull(t.fac[weKey])):'');
+      split=`<div class="form-grid"><div class="field"><label for="impCodeWeekday_${kind}_${ci}">${escapeHTML(c.splitType)} on a weekday ($)</label><input id="impCodeWeekday_${kind}_${ci}" class="clarifyCodeWeekday" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.01" value="${escapeHTML(wdVal)}" placeholder="e.g. 3000"></div><div class="field"><label for="impCodeWeekend_${kind}_${ci}">${escapeHTML(c.splitType)} on a weekend ($)</label><input id="impCodeWeekend_${kind}_${ci}" class="clarifyCodeWeekend" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.01" value="${escapeHTML(weVal)}" placeholder="e.g. 2000"></div></div><p class="muted">“${escapeHTML(c.code)}” falls on weekdays and weekends in this schedule, and call pay often differs — these are the totals for one ${escapeHTML(c.splitType.toLowerCase())} shift, and each date is priced by its own day of the week.</p>`;
+    }
+    return `<div class="form-grid"><div class="field"><label for="impCodeLabel_${kind}_${ci}">What is “${escapeHTML(c.code)}”?</label><input id="impCodeLabel_${kind}_${ci}" class="clarifyCodeLabel" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="text" value="${escapeHTML(e.label)}" placeholder="e.g. 8-hour day shift"></div><div class="field"><label for="impCodeHours_${kind}_${ci}">Hours for “${escapeHTML(c.code)}”</label><input id="impCodeHours_${kind}_${ci}" class="clarifyCodeHours" data-kind="${kind}" data-code="${escapeHTML(c.code)}" type="number" min="0" step="0.25" value="${escapeHTML(e.hours)}" placeholder="e.g. 8.5"></div></div>${split}`;
   }).join('');
-  return `<div class="item" style="display:block"><p><strong>First time at ${escapeHTML(t.name)}? Tell us what these shifts are</strong></p><p class="muted">We only ask about the shift${t.codes.length===1?'':'s'} on this schedule — nothing else. Set your hourly rate at ${escapeHTML(t.name)}, say what each code means, and these shifts price right away. We’ll remember them for next time. Skip and the shifts stay unpriced until rates are set on the Facilities tab.</p><div class="form-grid"><div class="field"><label for="impHourly_${kind}">Your hourly rate at ${escapeHTML(t.name)} ($/hr)</label><input id="impHourly_${kind}" class="clarifyHourly" data-kind="${kind}" type="number" min="0" step="0.01" value="${escapeHTML(d.hourlyRate!=null?d.hourlyRate:'')}" placeholder="e.g. 250"></div></div>${codeRows}<div class="toolbar"><button type="button" class="secondary" data-action="import-rates-skip" data-id="${kind}">Skip for now</button></div></div>`;
+  const reask=t.fac&&t.codes.every(c=>codeDefFor(t.fac,c.code));
+  const heading=reask?`Quick check — call pay at ${escapeHTML(t.name)}`:`First time at ${escapeHTML(t.name)}? Tell us what these shifts are`;
+  return `<div class="item" style="display:block"><p><strong>${heading}</strong></p><p class="muted">We only ask about the shift${t.codes.length===1?'':'s'} on this schedule — nothing else. Set your hourly rate at ${escapeHTML(t.name)}, say what each code means, and these shifts price right away. We’ll remember them for next time. Skip and the shifts stay unpriced until rates are set on the Facilities tab.</p><div class="form-grid"><div class="field"><label for="impHourly_${kind}">Your hourly rate at ${escapeHTML(t.name)} ($/hr)</label><input id="impHourly_${kind}" class="clarifyHourly" data-kind="${kind}" type="number" min="0" step="0.01" value="${escapeHTML(d.hourlyRate!=null?d.hourlyRate:'')}" placeholder="e.g. 250"></div></div>${codeRows}<div class="toolbar"><button type="button" class="secondary" data-action="import-rates-skip" data-id="${kind}">Skip for now</button></div></div>`;
 }
 function applyImportClarifyDraft(preview,target){
   // Applies the preview's clarification draft to the target facility:
@@ -2185,32 +2240,62 @@ function applyImportClarifyDraft(preview,target){
   // keeps asking next time. Returns {fac, saved} — saved=false when
   // no hourly rate was entered (nothing can price without one).
   if(!target)return{fac:null,saved:false};
-  const d=clarifyDraftOf(preview);const hourly=rateOrNull(d.hourlyRate);
-  if(hourly==null)return{fac:target.fac,saved:false};
+  const d=clarifyDraftOf(preview);
+  // The hourly rate may already live on the facility (a re-ask only
+  // about a call split leaves the field blank) — fall back to it. A
+  // brand-new facility still needs one entered: nothing can price
+  // without it, which is the saved=false case below.
+  const hourly=rateOrNull(d.hourlyRate)!=null?rateOrNull(d.hourlyRate):(target.fac?rateOrNull(target.fac.hourlyRate):null);
+  if(hourly==null&&!target.fac)return{fac:null,saved:false};
   let fac=target.fac;
   if(!fac){fac={id:id(),name:target.name,aliases:'',address:'',distance:'',notes:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',hourlyCall1st:'',weekendRate24:'',weekendRateSecond:'',codeMap:{},ratesPromptSkipped:false};db.facilities=db.facilities||[];db.facilities.push(fac)}
-  fac.hourlyRate=String(hourly);
+  if(hourly!=null)fac.hourlyRate=String(hourly);
   fac.codeMap=facilityCodeDefs(fac);
   for(const c of target.codes){
-    const e=clarifyEntryFor(preview,c.code,c.hours);if(!e.answered)continue;
-    const label=e.label||c.code;
-    const hours=rateOrNull(e.hours)!=null?rateOrNull(e.hours):payUnitHoursFor(label,fac);
-    fac.codeMap[c.code]={label,hours:hours!=null?String(hours):''};
+    const e=clarifyEntryFor(preview,c.code,c.hours);
+    const dc=(d.codes||{})[c.code]||{};
+    const wd=rateOrNull(dc.weekdayPay),we=rateOrNull(dc.weekendPay);
+    const existing=codeDefFor(fac,c.code);
+    if(!e.answered&&!existing&&wd==null&&we==null)continue;
+    // Untouched fields keep the saved definition's answers — a
+    // re-ask about only the weekend split must not blank the label
+    // or hours the user gave last time.
+    const touchedLabel=String(dc.label!=null?dc.label:'').trim()!=='';
+    const touchedHours=dc.hours!=null&&String(dc.hours).trim()!=='';
+    const label=touchedLabel?(e.label||c.code):((existing&&String(existing.label||'').trim())||e.label||c.code);
+    const hours=touchedHours?(rateOrNull(e.hours)!=null?rateOrNull(e.hours):payUnitHoursFor(label,fac)):((existing&&rateOrNull(existing.hours)!=null)?rateOrNull(existing.hours):(rateOrNull(e.hours)!=null?rateOrNull(e.hours):payUnitHoursFor(label,fac)));
+    const canonical=c.ctype||canonicalTypeOf(label);
+    const key=normalizeCodeKey(c.code)||c.code;
+    fac.codeMap[key]={label,hours:hours!=null?String(hours):'',...(canonical?{canonicalType:canonical}:{})};
+    if(key!==c.code&&fac.codeMap[c.code])delete fac.codeMap[c.code];
     if(/8-hour/i.test(label)&&hours!=null)fac.paidHours8=String(hours);
+    // The weekday/weekend answers land in the facility's own split
+    // rate fields — the same fields a contract read fills — so the
+    // ordinary pricer applies them by day of week from here on.
+    if(canonical==='Second call'){if(wd!=null)fac.rateSecond=String(wd);if(we!=null)fac.weekendRateSecond=String(we)}
+    else if(canonical==='24-hour call'){if(wd!=null)fac.rate24=String(wd);if(we!=null)fac.weekendRate24=String(we)}
   }
   fac.ratesPromptSkipped=false;fac.updatedAt=new Date().toISOString();
   return{fac,saved:true};
 }
 function clarifiedRowPricing(fac,row){
   // Prices a row from the facility's saved code definition for the
-  // row's code: hourly rate × the definition's hours, and the shift
-  // takes the clarified label as its type. Returns null when the
+  // row's code, and the shift takes the clarified label as its type.
+  // When the definition names a canonical type the facility's own
+  // pay rule prices (an 8-hour day, a Second call, ...), the
+  // facility pricer decides — it is the only path that can apply a
+  // weekday/weekend split by the row's own date, and it keeps the
+  // facility's flat rates and paid-hours rules in charge. Hourly x
+  // the definition's hours remains the price for codes whose label
+  // names no canonical type ("Night float"). Returns null when the
   // code has no definition; {type} alone when a definition exists
   // but cannot price (no hourly rate / no hours known).
   if(!fac)return null;
   const key=rowCodeKey(row);if(!key)return null;
   const def=codeDefFor(fac,key);if(!def)return null;
   const label=String(def.label||'').trim()||key;
+  const canonical=String(def.canonicalType||'').trim()||canonicalTypeOf(label);
+  if(canonical){const p=facilityPayFor(fac,canonical,row&&row.date);if(p>0)return{type:label,pay:String(Math.round(p*100)/100),payRate:'',payUnit:'facility'}}
   const hourly=rateOrNull(fac.hourlyRate);
   const hours=rateOrNull(def.hours)!=null?rateOrNull(def.hours):payUnitHoursFor(label,fac);
   if(hourly==null||hours==null)return{type:label};
@@ -2324,7 +2409,28 @@ function importPaySchedHint(preview,kind,saved){
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return '';
   return ` No pay schedule for ${ctx.agency} yet — add one any time on its card on the Facilities tab and its paychecks will show on your calendar.`;
 }
-function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}return n}
+function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}
+  // Derived pays re-price too (Nov 9, 2026): a shift whose amount
+  // was CALCULATED from this facility's clarification answers or
+  // rate rule — stamped payUnit 'hourly' or 'facility' when it was
+  // saved, or an unmarked import pay for a code the facility now has
+  // a definition for — holds a formula result, not a fact. When the
+  // rates behind the formula are corrected (a weekday/weekend split
+  // answered, paid hours fixed), the saved amounts follow. Amounts
+  // the user typed as per-shift totals (payUnit 'daily') and manual
+  // edits are never touched; a pay stub's actual lives on the stub
+  // record, not the shift, so actuals still win at the paycheck
+  // layer no matter what this pass does.
+  for(const x of (db.shifts||[])){
+    if(!x||!x.facility||!String(x.pay||'').trim())continue;
+    const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;
+    const derived=x.payUnit==='hourly'||x.payUnit==='facility'||(!x.payUnit&&String(x.code||'').trim()!==''&&!!codeDefFor(f,x.code));
+    if(!derived)continue;
+    let np=null;const cp=clarifiedRowPricing(f,x);if(cp&&cp.pay)np={pay:cp.pay,payRate:cp.payRate,payUnit:cp.payUnit};
+    else if(x.payUnit==='facility'){const p=facilityPayFor(f,x.type,x.date);if(p>0)np={pay:String(Math.round(p*100)/100),payRate:'',payUnit:'facility'}}
+    if(np&&String(x.pay)!==String(np.pay)){x.pay=String(np.pay);x.payRate=np.payRate;x.payUnit=np.payUnit;x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+  }
+  return n}
 // One-line rate summary for the facilities list. Only rates that are set
 // are shown as amounts; a blank rate is shown as "not set", never $0.00.
 function facilityRateSummary(x){
@@ -3627,7 +3733,7 @@ function calPreviewNeedsFacility(){
 }
 function calPreviewHTML(){if(!calPreview)return '<p class="muted">No calendar file parsed yet. Choose an .ics file above, then parse it — nothing is saved until you approve the preview.</p>';const rows=calPreview.rows,dup=rows.filter(r=>r.duplicate).length,need=rows.filter(r=>r.flags.length).length;return `<p><strong>Parsed from:</strong> ${escapeHTML(calPreview.fileName)} · Source: ${escapeHTML(calPreview.sourceLabel)} · ${rows.length} event(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Duplicates are events already in the app with the same date, facility, and shift type. Uncheck any row to leave it out. Rows with a missing date or facility block approval until fixed or unchecked.</p>${calPreviewNeedsFacility()?`<div class="form-grid"><div class="field"><label for="calFacilityAll">Which facility is this schedule for?</label><input id="calFacilityAll" class="calFacilityAll" list="facilityNamesCal" value="${escapeHTML(calPreview.facilityAll||'')}" placeholder="e.g. CAMC"><datalist id="facilityNamesCal">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(calPreview,'cal')}${importRatesPromptHTML(calPreview,'cal')}${importPaySchedHTML(calPreview,'cal')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${calPreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="calInclude" data-row="${i}" ${r.include?'checked':''}></td><td><input type="date" class="calEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.code||r.type||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${r.duplicate?'<span class="pill warn">duplicate — will merge</span> ':''}${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="cal-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="cal-discard">Discard preview</button></div>`}
 async function importCalendar(e){e.preventDefault();calImportError='';const f=$('f_calFile').files[0];const sourceLabel=$('f_calSource').value||'Calendar file';if(!f){calImportError='Choose an .ics calendar file first (Google, Apple, or Outlook can all export one).';return render()}let text='';try{text=await f.text()}catch(err){calImportError='Could not read that file: '+err.message;return render()}if(!/^BEGIN:VCALENDAR/i.test(text.trim())){calImportError='That file is not a calendar (.ics) file. Export your calendar as .ics from Google, Apple, or Outlook and try again. Nothing was saved.';calPreview=null;return render()}const parsed=parseICS(text,f.name);const sourceCode=CAL_SOURCES[sourceLabel]||'calendar-file';const grossByBlock=text.split(/BEGIN:VEVENT/i).slice(1).map(b=>{const m=b.match(/Expected gross:\s*\$?([\d\\,]+(?:\.\d+)?)/i);return m?m[1].replace(/[\\,]/g,''):''});const rows=parsed.rows.map((r,ri)=>{if(grossByBlock[ri])r={...r,pay:grossByBlock[ri]};const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,r));const flags=[...r.flags];if(duplicate)flags.push('already in CRNA Hub — will merge, not double');return {...r,source:sourceCode,sourceLabel,status:importStatusForDate(r.date),include:true,duplicate,incomplete:!String(r.pay||'').trim(),note:'Imported from '+sourceLabel+' (.ics): '+f.name}});calPreview={fileName:f.name,sourceLabel,sourceCode,rows};if(!rows.length){calImportError='No events found in that calendar file. Nothing was saved.';calPreview=null}render()}
-function approveCalendarImport(){if(!calPreview)return;const rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac){const fillTarget=facilityByNameOrAlias(fillFac);const pendingFill=rows.filter(r=>!scheduleRowFacilityResolved(r));for(const r of pendingFill){const prevFac=String(r.facility||'').trim();r.facility=fillFac;if(fillTarget&&prevFac&&prevFac.length<=12&&/^[A-Za-z0-9][A-Za-z0-9.&']*$/.test(prevFac))addFacilityAlias(fillTarget,prevFac)}}let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportClarifyDraft(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}let created=0,skipped=0,newFacilities=0;for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0)pay=String(pp)}const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note});if(res.merged){skipped++;continue}created++;if(r.facility&&!facilityByNameOrAlias(r.facility)){db.facilities.push({id:id(),name:String(r.facility).trim(),aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:''});newFacilities++}}const dups=calPreview.rows.filter(r=>r.duplicate).length;const calPaySchedSaved=applyImportPaySched(calPreview,'cal');const calPaySchedHint=importPaySchedHint(calPreview,'cal',calPaySchedSaved);calPreview=null;persist();render();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();alert(`Added ${created} shift(s) from the calendar. Merged ${skipped} duplicate(s) into existing shifts — never doubled.${newFacilities&&!ratesSavedFor?` New facilit(ies) learned: set their pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}${calPaySchedSaved?` Pay schedule saved for ${calPaySchedSaved.agency} — paychecks for these shifts now show on your calendar.`:''}${calPaySchedHint}`)}
+function approveCalendarImport(){if(!calPreview)return;const rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac){const fillTarget=facilityByNameOrAlias(fillFac);const pendingFill=rows.filter(r=>!scheduleRowFacilityResolved(r));for(const r of pendingFill){const prevFac=String(r.facility||'').trim();r.facility=fillFac;if(fillTarget&&prevFac&&prevFac.length<=12&&/^[A-Za-z0-9][A-Za-z0-9.&']*$/.test(prevFac))addFacilityAlias(fillTarget,prevFac)}}let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportClarifyDraft(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}let created=0,skipped=0,newFacilities=0;for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0){pay=String(pp);payUnit='facility'}}const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note});if(res.merged){skipped++;continue}created++;if(r.facility&&!facilityByNameOrAlias(r.facility)){db.facilities.push({id:id(),name:String(r.facility).trim(),aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:''});newFacilities++}}if(ratesTarget){const rf=facilityByNameOrAlias(ratesTarget.name);if(rf)repriceUnpricedShiftsForFacility(rf)}const dups=calPreview.rows.filter(r=>r.duplicate).length;const calPaySchedSaved=applyImportPaySched(calPreview,'cal');const calPaySchedHint=importPaySchedHint(calPreview,'cal',calPaySchedSaved);calPreview=null;persist();render();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();alert(`Added ${created} shift(s) from the calendar. Merged ${skipped} duplicate(s) into existing shifts — never doubled.${newFacilities&&!ratesSavedFor?` New facilit(ies) learned: set their pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}${calPaySchedSaved?` Pay schedule saved for ${calPaySchedSaved.agency} — paychecks for these shifts now show on your calendar.`:''}${calPaySchedHint}`)}
 function exportCalendarICS(shifts,filename){if(!shifts.length){alert('No shifts to export.');return}download(filename,shiftsToICS(shifts),'text/calendar;charset=utf-8')}
 function backupHTML(){
   return collapsePanelHTML('backup-panel','Backup & restore',`<p class="muted">${escapeHTML(cloudHeaderLabel())}</p><div class="toolbar"><button data-action="backup">Download JSON backup</button><button class="secondary" data-action="export-shifts">Download shift CSV</button><button class="secondary" data-action="export-mileage">Download mileage CSV</button></div>${mileageExportOpen?mileageExportPickerHTML():''}<label for="restoreFile">Restore a CRNA Hub JSON backup (replaces current records)</label><input id="restoreFile" type="file" accept=".json,application/json"><p class="muted" style="font-size:0.85em">${INCOME_DISCLAIMER}</p>`,false);
@@ -3912,9 +4018,15 @@ function approveScheduleImport(){
   for(const r of rows){
     let pay='',inc=true,payRate='',payUnit='',shiftType=r.type;
     const facForRow=facilityByNameOrAlias(r.facility);
-    if(String(r.pay||'').trim()){const conv=previewPayConversion(r.pay,schedulePreview.payUnit,r.type,facForRow);pay=conv.pay;payRate=conv.payRate;payUnit=conv.payUnit;inc=!pay}
+    if(String(r.pay||'').trim()){const conv=previewPayConversion(r.pay,schedulePreview.payUnit,r.type,facForRow);pay=conv.pay;payRate=conv.payRate;payUnit=conv.payUnit;inc=!pay;
+      // A QGenda row's pay was computed by the server FROM this
+      // facility's own saved rates — it is a formula result, not a
+      // number anyone typed. When it matches the rule exactly, keep
+      // it marked as facility-derived so a later rate correction
+      // reprices it like every other derived pay.
+      if(r.source==='qgenda'&&facForRow){const fp=facilityPayFor(facForRow,r.type,r.date);if(fp>0&&Math.abs(fp-Number(pay))<0.005){payUnit='facility';payRate=''}}}
     if(facForRow){const cp=clarifiedRowPricing(facForRow,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit;inc=false}}}
-    if(!pay&&facForRow){const p=facilityPayFor(facForRow,shiftType,r.date); if(p>0){pay=String(p);inc=false}}
+    if(!pay&&facForRow){const p=facilityPayFor(facForRow,shiftType,r.date); if(p>0){pay=String(p);payUnit='facility';inc=false}}
     const res=addShiftDeduped({id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source||'schedule-import',sources:[r.source||'schedule-import'],incomplete:inc,updatedAt:new Date().toISOString(),note:'Schedule import: '+schedulePreview.fileName+(schedulePreview.matchedName?(' — matched name "'+schedulePreview.matchedName+'"'):'')});
     if(res.merged){skipped++;continue}
     if(!pay)incomplete++;
@@ -3922,6 +4034,11 @@ function approveScheduleImport(){
     if(r.facility&&!facilityByNameOrAlias(r.facility)&&!newNames.some(n=>normFacilityName(n)===normFacilityName(r.facility)))newNames.push(r.facility);
   }
   if(newNames.length)mergeFacilitySuggestions('schedule-import',newNames.map(n=>({name:n,count:(db.shifts||[]).filter(x=>normFacilityName(x.facility)===normFacilityName(n)).length,firstDate:'',lastDate:''})),schedulePreview.fileName);
+  // A re-approve that just taught the facility new rates (a call
+  // split, corrected hours) heals the shifts an earlier approve of
+  // the same rows already saved — merges kept their old amounts, so
+  // reprice the facility's derived pays before the totals are read.
+  if(ratesTarget){const rf=facilityByNameOrAlias(ratesTarget.name);if(rf)repriceUnpricedShiftsForFacility(rf)}
   const paySchedSaved=applyImportPaySched(schedulePreview,'sched');
   const paySchedHint=importPaySchedHint(schedulePreview,'sched',paySchedSaved);
   const fileName=schedulePreview.fileName;
@@ -4579,7 +4696,12 @@ if(typeof document!=='undefined'&&document&&typeof document.addEventListener==='
     qgendaStatusLoaded=false; qgendaStatusRefresh();
   });
 }
-function submitEntry(e){e.preventDefault();const kind=e.currentTarget.dataset.kind;if(kind==='documents'){submitDocument(e);return;}if(kind==='home-address'){submitHomeAddress(e);return;}if(kind==='portal-check'){submitPortalCheck(e);return;}if(kind==='portal-check-approve'){approvePortalCheck(e);return;}if(kind==='monitor-cadence'){const rec=Object.fromEntries(new FormData(e.currentTarget));const m=(db.portalMonitoring||[]).find(x=>x.key===rec.key);if(m){const v=parseInt(rec.cadenceDays,10);if(Number.isFinite(v)&&v>0)m.cadenceDays=v;persist();}render();return;}if(kind==='paycheck-edit'){submitPaycheckEdit(e);return;}const record=Object.fromEntries(new FormData(e.currentTarget));if(kind==='nbcrna'||kind==='aana'){db[kind]={...(db[kind]||{}),...record,source:'user_entered',updatedAt:new Date().toISOString()};persist();cloudSaveKind(kind);render();return;}if(kind==='licenses')record.source='user_entered';if(kind==='payStubs'){record.agency=String(record.agency||'').trim();record.facility=String(record.facility||'').trim();record.frequency=normalizePayFrequency(record.frequency);for(const d of ['periodStart','periodEnd','payDate'])record[d]=psValidISO(record[d]);for(const a of ['gross','net'])record[a]=rateOrNull(record[a])==null?'':String(rateOrNull(record[a]));if(!record.agency){alert('Enter the agency / employer name first.');return}if(!record.frequency||!record.payDate){alert('A pay schedule needs a pay frequency and a pay date — the calendar dates come from those.');return}if(!editId)record.source='manual';}if(kind==='vehicles'){record.name=String(record.name||'').trim();record.make=String(record.make||'').trim();record.model=String(record.model||'').trim();record.year=String(record.year||'').trim();delete record.plate;record.isDefault=record.isDefault==='on';if(!record.name){alert('Give the vehicle a name first \u2014 e.g. 2022 Silverado.');return}}if(kind==='shifts'&&!String(record.pay).trim()){const f=facilityByNameOrAlias(record.facility);const p=f?facilityPayFor(f,record.type,record.date):0;if(p>0){record.pay=String(Math.round(p*100)/100);record.incomplete=false}else{record.pay='';record.incomplete=true}}if(kind==='shifts'&&String(record.pay).trim())record.incomplete=false;if(kind==='shifts')record.status=normalizeShiftStatus(record.status);// Newest edit wins on the calendar side needs a timestamp: stamp every
+function submitEntry(e){e.preventDefault();const kind=e.currentTarget.dataset.kind;if(kind==='documents'){submitDocument(e);return;}if(kind==='home-address'){submitHomeAddress(e);return;}if(kind==='portal-check'){submitPortalCheck(e);return;}if(kind==='portal-check-approve'){approvePortalCheck(e);return;}if(kind==='monitor-cadence'){const rec=Object.fromEntries(new FormData(e.currentTarget));const m=(db.portalMonitoring||[]).find(x=>x.key===rec.key);if(m){const v=parseInt(rec.cadenceDays,10);if(Number.isFinite(v)&&v>0)m.cadenceDays=v;persist();}render();return;}if(kind==='paycheck-edit'){submitPaycheckEdit(e);return;}const record=Object.fromEntries(new FormData(e.currentTarget));if(kind==='nbcrna'||kind==='aana'){db[kind]={...(db[kind]||{}),...record,source:'user_entered',updatedAt:new Date().toISOString()};persist();cloudSaveKind(kind);render();return;}if(kind==='licenses')record.source='user_entered';if(kind==='payStubs'){record.agency=String(record.agency||'').trim();record.facility=String(record.facility||'').trim();record.frequency=normalizePayFrequency(record.frequency);for(const d of ['periodStart','periodEnd','payDate'])record[d]=psValidISO(record[d]);for(const a of ['gross','net'])record[a]=rateOrNull(record[a])==null?'':String(rateOrNull(record[a]));if(!record.agency){alert('Enter the agency / employer name first.');return}if(!record.frequency||!record.payDate){alert('A pay schedule needs a pay frequency and a pay date — the calendar dates come from those.');return}if(!editId)record.source='manual';}if(kind==='vehicles'){record.name=String(record.name||'').trim();record.make=String(record.make||'').trim();record.model=String(record.model||'').trim();record.year=String(record.year||'').trim();delete record.plate;record.isDefault=record.isDefault==='on';if(!record.name){alert('Give the vehicle a name first \u2014 e.g. 2022 Silverado.');return}}if(kind==='shifts'&&!String(record.pay).trim()){const f=facilityByNameOrAlias(record.facility);const p=f?facilityPayFor(f,record.type,record.date):0;if(p>0){record.pay=String(Math.round(p*100)/100);record.incomplete=false}else{record.pay='';record.incomplete=true}}if(kind==='shifts'&&String(record.pay).trim()){record.incomplete=false;
+// A pay typed by hand in this form is the user's own number, not a
+// formula result — clear the derived markers so a later rate edit
+// never reprices over it (derived pays carry payUnit hourly /
+// facility; see repriceUnpricedShiftsForFacility).
+record.payRate='';record.payUnit=''}if(kind==='shifts')record.status=normalizeShiftStatus(record.status);// Newest edit wins on the calendar side needs a timestamp: stamp every
 // app-side shift save (add or edit) so the sync engine can tell a newer
 // local edit from the provider copy and push the update to the app-owned
 // calendar. Before this the stamp was never set (updatedAt stayed null)

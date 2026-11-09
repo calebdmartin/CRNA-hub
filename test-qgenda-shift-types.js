@@ -156,8 +156,13 @@ const NEW_SHIFTS = [
       w.run(`schedulePreview.rows[1].hours`) === null &&
       w.run(`schedulePreview.rows[3].hours`) === 12);
     t('a unclarified codes are the distinct unpriced codes, with row hours attached',
+      // Nov 9, 2026: entries also carry ctype (the canonical type
+      // the code's rows arrived with) and splitType — the two call
+      // codes are flagged for the weekday/weekend follow-up because
+      // this facility has no call split at all and the codes are
+      // being clarified anyway; Night Float is not a call type.
       JSON.stringify(w.run(`unclarifiedCodes(schedulePreview, { name: 'Holzer', fac: db.facilities[0] })`)) ===
-      JSON.stringify([{ code: '8/2nd call', hours: '' }, { code: '24/1st call', hours: '24' }, { code: 'Night Float', hours: '12' }]),
+      JSON.stringify([{ code: '8/2nd call', hours: '', ctype: 'Second call', splitType: 'Second call' }, { code: '24/1st call', hours: '24', ctype: '24-hour call', splitType: '24-hour call' }, { code: 'Night Float', hours: '12', ctype: '', splitType: '' }]),
       JSON.stringify(w.run(`unclarifiedCodes(schedulePreview, { name: 'Holzer', fac: db.facilities[0] })`)));
     const html = w.run(`importRatesPromptHTML(schedulePreview, 'sched')`);
     t('a prompt asks "What is" for "8/2nd call"', html.includes('What is “8/2nd call”?'));
@@ -227,7 +232,7 @@ const NEW_SHIFTS = [
     appSrc.includes(`code:String(sh.code||'').trim()`) &&
     appSrc.includes(`hours:(typeof sh.hours==='number'&&isFinite(sh.hours))?sh.hours:null`));
   t('pin: service worker cache bumped to v96',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v99'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v100'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

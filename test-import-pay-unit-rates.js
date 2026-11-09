@@ -81,7 +81,12 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   t('prompt centres on ONE shared hourly rate field', (html2.match(/clarifyHourly/g) || []).length === 1 && html2.includes('Your hourly rate at CAMC'));
   run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{'5**':{label:'8-hour day shift', hours:'8.5'}}}; approveScheduleImport();`);
   t('facility is created with the hourly rate + the code definition', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].codeMap['5**'].label`) === '8-hour day shift' && run(`db.facilities[0].codeMap['5**'].hours`) === '8.5');
-  t('the clarified code prices immediately (250 x 8.5) and takes its label', run(`db.shifts.length`) === 2 && run(`db.shifts[0].pay`) === '2125' && run(`db.shifts[0].type`) === '8-hour day shift' && run(`db.shifts[0].payUnit`) === 'hourly' && run(`db.shifts[0].incomplete`) === false);
+  t('the clarified code prices immediately (250 x 8.5) and takes its label', run(`db.shifts.length`) === 2 && run(`db.shifts[0].pay`) === '2125' && run(`db.shifts[0].type`) === '8-hour day shift' && run(`db.shifts[0].payUnit`) === 'facility' && run(`db.shifts[0].incomplete`) === false);
+  // payUnit note (Nov 9, 2026): the label "8-hour day shift" names a
+  // canonical type, so clarified pricing now routes through the
+  // facility rule (hourly x paidHours8 — the same 250 x 8.5 = 2125)
+  // and stamps 'facility' instead of 'hourly'. Both markers are
+  // derived pays for the reprice pass; the amount is unchanged.
   t('partial clarification: the untouched code stays unpriced, approval not blocked', run(`db.shifts[1].pay`) === '' && run(`db.shifts[1].incomplete`) === true && run(`db.shifts[1].type`) === '5*');
   t('approval message says rates were saved', lastAlert().includes('Rates saved for CAMC'));
 

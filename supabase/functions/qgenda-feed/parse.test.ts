@@ -616,7 +616,44 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 3);
+  assertEquals(QGENDA_PARSER_VERSION, 4);
+});
+
+Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
+  // Caleb's real feed shape (Nov 9, 2026): QGenda appends the
+  // assignee in brackets. Stripping the name used to leave "[ ]"
+  // behind, and it rode into the saved code and the calendar chip.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (8) [Caleb Martin]", "Caleb Martin"), "HOLZ - G Main (8)");
+  assertEquals(cleanQgendaShiftName("HOLZ - Call 2 [Martin]", "Martin"), "HOLZ - Call 2");
+  // A bracket group still carrying real text is part of the name.
+  assertEquals(cleanQgendaShiftName("HOLZ - G Main (8) [Night]", "Caleb Martin"), "HOLZ - G Main (8) [Night]");
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VEVENT",
+    "UID:br-1@qgenda.com",
+    "DTSTART:20261110T070000",
+    "DTEND:20261110T150000",
+    "SUMMARY:HOLZ - G Main (8) [Caleb Martin]",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:br-2@qgenda.com",
+    "DTSTART:20261108T070000",
+    "DTEND:20261109T070000",
+    "SUMMARY:HOLZ - Call 2 [Caleb Martin]",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts, eventCount } = parseQgendaICS(ics, HOLZER_FULL, { name: "Caleb Martin" });
+  assertEquals(eventCount, 2);
+  assertEquals(shifts.length, 2);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  assertEquals(byUid.get("br-1@qgenda.com")?.code, "HOLZ - G Main (8)");
+  assertEquals(byUid.get("br-1@qgenda.com")?.pay, "2125");
+  assertEquals(byUid.get("br-2@qgenda.com")?.code, "HOLZ - Call 2");
+  assertEquals(byUid.get("br-2@qgenda.com")?.type, "Second call");
+  // Sunday Nov 8, 2026: the weekend second-call flat from the rule.
+  assertEquals(byUid.get("br-2@qgenda.com")?.pay, "2000");
 });
 
 Deno.test("qgendaShiftName: priority, cleaning, and no mangling of shift words", () => {

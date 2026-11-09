@@ -21,7 +21,10 @@ import {
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v3, Nov 8, 2026: the
+// Bump whenever the parse semantics change (v4, Nov 9, 2026: the
+// name cleaner also drops bracket groups the assignee strip empties
+// — QGenda appends the assignee in brackets, and the leftover
+// "[ ]" was riding into shift codes and calendar chips; v3, Nov 8, 2026: the
 // QGenda "<FACILITY CODE> - <Task>" grammar is parsed explicitly —
 // "G Main (N)" day shifts, numbered "Call 1"/"Call 2" — facility
 // codes resolve against a facility's name and aliases in
@@ -30,7 +33,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 3;
+export const QGENDA_PARSER_VERSION = 4;
 
 export interface QgendaShift {
   date: string;
@@ -172,6 +175,13 @@ export function cleanQgendaShiftName(raw: string, userName = ""): string {
     " ",
   );
   s = s.replace(/\b(?:19|20)\d{2}\b/g, " ");
+  // Bracket groups the strips above emptied: QGenda appends the
+  // assignee in brackets ("... [Caleb Martin]"), so once the name is
+  // stripped the group holds no letters or digits and is pure
+  // punctuation noise — drop it, or it rides into the saved code
+  // and the calendar chip ("HOLZ - G Main (8) [ ]"). A bracket group
+  // still carrying real text is part of the name and stays.
+  s = s.replace(/\[[^\[\]]*\]/g, (m) => /[A-Za-z0-9]/.test(m) ? m : " ");
   s = s.replace(/\s+/g, " ").trim();
   // Leading/trailing separators (possibly several in a row once a
   // name token has been removed: "Martin - X" -> "- X" -> "X").

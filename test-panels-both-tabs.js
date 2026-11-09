@@ -181,7 +181,7 @@ const RESET = `
     acct.includes('id="live-sync-panel"'));
 
   t('service worker cache bumped to v81',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v99'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v100'));
 
   console.log(failures === 0 ? 'panels-both-tabs test done: all passed' : 'panels-both-tabs test done: FAILURES=' + failures);
 })();
