@@ -141,6 +141,14 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   t('C broken paychecks reproduce the live figures ($14,000 / $38,000 / $52,000)', occ('2026-11', '2026-11-10').total === 14000 && occ('2026-11', '2026-11-24').total === 38000 && run(`monthHeadline('2026-11').gross`) === 52000);
   run(`schedulePreview = ${JSON.stringify(mkPreview())};`);
   const codesC = run(`unclarifiedCodes(schedulePreview, importRatesTarget(schedulePreview))`);
+  // December round (Nov 9, 2026): the first approve above ran the
+  // CURRENT clarifier, whose prompt shows the day code's
+  // paid-hours field — approving recorded the shown default, so
+  // the day code does NOT come back with a paid-hours question
+  // here (the re-ask stays split-only). The paid-hours RE-ask
+  // fires only for definitions saved before the question existed
+  // (no paidHours on the def) — covered by
+  // test-december-combining.js.
   t('C re-ask is split-only: day code stays home, both call codes return flagged', codesC.length === 2 && codesC.every(c => c.splitType) && !codesC.some(c => c.code === G), JSON.stringify(codesC.map(c => [c.code, c.splitType])));
   const htmlC = run(`schedulePreviewHTML()`);
   t('C re-ask heading is the quick-check variant', htmlC.includes('Quick check — call pay at Holzer'));
