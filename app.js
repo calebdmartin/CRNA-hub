@@ -572,67 +572,118 @@ function healPaystubRecordShapes(){
   }
   return changed;
 }
+// THE pricing resolution order (Nov 10, 2026 — the Edit-form round):
+// every pass that prices or re-prices a shift resolves the same way,
+// so the rate card and the per-shift rules captured in the user's own
+// words can never disagree between screens: (1) an unpaid code
+// definition is final — $0 on purpose; (2) the clarified per-code
+// definition (it carries the user's weekday/weekend amounts and
+// paid-hours answers); (3) the facility rate card by the shift's
+// type. Returns {pay,payRate,payUnit}, or null when nothing can
+// price the shift.
+function resolveShiftPrice(fac,x){
+  if(!fac||!x)return null;
+  const udef=x.code?codeDefFor(fac,x.code):null;
+  if(udef&&udef.unpaid)return{pay:'0',payRate:'',payUnit:'unpaid'};
+  const cp=clarifiedRowPricing(fac,x);
+  if(cp&&cp.pay!=null&&String(cp.pay).trim()!=='')return{pay:String(cp.pay),payRate:cp.payRate||'',payUnit:cp.payUnit||''};
+  const p=facilityPayFor(fac,x.type,x.date);
+  if(p>0)return{pay:String(Math.round(p*100)/100),payRate:'',payUnit:'facility'};
+  return null;
+}
 // Live price for a shift whose stored pay cannot be used (Nov 10,
 // 2026 — the $0.00 paycheck bug): the paycheck estimate is DEFINED
 // as the period's shifts priced at the facility rate card, so a
 // blank (or incomplete-flagged) stored stamp must never read as $0
-// when the card can price the shift. Clarified per-code definitions
-// price first (they carry the weekday/weekend splits and per-code
-// amounts), then the facility card by canonical type. Returns 0
-// only when no card can price the shift.
+// when the card can price the shift. Delegates to the one resolution
+// order above; returns 0 only when no rule can price the shift.
 function paystubLiveShiftPrice(x){
   const fac=x&&x.facility?facilityByNameOrAlias(x.facility):null;
   if(!fac)return 0;
-  // An unpaid code has no live price to find (Nov 10, 2026): its
-  // definition says $0 on purpose. (clarifiedRowPricing would say
-  // the same; this guard keeps the card fallback below from ever
-  // pricing the shift by its feed type instead.)
-  const udef=x.code?codeDefFor(fac,x.code):null;
-  if(udef&&udef.unpaid)return 0;
-  const cp=clarifiedRowPricing(fac,x);
-  if(cp&&num(cp.pay)>0)return num(cp.pay);
-  const p=facilityPayFor(fac,x.type,x.date);
-  return p>0?p:0;
+  const res=resolveShiftPrice(fac,x);
+  return res?num(res.pay):0;
 }
-// Boot heal (Nov 10, 2026 — the $0.00 paycheck bug): shifts saved
-// with a blank stored pay (an older build's import, a cloud download
-// shape the paycheck layer reads as unpriced) are priced from their
-// facility's rate card and stamped, on plain open — no re-import, no
-// re-upload, no manual rate edit. Only blank pays are stamped; an
-// amount already stored is never moved here (derived amounts follow
-// rule changes through repriceUnpricedShiftsForFacility, as before).
-// A stamped amount still flagged incomplete whose value equals the
-// card's price is a formula result the flag outlived, so the flag
-// clears; a differing amount is the user's number and stays flagged
-// exactly as stored (the paycheck layer still live-prices it).
-function healUnpricedShiftPays(){
-  let n=0;
+// Was this shift's stored pay CALCULATED from the facility's rules
+// (a formula result that must follow when the rules are corrected),
+// rather than typed by the user as a fact? Amounts the user typed as
+// per-shift totals (payUnit 'daily') and manual edits are never
+// derived — with one December-round exception below, where a
+// feed-priced total stamped 'daily' at approve is recognisably the
+// old formula's output (hourly x the definition's shift hours,
+// exactly) and follows a paid-hours correction.
+function shiftPayIsDerived(f,x){
+  if(!f||!x)return false;
+  if(x.payUnit==='hourly'||x.payUnit==='facility'||x.payUnit==='unpaid')return true;
+  if(!x.payUnit&&String(x.code||'').trim()!==''&&!!codeDefFor(f,x.code))return true;
+  if(x.payUnit==='daily'&&String(x.code||'').trim()){
+    const def=codeDefFor(f,x.code);
+    const srcs=shiftSourcesList(x);
+    if(def&&srcs.length&&!srcs.every(v=>v==='user-entered')){
+      const canon=String(def.canonicalType||'').trim()||canonicalTypeOf(def.label||'');
+      const hr=rateOrNull(f.hourlyRate),dh=rateOrNull(def.hours);
+      if(canon&&/hour/i.test(canon)&&!/call/i.test(canon)&&hr!=null&&dh!=null&&Math.abs(num(x.pay)-Math.round(hr*dh*100)/100)<0.005)return true;
+    }
+  }
+  return false;
+}
+// Repair every shift of one facility against the CURRENT rules, in
+// the one resolution order (resolveShiftPrice). Blank pays are
+// stamped; derived stamps follow corrected rules; a stamped amount
+// still flagged incomplete is restamped when it is a formula result,
+// and its flag clears when it already equals the resolved price; an
+// unpaid code is stamped $0/unpaid and stays there. A number the
+// user typed as a per-shift total is a fact — never moved (while it
+// is flagged, the paycheck layer live-prices around it). A shift no
+// rule can price is left exactly as stored, so it keeps surfacing as
+// incomplete instead of hiding. Returns {priced, updated}: shifts
+// that were unpriced and now hold a price, and already-priced shifts
+// whose amount followed a rule change.
+function repairShiftPaysForFacility(f){
+  const out={priced:0,updated:0};
+  if(!f)return out;
   for(const x of (db.shifts||[])){
     if(!x||!x.facility)continue;
-    const fac=facilityByNameOrAlias(x.facility);if(!fac)continue;
-    // Unpaid-definition shifts (Nov 10, 2026): a code the user
-    // defined as no-pay is a KNOWN $0, never an unusable stamp to
-    // reprice from the card. Stamp it (or clear a stale incomplete
-    // flag on it) exactly as stored — final. A hand-typed
-    // per-shift total (payUnit 'daily') with a real amount is the
-    // user's correction layer and is left alone, matching the
-    // derived-pay rule everywhere else.
-    const udef=x.code?codeDefFor(fac,x.code):null;
-    if(udef&&udef.unpaid){
-      const blank0=String(x.pay||'').trim()==='';
-      const derivedStamp=blank0||x.incomplete||x.payUnit==='hourly'||x.payUnit==='facility'||x.payUnit==='unpaid'||!x.payUnit;
-      if(derivedStamp&&(String(x.pay||'')!=='0'||x.payUnit!=='unpaid'||x.incomplete)){x.pay='0';x.payRate='';x.payUnit='unpaid';x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+    const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;
+    const res=resolveShiftPrice(f,x);if(!res)continue;
+    const wasPriced=isPricedShift(x);
+    const blank=String(x.pay||'').trim()==='';
+    const stamp=()=>{x.pay=res.pay;x.payRate=res.payRate;x.payUnit=res.payUnit;x.incomplete=false;x.updatedAt=new Date().toISOString()};
+    if(res.payUnit==='unpaid'){
+      // $0 on purpose is final. A hand-typed per-shift total with a
+      // real amount is the user's correction layer and is left
+      // alone; any derived or blank stamp becomes the unpaid $0.
+      const derivedStamp=blank||x.incomplete||x.payUnit==='hourly'||x.payUnit==='facility'||x.payUnit==='unpaid'||!x.payUnit;
+      if(!derivedStamp)continue;
+      if(String(x.pay||'')!=='0'||x.payUnit!=='unpaid'||x.incomplete){const changed=String(x.pay||'')!==res.pay||x.payUnit!==res.payUnit;stamp();if(wasPriced){if(changed)out.updated++}else out.priced++}
       continue;
     }
-    const blank=String(x.pay||'').trim()==='';
-    if(!blank&&!x.incomplete)continue;
-    let pay=null,unit='';
-    const cp=clarifiedRowPricing(fac,x);if(cp&&num(cp.pay)>0){pay=String(cp.pay);unit=cp.payUnit||''}
-    if(pay==null){const p=facilityPayFor(fac,x.type,x.date);if(p>0){pay=String(Math.round(p*100)/100);unit='facility'}}
-    if(pay==null)continue;
-    if(blank){x.pay=pay;if(unit)x.payUnit=unit;x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
-    else if(Math.abs(num(x.pay)-num(pay))<0.005&&x.incomplete){x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+    if(blank){stamp();out.priced++;continue}
+    if(!wasPriced){
+      if(shiftPayIsDerived(f,x)){stamp();out.priced++}
+      else if(Math.abs(num(x.pay)-num(res.pay))<0.005){x.incomplete=false;x.updatedAt=new Date().toISOString();out.priced++}
+      continue;
+    }
+    if(shiftPayIsDerived(f,x)&&String(x.pay)!==res.pay){stamp();out.updated++}
   }
+  return out;
+}
+// Boot heal (Nov 10, 2026 — the $0.00 paycheck bug; unified with
+// the save-time pass Nov 10, 2026 — the Edit-form round): shifts
+// saved with a blank stored pay (an older build's import, a cloud
+// download shape the paycheck layer reads as unpriced) are priced
+// from their facility's rules and stamped, on plain open — no
+// re-import, no re-upload, no manual rate edit. This runs the SAME
+// repair pass a facility save runs (repairShiftPaysForFacility):
+// the earlier heal stamped blanks and cleared an incomplete flag
+// whose amount already equalled the price, but a DERIVED stamp that
+// disagreed with the current rules kept its flag forever — the
+// shift counted as unpriced on every open until the day a facility
+// edit happened to reprice it (Caleb's nine HOLZ shifts). Derived
+// stamps now follow the rules here too; a number the user typed
+// stays exactly as stored.
+function healUnpricedShiftPays(){
+  let n=0;
+  for(const f of (db.facilities||[])){const r=repairShiftPaysForFacility(f);n+=r.priced+r.updated}
   return n;
 }
 function paystubSamePayer(a,b){
@@ -3559,47 +3610,51 @@ function importPaySchedHint(preview,kind,saved){
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return '';
   return ` No pay schedule for ${ctx.agency} yet — add one any time on its card on the Facilities tab and its paychecks will show on your calendar.`;
 }
-function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const udef=x.code?codeDefFor(f,x.code):null;if(udef&&udef.unpaid){x.pay='0';x.payRate='';x.payUnit='unpaid';x.incomplete=false;x.updatedAt=new Date().toISOString();n++;continue}const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}
-  // Derived pays re-price too (Nov 9, 2026): a shift whose amount
+function repriceUnpricedShiftsForFacility(f){
+  // The one repair pass (Nov 10, 2026 — the Edit-form round): blank
+  // pays price in the shared resolution order — per-code definitions
+  // first, then the card (the old first loop here priced blanks from
+  // the card alone, so a code whose only price was its own stated
+  // amount stayed blank at save while the boot heal priced it) —
+  // and derived pays re-price too (Nov 9, 2026): a shift whose amount
   // was CALCULATED from this facility's clarification answers or
-  // rate rule — stamped payUnit 'hourly' or 'facility' when it was
-  // saved, or an unmarked import pay for a code the facility now has
-  // a definition for — holds a formula result, not a fact. When the
-  // rates behind the formula are corrected (a weekday/weekend split
+  // rate rule holds a formula result, not a fact, so when the rates
+  // behind the formula are corrected (a weekday/weekend split
   // answered, paid hours fixed), the saved amounts follow. Amounts
-  // the user typed as per-shift totals (payUnit 'daily') and manual
-  // edits are never touched; a pay stub's actual lives on the stub
-  // record, not the shift, so actuals still win at the paycheck
-  // layer no matter what this pass does.
-  for(const x of (db.shifts||[])){
-    if(!x||!x.facility||!String(x.pay||'').trim())continue;
-    const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;
-    let derived=x.payUnit==='hourly'||x.payUnit==='facility'||(!x.payUnit&&String(x.code||'').trim()!==''&&!!codeDefFor(f,x.code));
-    if(!derived&&x.payUnit==='daily'&&String(x.code||'').trim()){
-      // A feed-priced amount stamped as a per-shift total at
-      // approve (the conversion cannot tell a server-computed
-      // price from a typed one): for a DAY code it is the old
-      // formula's output — not a typed fact — when it equals
-      // hourly x the definition's shift hours exactly, the price
-      // the code produced before paid hours were answered
-      // (December round: G Main (8) shifts sat at $2,000 =
-      // $250 x 8 no matter what was answered). Only those amounts
-      // follow a paid-hours answer; a typed total differing by
-      // even a cent is left alone, and manual entries never move.
-      const def=codeDefFor(f,x.code);
-      const srcs=shiftSourcesList(x);
-      if(def&&srcs.length&&!srcs.every(v=>v==='user-entered')){
-        const canon=String(def.canonicalType||'').trim()||canonicalTypeOf(def.label||'');
-        const hr=rateOrNull(f.hourlyRate),dh=rateOrNull(def.hours);
-        if(canon&&/hour/i.test(canon)&&!/call/i.test(canon)&&hr!=null&&dh!=null&&Math.abs(num(x.pay)-Math.round(hr*dh*100)/100)<0.005)derived=true;
-      }
+  // the user typed as per-shift totals and manual edits are never
+  // touched; a pay stub's actual lives on the stub record, not the
+  // shift, so actuals still win at the paycheck layer no matter what
+  // this pass does. Callers that only need a count get priced +
+  // updated; the facility save uses repairShiftPaysForFacility
+  // directly for the breakdown its message reports.
+  const r=repairShiftPaysForFacility(f);return r.priced+r.updated;
+}
+// The per-shift rules captured in the user's own words, shown inside
+// the facility Edit form (Nov 10, 2026 — Caleb: "We need to have the
+// shift rules communicate over to this section"). The form edits the
+// rate card; these definitions live on the same facility record and
+// price shifts together with the card (per-code definitions first —
+// see resolveShiftPrice). Read-only here: the editing surface stays
+// "Pay rules in your words" on the facility card, and saving this
+// form never removes them.
+function facilityCodeRulesHTML(f){
+  const defs=facilityCodeDefs(f);const codes=Object.keys(defs);if(!codes.length)return '';
+  const lines=codes.map(code=>{
+    const d=defs[code];const label=String(d.label||code).trim();
+    let price='';
+    if(d.unpaid)price='no pay';
+    else{
+      const parts=[];
+      const wd=rateOrNull(d.weekdayPay),we=rateOrNull(d.weekendPay);
+      if(wd!=null)parts.push(currency(wd)+' on weekdays');
+      if(we!=null)parts.push(currency(we)+' on weekends');
+      const ph=rateOrNull(d.paidHours);if(ph!=null)parts.push('paid for '+ph+' hours');
+      price=parts.join(' · ');
     }
-    if(!derived)continue;
-    let np=null;const cp=clarifiedRowPricing(f,x);if(cp&&cp.pay)np={pay:cp.pay,payRate:cp.payRate,payUnit:cp.payUnit};
-    else if(x.payUnit==='facility'){const p=facilityPayFor(f,x.type,x.date);if(p>0)np={pay:String(Math.round(p*100)/100),payRate:'',payUnit:'facility'}}
-    if(np&&String(x.pay)!==String(np.pay)){x.pay=String(np.pay);x.payRate=np.payRate;x.payUnit=np.payUnit;x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
-  }
-  return n}
+    return `<li>“${escapeHTML(code)}” — ${escapeHTML(label)}${price?': '+escapeHTML(price):''}</li>`;
+  }).join('');
+  return `<div class="item" style="display:block"><p><strong>Shift rules from your words</strong></p><p class="muted">Captured with “Pay rules in your words” on the facility card — they price your shifts together with the rates above, and saving here never removes them.</p><ul style="margin:6px 0 0;padding-left:18px">${lines}</ul></div>`;
+}
 // One-line rate summary for the facilities list. Only rates that are set
 // are shown as amounts; a blank rate is shown as "not set", never $0.00.
 function facilityRateSummary(x){
@@ -3775,7 +3830,7 @@ function myFacilitiesHTML(){return `<section class="panel" id="my-facilities-pan
 // components as the Account sync area, not copies: one tab renders at
 // a time, so the shared state (connect form, upload preview, panel
 // open logic, feature toggle) is identical from either home.
-function facilitiesPage(){const x=db.facilities.find(x=>x.id===editId)||{};const pre=(!editId&&facilitySuggestionPrefill)?facilitySuggestionPrefill:null;const blankHint='placeholder="Leave blank if not taken here"';return `${myFacilitiesHTML()}${onboardDirectionHTML(3)}${facilitySuggestionsHTML()}${pre?facilityThreeWaysHTML(pre):''}${collapsePanelHTML('facility-contract-panel','Add a facility from a contract',`<form id="facilityContractForm"><div class="form-grid">${field('facilityContractFile','Choose contract file(s) — select several pictures for a multi-page contract','file','','accept=".txt,.csv,.ics,.pdf,.png,.jpg,.jpeg,.webp,.heic,text/plain,text/csv,text/calendar,image/*" multiple')}${area('facilityContractText','Or paste contract text','','Facility: Riverside General\nRate: $200/hr, $800 overnight call bonus\n24-hour / 1st call: $4,000')}</div><div class="form-actions"><button type="submit">Read my contract</button></div></form>${contractPagesHTML('facility')}${facilityContractOcrStatus?`<p class="hint" id="facilityContractOcrStatus">${escapeHTML(facilityContractOcrStatus)}</p>`:''}${facilityContractError&&!facilityContractPreview?`<p class="hint">${escapeHTML(facilityContractError)}</p>`:''}<div style="margin-top:14px">${facilityContractPreviewHTML()}</div>${ruleChatHTML()}`,!!((db.facilities||[]).length===0||facilityContractPreview||facilityContractError||facilityContractOcrStatus||(facilityContractPendingImages||[]).length>0||ruleChatPreview||ruleChatError||pre))}${paystubPanelHTML()}${qgendaFeedHTML()}${scheduleImportHTML()}${collapsePanelHTML('facility-manual-panel',(editId&&x.id)?'Edit hospital':'Add a facility manually',`<p class="muted">Type the hospital and its rates — every rate is optional; leave blank what you don’t take here.</p><form id="entryForm" data-kind="facilities"><div class="form-grid">${field('name','Hospital / facility name','text',x.name||(pre&&pre.name)||'','required')}${field('aliases','Short names / abbreviations (comma-separated)','text',x.aliases||'','placeholder="e.g. RGH"')}${field('address','Address','text',x.address||(pre&&pre.address)||'','placeholder="Street, City, State ZIP — used to calculate mileage"')}${field('hourlyRate','Hourly rate ($)','number',x.hourlyRate||'','min="0" step="0.01" '+blankHint)}${field('paidHours8','Paid hours for an 8-hour shift','number',x.paidHours8||'','min="0" step="0.5" placeholder="8"')}${field('rate8','8-hour shift rate ($)','number',x.rate8||'','min="0" step="0.01" '+blankHint)}${field('rate10','10-hour shift rate ($)','number',x.rate10||'','min="0" step="0.01" '+blankHint)}${field('rate12','12-hour shift rate ($)','number',x.rate12||'','min="0" step="0.01" '+blankHint)}${field('rate24','24-hour call rate ($)','number',x.rate24||'','min="0" step="0.01" '+blankHint)}${field('hourlyCall1st','1st call hourly rate ($/hr)','number',x.hourlyCall1st||'','min="0" step="0.01" '+blankHint)}${field('rateSecond','Second call rate — weeknight ($)','number',x.rateSecond||'','min="0" step="0.01" '+blankHint)}${field('weekendRateSecond','Second call rate — weekend ($)','number',x.weekendRateSecond||'','min="0" step="0.01" '+blankHint)}${field('callBonus','Overnight call bonus ($)','number',x.callBonus||'','min="0" step="0.01" '+blankHint)}${field('distance','One-way miles','number',x.distance||'','min="0" step="0.1" placeholder="Auto from home, or enter manually"')}<input type="hidden" name="distanceSource" id="f_distanceSource" value="${escapeHTML(x.distanceSource||(x.distance?'manual':''))}">${area('notes','Offline facility notes',x.notes||'','Parking, protocols, phone numbers, authorized facility codes, EHR URL or username (never passwords)')}</div><p class="hint" id="facilityDistanceStatus">${escapeHTML(facilityDistanceStatus)}</p><div class="toolbar"><button type="button" class="secondary" data-action="facility-distance">Calculate one-way distance from home</button></div>${formEnd(editId?'Save facility':'Add facility')}`,!!((editId&&x.id)||pre))}${dismissedFacilitySuggestionsHTML()}`}
+function facilitiesPage(){const x=db.facilities.find(x=>x.id===editId)||{};const pre=(!editId&&facilitySuggestionPrefill)?facilitySuggestionPrefill:null;const blankHint='placeholder="Leave blank if not taken here"';return `${myFacilitiesHTML()}${onboardDirectionHTML(3)}${facilitySuggestionsHTML()}${pre?facilityThreeWaysHTML(pre):''}${collapsePanelHTML('facility-contract-panel','Add a facility from a contract',`<form id="facilityContractForm"><div class="form-grid">${field('facilityContractFile','Choose contract file(s) — select several pictures for a multi-page contract','file','','accept=".txt,.csv,.ics,.pdf,.png,.jpg,.jpeg,.webp,.heic,text/plain,text/csv,text/calendar,image/*" multiple')}${area('facilityContractText','Or paste contract text','','Facility: Riverside General\nRate: $200/hr, $800 overnight call bonus\n24-hour / 1st call: $4,000')}</div><div class="form-actions"><button type="submit">Read my contract</button></div></form>${contractPagesHTML('facility')}${facilityContractOcrStatus?`<p class="hint" id="facilityContractOcrStatus">${escapeHTML(facilityContractOcrStatus)}</p>`:''}${facilityContractError&&!facilityContractPreview?`<p class="hint">${escapeHTML(facilityContractError)}</p>`:''}<div style="margin-top:14px">${facilityContractPreviewHTML()}</div>${ruleChatHTML()}`,!!((db.facilities||[]).length===0||facilityContractPreview||facilityContractError||facilityContractOcrStatus||(facilityContractPendingImages||[]).length>0||ruleChatPreview||ruleChatError||pre))}${paystubPanelHTML()}${qgendaFeedHTML()}${scheduleImportHTML()}${collapsePanelHTML('facility-manual-panel',(editId&&x.id)?'Edit hospital':'Add a facility manually',`<p class="muted">Type the hospital and its rates — every rate is optional; leave blank what you don’t take here.</p><form id="entryForm" data-kind="facilities"><div class="form-grid">${field('name','Hospital / facility name','text',x.name||(pre&&pre.name)||'','required')}${field('aliases','Short names / abbreviations (comma-separated)','text',x.aliases||'','placeholder="e.g. RGH"')}${field('address','Address','text',x.address||(pre&&pre.address)||'','placeholder="Street, City, State ZIP — used to calculate mileage"')}${field('hourlyRate','Hourly rate ($)','number',x.hourlyRate||'','min="0" step="0.01" '+blankHint)}${field('paidHours8','Paid hours for an 8-hour shift','number',x.paidHours8||'','min="0" step="0.5" placeholder="8"')}${field('rate8','8-hour shift rate ($)','number',x.rate8||'','min="0" step="0.01" '+blankHint)}${field('rate10','10-hour shift rate ($)','number',x.rate10||'','min="0" step="0.01" '+blankHint)}${field('rate12','12-hour shift rate ($)','number',x.rate12||'','min="0" step="0.01" '+blankHint)}${field('rate24','24-hour call rate ($)','number',x.rate24||'','min="0" step="0.01" '+blankHint)}${field('weekendRate24','Weekend 24-hour call rate ($)','number',x.weekendRate24||'','min="0" step="0.01" '+blankHint)}${field('hourlyCall1st','1st call hourly rate ($/hr)','number',x.hourlyCall1st||'','min="0" step="0.01" '+blankHint)}${field('rateSecond','Second call rate — weeknight ($)','number',x.rateSecond||'','min="0" step="0.01" '+blankHint)}${field('weekendRateSecond','Second call rate — weekend ($)','number',x.weekendRateSecond||'','min="0" step="0.01" '+blankHint)}${field('callBonus','Overnight call bonus ($)','number',x.callBonus||'','min="0" step="0.01" '+blankHint)}${field('distance','One-way miles','number',x.distance||'','min="0" step="0.1" placeholder="Auto from home, or enter manually"')}<input type="hidden" name="distanceSource" id="f_distanceSource" value="${escapeHTML(x.distanceSource||(x.distance?'manual':''))}">${area('notes','Offline facility notes',x.notes||'','Parking, protocols, phone numbers, authorized facility codes, EHR URL or username (never passwords)')}</div>${(editId&&x.id)?facilityCodeRulesHTML(x):''}<p class="hint" id="facilityDistanceStatus">${escapeHTML(facilityDistanceStatus)}</p><div class="toolbar"><button type="button" class="secondary" data-action="facility-distance">Calculate one-way distance from home</button></div>${formEnd(editId?'Save facility':'Add facility')}`,!!((editId&&x.id)||pre))}${dismissedFacilitySuggestionsHTML()}`}
 // PTO tab removed (Nov 6, 2026): Caleb wasn't sure it earned its place;
 // it can come back later. The tab, page, and its actions are gone,
 // but the data model stays — db.pto and the pto* settings fields
@@ -5899,7 +5954,7 @@ record.payRate='';record.payUnit=''}if(kind==='shifts')record.status=normalizeSh
 // calendar. Before this the stamp was never set (updatedAt stayed null)
 // and the server's local-newer check never fired, so an edited shift
 // never left the app.
-if(['shifts','licenses','nbcrnaCE','aanaCE','credentials','vehicles'].includes(kind))record.updatedAt=new Date().toISOString();if(kind==='facilities'){record.ratesSource='manual';record.ratesSourceFile='';record.ratesSourceDate='';for(const k of RATE_FIELDS)record[k]=rateOrNull(record[k])==null?'':String(rateOrNull(record[k]));if(rateOrNull(record.paidHours8)==null)record.paidHours8='';if(rateOrNull(record.distance)==null){record.distance='';record.distanceSource=''}else if(record.distanceSource!=='auto')record.distanceSource='manual';if(!String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress=''}else if(editId){const old=(db.facilities||[]).find(x=>x.id===editId);if(old&&String(old.address||'').trim()!==String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress='';if(record.distanceSource==='auto'){record.distance='';record.distanceSource=''}}}}if(kind==='mileage'){if(!record.milesSource)record.milesSource=String(record.miles||'').trim()?'manual':'';record.tripType=record.tripType==='one-way'?'one-way':'round-trip';const oldTrip=editId?(db.mileage||[]).find(m=>m.id===editId):null;if(oldTrip&&record.tripType!==oldTrip.tripType&&Number(oldTrip.oneWayMiles)>0&&oldTrip.milesSource==='auto'){record.miles=String(tripMilesFor(oldTrip.oneWayMiles,record.tripType));record.oneWayMiles=String(oldTrip.oneWayMiles)}else if(Number(record.oneWayMiles)>0&&record.milesSource==='auto'){record.miles=String(tripMilesFor(record.oneWayMiles,record.tripType))}else{record.oneWayMiles=oneWayFromTripMiles(record.miles,record.tripType)}record.origin=record.origin==='hotel'?'hotel':record.origin==='other'?'other':'home';record.originChosen=true;if(record.origin==='home')record.hotelAddress='';if(record.origin==='hotel'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(record.vehicleId!==undefined){const vv=vehicleById(record.vehicleId);record.vehicleId=vv?vv.id:'';record.vehicleName=vv?String(vv.name||''):''}else if(!editId){const dst=defaultVehicleStamp();record.vehicleId=dst.vehicleId;record.vehicleName=dst.vehicleName}}if(kind==='hotelStays'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(kind==='facilities'&&!editId){const existing=(db.facilities||[]).find(x=>facilityNameKey(x.name)===facilityNameKey(record.name)||(String(record.aliases||'').trim()&&facilityAliases(x).some(a=>String(record.aliases||'').split(',').map(y=>facilityNameKey(y)).includes(facilityNameKey(a)))));if(existing)editId=existing.id}if(kind==='facilities'&&!String(record.name||'').trim()){alert('Enter the hospital / facility name first.');return}if(kind==='facilities'&&editId){const oldF=(db.facilities||[]).find(x=>x.id===editId);if(oldF&&facilityNameKey(oldF.name)!==facilityNameKey(record.name)){const keep=[];const seenK=new Set();for(const a of facilityAliases(oldF).concat(String(record.aliases||'').split(',').map(y=>y.trim()).filter(Boolean))){const kk=facilityNameKey(a);if(kk&&kk!==facilityNameKey(record.name)&&!seenK.has(kk)){seenK.add(kk);keep.push(a)}}const oldName=String(oldF.name||'').trim();if(oldName&&!seenK.has(facilityNameKey(oldName)))keep.push(oldName);record.aliases=keep.join(', ')}}let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;if(kind==='mileage'){mileageFormDraft=null;mileageDraftHold=true;mileageCalcStatus=''}persist();if(kind==='vehicles'){const savedV=(db.vehicles||[]).find(v=>v.id===savedId);if(savedV&&savedV.isDefault){let clearedV=false;(db.vehicles||[]).forEach(v=>{if(v.id!==savedId&&v.isDefault){v.isDefault=false;clearedV=true;cloudSaveKind('vehicles',v.id)}});if(clearedV)persist();}}let repriced=0;if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}repriced=repriceUnpricedShiftsForFacility(saved);if(repriced>0)persist();}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
+if(['shifts','licenses','nbcrnaCE','aanaCE','credentials','vehicles'].includes(kind))record.updatedAt=new Date().toISOString();if(kind==='facilities'){record.ratesSource='manual';record.ratesSourceFile='';record.ratesSourceDate='';for(const k of RATE_FIELDS){if(!(k in record))continue;record[k]=rateOrNull(record[k])==null?'':String(rateOrNull(record[k]));}if(rateOrNull(record.paidHours8)==null)record.paidHours8='';if(rateOrNull(record.distance)==null){record.distance='';record.distanceSource=''}else if(record.distanceSource!=='auto')record.distanceSource='manual';if(!String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress=''}else if(editId){const old=(db.facilities||[]).find(x=>x.id===editId);if(old&&String(old.address||'').trim()!==String(record.address||'').trim()){record.lat='';record.lng='';record.geocodedAddress='';if(record.distanceSource==='auto'){record.distance='';record.distanceSource=''}}}}if(kind==='mileage'){if(!record.milesSource)record.milesSource=String(record.miles||'').trim()?'manual':'';record.tripType=record.tripType==='one-way'?'one-way':'round-trip';const oldTrip=editId?(db.mileage||[]).find(m=>m.id===editId):null;if(oldTrip&&record.tripType!==oldTrip.tripType&&Number(oldTrip.oneWayMiles)>0&&oldTrip.milesSource==='auto'){record.miles=String(tripMilesFor(oldTrip.oneWayMiles,record.tripType));record.oneWayMiles=String(oldTrip.oneWayMiles)}else if(Number(record.oneWayMiles)>0&&record.milesSource==='auto'){record.miles=String(tripMilesFor(record.oneWayMiles,record.tripType))}else{record.oneWayMiles=oneWayFromTripMiles(record.miles,record.tripType)}record.origin=record.origin==='hotel'?'hotel':record.origin==='other'?'other':'home';record.originChosen=true;if(record.origin==='home')record.hotelAddress='';if(record.origin==='hotel'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(record.vehicleId!==undefined){const vv=vehicleById(record.vehicleId);record.vehicleId=vv?vv.id:'';record.vehicleName=vv?String(vv.name||''):''}else if(!editId){const dst=defaultVehicleStamp();record.vehicleId=dst.vehicleId;record.vehicleName=dst.vehicleName}}if(kind==='hotelStays'&&String(record.hotelAddress||'').trim())db.settings.lastHotelAddress=String(record.hotelAddress).trim();if(kind==='facilities'&&!editId){const existing=(db.facilities||[]).find(x=>facilityNameKey(x.name)===facilityNameKey(record.name)||(String(record.aliases||'').trim()&&facilityAliases(x).some(a=>String(record.aliases||'').split(',').map(y=>facilityNameKey(y)).includes(facilityNameKey(a)))));if(existing)editId=existing.id}if(kind==='facilities'&&!String(record.name||'').trim()){alert('Enter the hospital / facility name first.');return}if(kind==='facilities'&&editId){const oldF=(db.facilities||[]).find(x=>x.id===editId);if(oldF&&facilityNameKey(oldF.name)!==facilityNameKey(record.name)){const keep=[];const seenK=new Set();for(const a of facilityAliases(oldF).concat(String(record.aliases||'').split(',').map(y=>y.trim()).filter(Boolean))){const kk=facilityNameKey(a);if(kk&&kk!==facilityNameKey(record.name)&&!seenK.has(kk)){seenK.add(kk);keep.push(a)}}const oldName=String(oldF.name||'').trim();if(oldName&&!seenK.has(facilityNameKey(oldName)))keep.push(oldName);record.aliases=keep.join(', ')}}let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;if(kind==='mileage'){mileageFormDraft=null;mileageDraftHold=true;mileageCalcStatus=''}persist();if(kind==='vehicles'){const savedV=(db.vehicles||[]).find(v=>v.id===savedId);if(savedV&&savedV.isDefault){let clearedV=false;(db.vehicles||[]).forEach(v=>{if(v.id!==savedId&&v.isDefault){v.isDefault=false;clearedV=true;cloudSaveKind('vehicles',v.id)}});if(clearedV)persist();}}let repriced=0;let priceFix={priced:0,updated:0};if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}if(saved){priceFix=repairShiftPaysForFacility(saved);repriced=priceFix.priced+priceFix.updated;if(repriced>0)persist();}}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
 if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(kind==='facilities'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(['licenses','nbcrnaCE','aanaCE','shifts','facilities','mileage','payStubs','vehicles'].includes(kind))cloudSaveKind(kind,savedId);if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved){const hadSuggestion=clearFacilitySuggestion(saved.name);if(facilitySuggestionPrefill&&normFacilityName(facilitySuggestionPrefill.name)===normFacilityName(saved.name))facilitySuggestionPrefill=null;
   // Bug 2: a suggestion cleared by adding the facility means held
   // shifts exist for it. If the last import also skipped shifts as
@@ -5908,7 +5963,7 @@ if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncScheduleP
   // facility save already schedules — re-imports them instead of
   // leaving them blocked. Deleted shifts stay deleted: the server
   // only clears rows that are not flagged deleted and not tombstoned.
-  if(hadSuggestion&&typeof liveSyncState!=='undefined'&&liveSyncState&&liveSyncState.lastImport&&Number(liveSyncState.lastImport.skippedLegacy||0)>0){liveSyncState.repairImport=true;if(typeof liveSyncStateSave==='function')liveSyncStateSave();}}}if(repriced>0)alert(`${repriced} unpriced shift(s) priced from the ${((db.facilities||[]).find(x=>x.id===savedId)||{}).name||'facility'} pay rule. The next calendar sync also re-scans past events for this facility.`);render()}
+  if(hadSuggestion&&typeof liveSyncState!=='undefined'&&liveSyncState&&liveSyncState.lastImport&&Number(liveSyncState.lastImport.skippedLegacy||0)>0){liveSyncState.repairImport=true;if(typeof liveSyncStateSave==='function')liveSyncStateSave();}}}if(priceFix.priced+priceFix.updated>0){const facName=((db.facilities||[]).find(x=>x.id===savedId)||{}).name||'facility';const parts=[];if(priceFix.priced)parts.push(`Priced ${priceFix.priced} shift(s) from the ${facName} pay rules.`);if(priceFix.updated)parts.push(`Updated ${priceFix.updated} shift price(s) to match the ${facName} pay rules.`);alert(parts.join(' '))}render()}
 // Change one shift's status (Saved shifts list). Re-prices the C/P
 // totals immediately on the next render; a shift change is also queued
 // for live calendar sync, like any other shift edit.
@@ -7333,7 +7388,7 @@ function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasC
 function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
-async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); dedupeShiftsInPlace((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }); healDayCallShiftPairs((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }); render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
+async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); dedupeShiftsInPlace((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }); healDayCallShiftPairs((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
 async function cloudAfterSignIn() { await cloudAutoMerge(); render(); setTab('Account'); monitorBackgroundSweep(); qgendaBootCheck(); }
 async function submitCloudAuth(e) { e.preventDefault(); const fd = new FormData(e.currentTarget); const email = String(fd.get('email') || '').trim(), password = String(fd.get('password') || ''); const sn = String(fd.get('scheduleName') || '').trim(); const et = String(fd.get('employmentType') || '').trim(); const goalRaw = String(fd.get('incomeGoalStep1') || '').trim(); // Profile fields on the sign-in form save locally when provided —
   // a blank field never wipes a saved value.
