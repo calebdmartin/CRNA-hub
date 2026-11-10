@@ -62,7 +62,8 @@
 //   work shifts (parseWorkShiftEvent in ../_shared/calendar.ts): the
 //   user's Facilities list first (name or alias, in the title or the
 //   location — even a bare facility name), then a generic facility-like
-//   title plus a shift pattern. Holzer keeps its exact confirmed rates.
+//   title plus a shift pattern. No facility is built in: every price
+//   comes from the user's own saved facility rules.
 //   Anything else is skipped and counted, never imported as junk, and
 //   no other calendar is ever read. Ask-first (Nov 5, 2026): events at
 //   a facility with no saved rule are NOT imported — they are held and

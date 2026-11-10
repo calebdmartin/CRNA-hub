@@ -13,7 +13,6 @@
 import {
   importStatusForDate,
   parseWorkShiftEvent,
-  parseWorkShiftTitle,
   priceShiftWithFacility,
   type FacilityPayRule,
 } from "../_shared/calendar.ts";
@@ -21,7 +20,12 @@ import {
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v5, Nov 9, 2026: feed
+// Bump whenever the parse semantics change (v6, Nov 10, 2026: the
+// neutrality pass — the location rescue no longer names or prices a
+// facility the user never saved (a hard-coded "Holzer" location
+// match priced from built-in rates); only a saved facility rule can
+// rescue, and it prices from that rule alone. Held previews re-read
+// once so rescued rows re-derive under the neutral rule; v5, Nov 9, 2026: feed
 // housekeeping events — the "AutoSync from QGenda" sync markers —
 // are filtered out and counted instead of landing as raw rows, and
 // the name cleaner drops bracketed assignee annotations in their
@@ -37,7 +41,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 5;
+export const QGENDA_PARSER_VERSION = 6;
 
 export interface QgendaShift {
   date: string;
@@ -828,16 +832,19 @@ export function parseQgendaICS(
     });
 
     // Rescue, ONLY for events the canonical parser priced as an
-    // unknown facility while the LOCATION names a known one (a rule
-    // name/alias, or Holzer): the generic fallback derives the
-    // facility from the title text, so a shift whose title leads
-    // with a place word ("Gallipolis 8") comes back unknown even
-    // though its location is a facility the user has on file. Trust
-    // the location, re-derive the type from the real name, and price
-    // from that facility's rule (Holzer via its title parser first).
+    // unknown facility while the LOCATION names a known one (a saved
+    // rule's name/alias): the generic fallback derives the facility
+    // from the title text, so a shift whose title leads with a place
+    // word ("Gallipolis 8") comes back unknown even though its
+    // location is a facility the user has on file. Trust the
+    // location, re-derive the type from the real name, and price
+    // from that facility's rule. Only a saved rule can rescue —
+    // no facility is built into the parser (neutrality, Nov 10,
+    // 2026: an earlier rescue hard-coded one facility's name and
+    // priced it from built-in rates ahead of the user's own rule;
+    // that is gone).
     if (!facilityKnown && location) {
       let guessedRule: FacilityPayRule | undefined;
-      let guessedName = "";
       const rulesByLength = [...facilities].sort((a, b2) => {
         const longest = (r: FacilityPayRule) =>
           Math.max(r.name.length, ...(r.aliases ?? []).map((x) => x.length));
@@ -849,33 +856,15 @@ export function parseQgendaICS(
         );
         if (hit) {
           guessedRule = rule;
-          guessedName = rule.name;
           break;
         }
       }
-      if (!guessedName && containsToken(location, "holzer")) {
-        guessedName = "Holzer";
-      }
-      if (guessedName) {
+      if (guessedRule) {
         const nameForType = rawName ||
           cleanQgendaShiftName(summary, userName);
-        if (guessedName.toLowerCase() === "holzer") {
-          const ht = parseWorkShiftTitle(`Holzer ${nameForType}`, date);
-          type = ht?.type ??
-            deriveTypeFromName(
-              nameForType,
-              guessedRule ?? { name: "Holzer" },
-              parsed.type,
-            );
-          pay = (ht?.pay) ||
-            (guessedRule
-              ? priceShiftWithFacility(type, guessedRule, date)
-              : "");
-        } else if (guessedRule) {
-          type = deriveTypeFromName(nameForType, guessedRule, parsed.type);
-          pay = priceShiftWithFacility(type, guessedRule, date);
-        }
-        facility = guessedName;
+        type = deriveTypeFromName(nameForType, guessedRule, parsed.type);
+        pay = priceShiftWithFacility(type, guessedRule, date);
+        facility = guessedRule.name;
         facilityKnown = true;
       }
     }

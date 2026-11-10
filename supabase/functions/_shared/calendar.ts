@@ -270,7 +270,7 @@ export interface ProviderEvent {
   rawUpdatedAt: string | null;
   // Raw event title as the provider returned it. The dedicated-calendar
   // parsers above split it into facility/type; the work-calendar import
-  // needs the raw title instead (see parseWorkShiftTitle).
+  // needs the raw title instead (see parseWorkShiftEvent).
   summary?: string;
   // Event location as the provider returned it (ICS LOCATION, Google
   // location, Outlook location display name). The work-calendar import
@@ -324,68 +324,18 @@ export function parseDescription(desc: string): {
   return { type, pay, note, shiftId };
 }
 
-// Parse a work-calendar event title (e.g. "Holzer 8", "Holzer 8/2nd call",
-// "Holzer 24/1st call", "Holzer 10") into a CRNA Hub shift. Returns null
-// when the title is not a recognisable Holzer shift — the import caller
-// must skip (and count) those events, never import them as junk shifts.
-//
-// Shift types use the app's canonical names ("8-hour day", "10-hour
-// shift", "12-hour shift", "24-hour call", "Second call"), matching the
-// contract parser in app.js. Pay uses Caleb's confirmed Holzer rules
-// ($250/hr; 8-hour day is paid 8.5h = $2,125; 10-hour is paid 10.5h =
-// $2,625; 2nd call is $2,000 day + $1,000 overnight bonus = $3,000 on a
-// weekday and a flat $2,000 on a weekend; 24/1st call is flat $4,800 on
-// a weekday and $4,200 on a weekend). A 12-hour shift has no confirmed
-// flat rate on file, so its pay is left blank (the app marks it
-// incomplete) rather than guessed. The date decides weekday vs weekend.
-export function parseWorkShiftTitle(
-  title: string,
-  date: string,
-): { facility: string; type: string; pay: string } | null {
-  const t = String(title || "").trim().toLowerCase();
-  if (!/\bholzer\b/.test(t)) return null;
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? new Date(`${date}T12:00:00Z`).getUTCDay()
-    : -1;
-  const weekend = day === 0 || day === 6;
-  // 2nd call first: "Holzer 8/2nd call" and "Holzer 2nd call" both contain
-  // an 8/24 pattern that must not win over the call part.
-  if (/\b2nd\s*call\b|\bsecond\s*call\b/.test(t)) {
-    return { facility: "Holzer", type: "Second call", pay: weekend ? "2000" : "3000" };
-  }
-  // The hour number must sit next to "Holzer" (or carry an hour suffix):
-  // a bare number elsewhere in the title (e.g. a date in "Holzer 8 Nov
-  // 24") must never reclassify the shift.
-  if (/holzer\s+24\b|\b24\s*-?\s*hour\b|\b24h\b|\b24\s*\/\s*1st\b|holzer\s+1st\b|\b1st\s*call\b|\bfirst\s*call\b/.test(t)) {
-    return { facility: "Holzer", type: "24-hour call", pay: weekend ? "4200" : "4800" };
-  }
-  if (/holzer\s+12\b|\b12\s*-?\s*hour\b|\b12h\b/.test(t)) {
-    return { facility: "Holzer", type: "12-hour shift", pay: "" };
-  }
-  if (/holzer\s+10\b|\b10\s*-?\s*hour\b|\b10h\b/.test(t)) {
-    return { facility: "Holzer", type: "10-hour shift", pay: "2625" };
-  }
-  if (/holzer\s+8\b|\b8\s*-?\s*hour\b|\b8h\b/.test(t)) {
-    return { facility: "Holzer", type: "8-hour day", pay: "2125" };
-  }
-  return null;
-}
-
 // --- Generic work-shift recognition (all facilities, Nov 5, 2026) ---
 //
-// parseWorkShiftTitle above stays Holzer-only (its regression tests pin
-// Caleb's confirmed Holzer rates). parseWorkShiftEvent is the import
-// parser the sync loop actually calls. Recognition order:
-//   1. Holzer — the confirmed rules win, whatever the Facilities list
-//      says.
-//   2. The user's Facilities list (sent with each sync by the browser;
+// parseWorkShiftEvent is the import parser the sync loop actually
+// calls. Recognition order:
+//   1. The user's Facilities list (sent with each sync by the browser;
 //      facilities live on-device, like shifts — there is no server-side
 //      facilities table). A facility matches by name or alias against
 //      the event title AND the event location, so an event titled just
 //      "CAMC" — or a bare shift pattern ("8", "2nd call") with the
 //      facility in the location — is a shift for that facility. Pay
 //      comes only from that facility's own pay rule, never guessed.
-//   3. Generic fallback for facilities not yet listed: a facility-like
+//   2. Generic fallback for facilities not yet listed: a facility-like
 //      title plus a shift pattern ("CAMC 8", "St. Mary's 24"). Pay is
 //      always blank — and the shift is NOT imported yet: the sync loop
 //      holds it and reports the facility as a suggestion ("We noticed
@@ -402,6 +352,14 @@ export function parseWorkShiftTitle(
 // parser itself is date-window-free: any date parses, past or future —
 // the import range is the full source-calendar history (see
 // fetchAppleSourceEvents), not a 2025–2028 window.
+//
+// Neutrality (Nov 10, 2026): NO facility is built into this parser.
+// An earlier Holzer-only title parser priced titles from one user's
+// confirmed rates ahead of — and instead of — the saved facility
+// rules; it was removed. Every facility, that one included, is
+// recognised and priced only through the user's own saved rules
+// (step 1) or held unpriced as a suggestion (step 2). A user's rates
+// live in their facility records, never in this code.
 
 export interface FacilityPayRule {
   name: string;
@@ -476,8 +434,7 @@ export function normalizeFacilityRules(input: unknown): FacilityPayRule[] {
 // Price one shift type from a facility's own pay rule. Returns "" when
 // the rule does not cover that type — never a guessed amount. Weekend
 // rates come from the facility's own weekend fields when set
-// (weekendRateSecond / weekendRate24, picked by the shift date); Holzer
-// keeps its confirmed weekday/weekend rules in parseWorkShiftTitle.
+// (weekendRateSecond / weekendRate24, picked by the shift date).
 // The optional date is an ISO 'YYYY-MM-DD' string: without it there is
 // no weekend rate, so the weeknight rule applies (existing callers that
 // pass no date keep today's behaviour).
@@ -651,22 +608,11 @@ export function parseWorkShiftEvent(
   const t = String(title || "").trim();
   const loc = String(location || "").trim();
   if (!t && !loc) return null;
-  // Import status (Bug 1, Nov 6, 2026): a shift dated before today
-  // already happened, so it arrives confirmed, not proposed.
+  // Import status (Nov 6, 2026 two-status model): see
+  // importStatusForDate — any readable date arrives confirmed.
   const status = importStatusForDate(date, today);
 
-  // 1. Holzer — the confirmed rules win over everything else.
-  const holzerTitle = parseWorkShiftTitle(t, date);
-  if (holzerTitle) return { ...holzerTitle, facilityKnown: true, status };
-  if (/\bholzer\b/i.test(loc)) {
-    const h = parseWorkShiftTitle(`Holzer ${t}`, date);
-    if (h) return { ...h, facilityKnown: true, status };
-  }
-  if (/^holzer$/i.test(t)) {
-    return { facility: "Holzer", type: "Shift", pay: "", facilityKnown: true, status };
-  }
-
-  // 2. The user's Facilities list — longest name/alias first, so
+  // 1. The user's Facilities list — longest name/alias first, so
   // "Charleston Area Medical Center" wins over a short alias of
   // another facility that happens to appear inside it.
   const rules = [...facilities].sort((a, b) => {
@@ -705,7 +651,7 @@ export function parseWorkShiftEvent(
     };
   }
 
-  // 3. Generic fallback — a facility-like title plus a shift pattern.
+  // 2. Generic fallback — a facility-like title plus a shift pattern.
   // Pay is always blank: the facility is not listed yet, so no rate
   // exists to apply. These events are NOT imported: the sync loop
   // holds them and reports them as facility suggestions instead (see

@@ -237,7 +237,7 @@ function rulePrompt(): string {
     "summary (one short plain-language sentence restating the rule, rates only — do NOT compute any total pay), " +
     "clarifying_question (ONE short question when something important is ambiguous — e.g. whether the rule also applies on weekends, or which hours a rate covers — else null), " +
     "missing (an array of short labels for important values the description does not state). " +
-    "For a segmented 24-hour / 1st call rule like 'first 8 hours $250/hr, then $175/hr from 3pm to 7am': shift_type '24-hour call', hourly_rate 250, first_call_hourly_rate 175, segments [{hours:8, rate:250}, {hours:16, rate:175, from:'15:00', to:'07:00'}], and if the description does not say whether weekends differ, applies_to null with a clarifying_question asking about weekends. " +
+    "For a segmented 24-hour / 1st call rule like 'first 8 hours $300/hr, then $200/hr from 4pm to 6am': shift_type '24-hour call', hourly_rate 300, first_call_hourly_rate 200, segments [{hours:8, rate:300}, {hours:16, rate:200, from:'16:00', to:'06:00'}], and if the description does not say whether weekends differ, applies_to null with a clarifying_question asking about weekends. " +
     "Amounts are numbers without $ or commas. Do not invent any rate, hour count, or day applicability."
   );
 }

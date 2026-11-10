@@ -14,6 +14,11 @@ import {
 } from "./parse.ts";
 import { normalizeFacilityRules } from "../_shared/calendar.ts";
 
+// The user's captured Holzer card, as saved from their contract and
+// their own words — including the 24-hour call flats ($4,800 weekday /
+// $4,200 weekend) the neutrality pass (Nov 10, 2026) made load-bearing:
+// the parser no longer carries these numbers built in, so the fixture
+// must carry the full card for the same prices to come out.
 const HOLZER = normalizeFacilityRules([
   {
     name: "Holzer",
@@ -22,7 +27,9 @@ const HOLZER = normalizeFacilityRules([
     rate8: 2125,
     rate10: 2625,
     rate12: "",
-    rate24: "",
+    rate24: 4800,
+    weekendRate24: 4200,
+    hourlyCall1st: 175,
     rateSecond: 3000,
     weekendRateSecond: 2000,
     callBonus: 1000,
@@ -617,7 +624,7 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 5);
+  assertEquals(QGENDA_PARSER_VERSION, 6);
 });
 
 Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
