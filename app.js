@@ -2404,7 +2404,7 @@ function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;co
 // one the facility pay rule prices directly ("Second call",
 // "24-hour call", "8-hour day", ...). Generic patterns only — a
 // facility's own numbers always come from its saved rates.
-function canonicalTypeOf(text){const t=String(text||'').toLowerCase();if(!t)return '';if(/call/.test(t)&&(/second/.test(t)||/(?:^|\D)2nd\b/.test(t)))return 'Second call';if(/call/.test(t)&&(/\b24\b/.test(t)||/first/.test(t)||/(?:^|\D)1st\b/.test(t)))return '24-hour call';const m=t.match(/(\d{1,2})\s*-\s*hour|(\d{1,2})\s*hour/);if(m){const n=+(m[1]||m[2]);if(n===8)return '8-hour day';if(n===10)return '10-hour shift';if(n===12)return '12-hour shift';if(n===24)return '24-hour call'}return ''}
+function canonicalTypeOf(text){const t=String(text||'').toLowerCase();if(!t)return '';if(/call/.test(t)&&(/second/.test(t)||/(?:^|\D)2nd\b/.test(t)))return 'Second call';if(/call/.test(t)&&(/\b24\b/.test(t)||/\b24\s*-?\s*h(?:ou)?r\b/.test(t)||/first/.test(t)||/(?:^|\D)1st\b/.test(t)))return '24-hour call';const m=t.match(/(\d{1,2})\s*-\s*hour|(\d{1,2})\s*hour/);if(m){const n=+(m[1]||m[2]);if(n===8)return '8-hour day';if(n===10)return '10-hour shift';if(n===12)return '12-hour shift';if(n===24)return '24-hour call'}return ''}
 // True when a call type's weekday/weekend split is nowhere in the
 // facility's saved rates — no weekend flat, no weeknight flat, no
 // call-bonus structure the pricer could apply by day of week. Only
@@ -2675,6 +2675,81 @@ function describeCallAmounts(text,n){
   if(!before.length&&after.length>1){out.wd=after[0];out.we=after[after.length-1]}
   return Object.keys(out).length?out:null;
 }
+// --- Code statements in the user's own words (Nov 10, 2026) ---
+// The reader's unit is the STATEMENT, not the field: the text is
+// cut into clauses (on . ; and line breaks); a clause that NAMES
+// a code binds that code, and a clause that names no code carries
+// forward to the most recently named one — so "Weekend=$4,200"
+// on its own line still belongs to the Call 1 named above it.
+// Naming is tolerant: case, punctuation, hyphen spacing and the
+// facility prefix are all optional ("Holz-call 1" names the code
+// "HOLZ - Call 1"), and a clause may put its amounts BEFORE the
+// name ("$3,000 weekdays for Call 2"). Inside a clause, a
+// weekday/weekend keyword (incl. wknd / wkdy / weeknights) scopes
+// the amount nearest to it, so "weekday=$4,800" and "$4,800
+// weekdays" both work, in either order. A clause that prices per
+// hour ("$250/hour") contributes no flat amount — the hourly
+// figure is the contract reader's job. Nothing here knows any
+// facility's codes, names or amounts: the code list is whatever
+// the schedule being clarified actually carries.
+function describeCodeBlocks(text,codes){
+  const t=String(text||'');
+  const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const escRx=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const forms=[];
+  for(const c of (codes||[])){
+    const code=String(c&&c.code||'');if(!code)continue;
+    const full=toks(code);if(!full.length)continue;
+    const tailSrc=code.includes(' - ')?code.slice(code.lastIndexOf(' - ')+3):code;
+    const seen=new Set();
+    for(const tk of [full,toks(tailSrc)]){
+      if(!tk.length)continue;const key=tk.join(' ');if(seen.has(key))continue;seen.add(key);
+      // A lone generic word ("call", "day") is not a name — it
+      // would match everywhere. Distinctive single tokens
+      // ("PCDO", "NOC") and any multi-token form are fine.
+      if(tk.length===1&&/^(call|day|shift|first|second)$/.test(tk[0]))continue;
+      forms.push({code,rx:new RegExp('(?<![a-z0-9])'+tk.map(escRx).join('[^a-z0-9]+')+'(?![a-z0-9])','gi')});
+    }
+  }
+  const scopeRx=/\b(weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i;
+  const out={};
+  const addChunk=(code,chunk,after)=>{
+    const e=out[code]||(out[code]={phrase:'',amounts:[]});
+    if(!e.phrase){
+      let p=String(after!=null?after:chunk||'').replace(/^[\s=:\-–—.()]+/,'').replace(/^(?:is|means|called|pays?|at)\s+/i,'');
+      p=p.split(/\b(?:weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i)[0].split(/[.;\n$,]/)[0].trim().replace(/\s+/g,' ').replace(/[\s\-–—:]+$/,'');
+      if(p)e.phrase=p;
+    }
+    if(!amountsHourly(chunk)){
+      const amounts=[...String(chunk).matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>({v:Number(x[1].replace(/,/g,'')),start:x.index,end:x.index+x[0].length,scope:null}));
+      const kws=[...String(chunk).matchAll(new RegExp(scopeRx.source,'gi'))].map(x=>({kind:/^(?:weeke|wknd)/i.test(x[1])?'we':'wd',start:x.index,end:x.index+x[0].length}));
+      for(const kw of kws){let best=null,bd=Infinity;for(const a of amounts){const d=kw.start>=a.end?kw.start-a.end:(kw.end<=a.start?a.start-kw.end:0);if(d<bd){bd=d;best=a}}if(best&&!best.scope)best.scope=kw.kind}
+      for(const a of amounts)if(isFinite(a.v)&&a.v>0)e.amounts.push(a);
+    }
+  };
+  const amountsHourly=chunk=>/\b(?:hourly|per\s+hour|an\s+hour|\/\s*h(?:ou)?r\b)/i.test(String(chunk||''));
+  let current=null;
+  for(const seg of t.split(/[.;\n;]+/)){
+    if(!seg.trim())continue;
+    const ms=[];
+    for(const f of forms){let m;f.rx.lastIndex=0;while((m=f.rx.exec(seg))!==null){ms.push({code:f.code,start:m.index,end:m.index+m[0].length,len:m[0].length});if(m.index===f.rx.lastIndex)f.rx.lastIndex++}}
+    ms.sort((a,b)=>a.start-b.start||b.len-a.len);
+    const acc=[];let cov=-1;for(const mn of ms){if(mn.start<cov)continue;acc.push(mn);cov=mn.end}
+    if(!acc.length){if(current)addChunk(current,seg,null);continue}
+    for(let i=0;i<acc.length;i++){
+      const mn=acc[i];
+      const from=i===0?0:mn.start,to=i+1<acc.length?acc[i+1].start:seg.length;
+      addChunk(mn.code,seg.slice(from,to),seg.slice(mn.end,to));
+      current=mn.code;
+    }
+  }
+  for(const code of Object.keys(out)){
+    const e=out[code];let wd=null,we=null;
+    for(const a of e.amounts){if(a.scope==='we'){if(we==null)we=a.v;else if(wd==null)wd=a.v}else if(a.scope==='wd'){if(wd==null)wd=a.v;else if(we==null)we=a.v}else{if(wd==null)wd=a.v;else if(we==null)we=a.v}}
+    e.wd=wd;e.we=we;e.hasAmounts=e.amounts.length>0;delete e.amounts;
+  }
+  return out;
+}
 function describeParseLocal(text,fac,codes){
   const t=String(text||'');
   const ex=contractExtractRates(t);
@@ -2695,6 +2770,16 @@ function describeParseLocal(text,fac,codes){
   {const hr=rates.hourlyRate;if(hr!=null&&!/(?:per\s+day|a\s+day|daily|per\s+shift|flat)/i.test(t)){for(const fk of ['rate8','rate10','rate12']){if(rates[fk]!=null&&rates[fk]===hr)delete rates[fk]}}}
   const cs2=describeCallAmounts(t,2);if(cs2){if(cs2.wd!=null)rates.rateSecond=cs2.wd;if(cs2.we!=null)rates.weekendRateSecond=cs2.we}
   const cs1=describeCallAmounts(t,1);if(cs1){if(cs1.wd!=null)rates.rate24=cs1.wd;if(cs1.we!=null)rates.weekendRate24=cs1.we}
+  // Code statements are the most specific signal in the text —
+  // amounts the user tied to a code they NAMED land on that
+  // code's rate fields ahead of the generic extraction above.
+  const blocks=describeCodeBlocks(t,codes);
+  for(const c of (codes||[])){
+    const blk=blocks[c.code];if(!blk||(blk.wd==null&&blk.we==null))continue;
+    const bt=canonicalTypeOf(blk.phrase)||c.ctype||'';
+    if(bt==='24-hour call'){if(blk.wd!=null)rates.rate24=blk.wd;if(blk.we!=null)rates.weekendRate24=blk.we}
+    else if(bt==='Second call'){if(blk.wd!=null)rates.rateSecond=blk.wd;if(blk.we!=null)rates.weekendRateSecond=blk.we}
+  }
   const weekendDays=parseWeekendDaysText(t);
   const low=' '+t.toLowerCase()+' ';
   const eff={};for(const k of ['hourlyRate','paidHours8','rate8','rate10','rate12','rate24','weekendRate24','hourlyCall1st','rateSecond','weekendRateSecond','callBonus']){const v=rates[k]!=null?rates[k]:(fac?rateOrNull(fac[k]):null);if(v!=null)eff[k]=v}
@@ -2718,21 +2803,37 @@ function describeParseLocal(text,fac,codes){
         const hm=segLow.match(/(\d+(?:\.\d+)?)\s+hours?\b/);if(hm)stmtHours=Number(hm[1]);
       }
     }
+    // The user's own statement ABOUT this code (found by the
+    // tolerant statement matcher, not just the verbatim string):
+    // its phrase is the label when the strict extraction found
+    // none, and its amounts are this code's own pay.
+    const blk=blocks[c.code]||null;
+    if(blk&&blk.phrase&&!stmtLabel)stmtLabel=blk.phrase;
     const ct=canonicalTypeOf(stmtLabel)||c.ctype||(existing&&existing.canonicalType)||'';
     let hit=false;
     if(ct==='Second call')hit=/\b(call\s*2|2nd\s+call|second\s+call)\b/.test(low)||codeHit||!!stmtLabel||rates.rateSecond!=null||rates.weekendRateSecond!=null;
-    else if(ct==='24-hour call')hit=/\b(call\s*1|1st\s+call|first\s+call|24[\s-]?hour\s+call)\b/.test(low)||codeHit||!!stmtLabel||rates.rate24!=null||rates.weekendRate24!=null;
+    else if(ct==='24-hour call')hit=/\b(call\s*1|1st\s+call|first\s+call|24\s*-?\s*h(?:ou)?r\s+call)\b/.test(low)||codeHit||!!stmtLabel||rates.rate24!=null||rates.weekendRate24!=null;
     else if(ct)hit=/\b(day\s+shifts?|day|main|8[\s-]?hour|10[\s-]?hour|12[\s-]?hour)\b/.test(low)||codeHit||!!stmtLabel||rates.hourlyRate!=null||rates.rate8!=null||rates.rate10!=null||rates.rate12!=null;
     else hit=codeHit||!!stmtLabel;
+    // Naming the code in the text is itself the hit — the user
+    // plainly stated something about it; only COVERAGE (a price
+    // the statement or the rates can produce) may still ask.
+    if(blk)hit=true;
     let defHours=stmtHours!=null?String(stmtHours):((existing&&existing.hours)||c.hours||'');
     if((defHours===''||defHours==null)&&ct){const im=ct.match(/(\d+)-hour (?:day|shift)/);if(im)defHours=im[1]}
-    const covers=ct==='Second call'?(eff.rateSecond!=null||eff.weekendRateSecond!=null||eff.callBonus!=null)
+    const covers=(ct==='Second call'?(eff.rateSecond!=null||eff.weekendRateSecond!=null||eff.callBonus!=null)
       :ct==='24-hour call'?(eff.rate24!=null||eff.weekendRate24!=null||eff.hourlyCall1st!=null)
       :ct?(eff.hourlyRate!=null||eff.rate8!=null||eff.rate10!=null||eff.rate12!=null)
-      :(eff.hourlyRate!=null&&rateOrNull(defHours)!=null&&rateOrNull(defHours)>0);
+      :(eff.hourlyRate!=null&&rateOrNull(defHours)!=null&&rateOrNull(defHours)>0))
+      ||!!(blk&&(blk.wd!=null||blk.we!=null));
     if(hit&&covers){
       const isDay=!!ct&&/hour/.test(ct)&&!/call/i.test(ct);
-      defs[c.code]={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):null};
+      const newDef={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):null};
+      // Amounts stated for a code whose type has no facility
+      // split fields (a night call, a flat day code) stay ON the
+      // definition — they are this code's own clarified pay.
+      if(blk&&(blk.wd!=null||blk.we!=null)&&ct!=='Second call'&&ct!=='24-hour call'){if(blk.wd!=null)newDef.weekdayPay=blk.wd;if(blk.we!=null)newDef.weekendPay=blk.we}
+      defs[c.code]=newDef;
     }else unanswered.push(c.code);
   }
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
@@ -2756,8 +2857,10 @@ function describeSummaryText(facName,parsed,fac){
       if(flat!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(flat)+' per shift.');
       else if(hr!=null&&ph!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(hr)+'/hr × '+ph+' paid hours = '+moneyShort(hr*ph)+'.');
       else if(hr!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(hr)+'/hr.');
+      else if(d.weekdayPay!=null||d.weekendPay!=null){const parts=[];if(d.weekdayPay!=null)parts.push(moneyShort(d.weekdayPay)+' on weekdays');if(d.weekendPay!=null)parts.push(moneyShort(d.weekendPay)+' on weekends');bits.push('“'+code+'” ('+ct+'): '+parts.join(', ')+'.')}
       else bits.push('“'+code+'” ('+ct+').');
-    }else bits.push('“'+code+'”: '+(d.label||'as described')+'.');
+    }else if(d.weekdayPay!=null||d.weekendPay!=null){const parts=[];if(d.weekdayPay!=null)parts.push(moneyShort(d.weekdayPay)+' on weekdays');if(d.weekendPay!=null)parts.push(moneyShort(d.weekendPay)+' on weekends');bits.push('“'+code+'” ('+(d.label||'as described')+'): '+parts.join(', ')+'.')}
+    else bits.push('“'+code+'”: '+(d.label||'as described')+'.');
   }
   const hasDefCt=ct=>Object.values(parsed.defs||{}).some(d=>d.canonicalType===ct);
   if(!hasDefCt('Second call')&&(parsed.rates.rateSecond!=null||parsed.rates.weekendRateSecond!=null||parsed.rates.callBonus!=null)){const parts=[];if(eff.rateSecond!=null)parts.push(moneyShort(eff.rateSecond)+' on weekdays');if(eff.weekendRateSecond!=null)parts.push(moneyShort(eff.weekendRateSecond)+' on weekends');if(!parts.length&&eff.callBonus!=null)parts.push('the day rate plus a '+moneyShort(eff.callBonus)+' overnight bonus');if(parts.length)bits.push('2nd call: '+parts.join(', ')+'.')}
@@ -2817,6 +2920,8 @@ function applyDescribedRules(fac,parsed){
     const merged={...ex,label:d.label||ex.label||code,hours:d.hours!=null&&String(d.hours)!==''?String(d.hours):(ex.hours||''),rulesConfirmed:true,viaWords:true};
     const ct=d.canonicalType||ex.canonicalType||'';if(ct)merged.canonicalType=ct;
     if(d.paidHours!=null&&rateOrNull(d.paidHours)!=null)merged.paidHours=String(rateOrNull(d.paidHours));
+    if(d.weekdayPay!=null&&rateOrNull(d.weekdayPay)!=null)merged.weekdayPay=String(rateOrNull(d.weekdayPay));
+    if(d.weekendPay!=null&&rateOrNull(d.weekendPay)!=null)merged.weekendPay=String(rateOrNull(d.weekendPay));
     fac.codeMap[key]=merged;
     if(/8-hour/i.test(merged.canonicalType||merged.label||'')){const ph=rateOrNull(merged.paidHours);if(ph!=null)fac.paidHours8=String(ph)}
   }
@@ -2839,7 +2944,16 @@ async function submitDescribe(key){
         const data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'rule',ruleText:text,ruleHistory:[]});
         if(data&&data.rule){
           const aiRates=ruleToFacilityRates(data.rule);
-          for(const k of Object.keys(aiRates)){const n=rateOrNull(aiRates[k]);if(n!=null)parsed.rates[k]=n}
+          const merged={...parsed.rates};for(const k of Object.keys(aiRates)){const n=rateOrNull(aiRates[k]);if(n!=null)merged[k]=n}
+          // Prefer the reading that accounts for MORE of what
+          // the user actually stated (Nov 10, 2026): if merging
+          // the AI read over the local parse would lose a stated
+          // amount the local parse captured, the local values
+          // stand and the AI only fills gaps.
+          const statedAmts=[...new Set([...text.matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>Number(x[1].replace(/,/g,''))))];
+          const coverOf=r=>{const vals=new Set(Object.values(r).map(v=>rateOrNull(v)).filter(v=>v!=null));return statedAmts.filter(a=>vals.has(a)).length};
+          if(coverOf(merged)>=coverOf(parsed.rates))parsed.rates=merged;
+          else for(const k of Object.keys(merged))if(parsed.rates[k]==null)parsed.rates[k]=merged[k];
           if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=String(data.rule.clarifying_question);
         }
       }catch(aiErr){/* the deterministic parse stands on its own */}
@@ -3020,6 +3134,20 @@ function clarifiedRowPricing(fac,row){
   const def=codeDefFor(fac,key);if(!def)return null;
   const label=String(def.label||'').trim()||key;
   const canonical=String(def.canonicalType||'').trim()||canonicalTypeOf(label);
+  // Per-code stated amounts (Nov 10, 2026): pay the user tied to
+  // THIS code in their own words, saved on the definition. A
+  // contract flat rate on the facility outranks them
+  // (source-priority ladder); otherwise they beat the generic
+  // facility formula, which knows nothing about this code.
+  const dwd=rateOrNull(def.weekdayPay),dwe=rateOrNull(def.weekendPay);
+  if(dwd!=null||dwe!=null){
+    const flatKey=/8-hour/i.test(canonical)?'rate8':/10-hour/i.test(canonical)?'rate10':/12-hour/i.test(canonical)?'rate12':'';
+    if(!(flatKey&&rateOrNull(fac[flatKey])!=null)){
+      const weD=row&&row.date?isFacilityWeekend(fac,row.date):false;
+      const v=weD?(dwe!=null?dwe:dwd):(dwd!=null?dwd:dwe);
+      if(v!=null)return{type:label,pay:String(Math.round(v*100)/100),payRate:'',payUnit:'facility'};
+    }
+  }
   if(canonical){const p=facilityPayFor(fac,canonical,row&&row.date);if(p>0){
     // Per-code paid hours (Nov 9, 2026, December round): for a DAY
     // type with no flat rate, the facility price is hourly x some
