@@ -91,11 +91,11 @@ const RESET = `
   t('Facilities: each panel and its form appear exactly once (no duplicate ids)',
     count(fac, 'id="qgenda-panel"') === 1 && count(fac, 'id="schedule-import-panel"') === 1 &&
     count(fac, 'id="qgendaForm"') === 1 && count(fac, 'id="scheduleForm"') === 1);
-  t('Facilities: panels sit below the add-facility panels (contract, pay stub, manual)',
+  t('Facilities: panel order — contract, pay stub, QGenda, upload a schedule, manual add LAST (Nov 10, 2026: manual entry is the backup path, so it sits at the bottom)',
     fac.indexOf('id="facility-contract-panel"') < fac.indexOf('id="paystub-panel"') &&
-    fac.indexOf('id="paystub-panel"') < fac.indexOf('id="facility-manual-panel"') &&
-    fac.indexOf('id="facility-manual-panel"') < fac.indexOf('id="qgenda-panel"') &&
-    fac.indexOf('id="qgenda-panel"') < fac.indexOf('id="schedule-import-panel"'));
+    fac.indexOf('id="paystub-panel"') < fac.indexOf('id="qgenda-panel"') &&
+    fac.indexOf('id="qgenda-panel"') < fac.indexOf('id="schedule-import-panel"') &&
+    fac.indexOf('id="schedule-import-panel"') < fac.indexOf('id="facility-manual-panel"'));
   t('Facilities: QGenda panel holds the real connect controls',
     fac.includes('Your QGenda Subscription URL') && fac.includes('Connect QGenda feed') &&
     fac.includes('I signed in to QGenda — use my schedule'));
@@ -181,7 +181,7 @@ const RESET = `
     acct.includes('id="live-sync-panel"'));
 
   t('service worker cache bumped to v81',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v107'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v108'));
 
   console.log(failures === 0 ? 'panels-both-tabs test done: all passed' : 'panels-both-tabs test done: FAILURES=' + failures);
 })();
