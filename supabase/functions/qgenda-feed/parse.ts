@@ -416,12 +416,12 @@ export function refineQgendaBucketType(
 
 // --- QGenda task grammar (parser v3, Nov 8, 2026) -----------------
 //
-// QGenda names an assignment "<FACILITY CODE> - <Task>": Caleb's
-// real feed reads "HOLZ - G Main (8)" for a regular day shift and
+// QGenda names an assignment "<FACILITY CODE> - <Task>": one real
+// feed reads "HOLZ - G Main (8)" for a regular day shift and
 // "HOLZ - Call 2" for second call (screenshots, Nov 8, 2026). The
 // shared calendar parser knows none of this grammar: "HOLZ" never
-// matches its \bholzer\b Holzer rule, "(8)" is not one of its hour
-// patterns, and "G Main" matches nothing — so parseWorkShiftEvent
+// matches a saved "Holzer" facility rule, "(8)" is not one of its
+// hour patterns, and "G Main" matches nothing — so parseWorkShiftEvent
 // returned null for every day shift and parseQgendaICS silently
 // skipped them; ONLY the call events (which reach the generic
 // fallback through the bare word "call") ever appeared. Round 3
