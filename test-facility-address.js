@@ -189,7 +189,7 @@ const FAC_ENTRIES = (addr) => ([
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('S: edit-facilities action scrolls to the manual panel instead of the page top',
     appSrc.includes("if(kind==='facilities')facilityScrollTo('facility-manual-panel')"));
-  t('S: service worker cache bumped to v75', swSrc.includes('crna-hub-shell-v106'));
+  t('S: service worker cache bumped to v75', swSrc.includes('crna-hub-shell-v107'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

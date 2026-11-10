@@ -156,11 +156,17 @@ function shiftStatusOptions(current){const c=normalizeShiftStatus(current);retur
 // A W-2 salary day (Off / PTO) is paid through W-2 salary, not as a
 // billable 1099 shift — it is excluded from every income total even if a
 // pay value was ever stored on it, so W-2 salary is never double-counted.
-function isW2SalaryShift(x){return !!x&&/off|pto/i.test(String(x.type||''))}
+// The type-text match is a guess, and a user-confirmed UNPAID stamp
+// (payUnit 'unpaid' — the user stated in their own words that this
+// agency code pays nothing, e.g. a post-call day off) outranks it:
+// that shift is an agency code known to pay $0, not a salary day.
+function isW2SalaryShift(x){return !!x&&x.payUnit!=='unpaid'&&/off|pto/i.test(String(x.type||''))}
 // A shift is priced when it has a pay amount and is not flagged incomplete.
 // Unpriced shifts are never $0 - they are excluded from every total and
-// counted separately so a total is never silently low.
-function isPricedShift(x){return !!x && x.pay!=='' && x.pay!=null && !x.incomplete && num(x.pay)>0}
+// counted separately so a total is never silently low. The one known $0
+// is an UNPAID shift: pay '0' stamped payUnit 'unpaid' from a confirmed
+// no-pay definition — priced at exactly $0, complete, never unpriced.
+function isPricedShift(x){return !!x && x.pay!=='' && x.pay!=null && !x.incomplete && (num(x.pay)>0 || (x.payUnit==='unpaid' && num(x.pay)===0))}
 // Billable = priced AND not a W-2 salary day AND the user's work includes
 // 1099 work. Employment type (step 1, settings.employmentType) drives it:
 // '1099' and 'both' price shifts from contracts/facilities as before;
@@ -577,6 +583,12 @@ function healPaystubRecordShapes(){
 function paystubLiveShiftPrice(x){
   const fac=x&&x.facility?facilityByNameOrAlias(x.facility):null;
   if(!fac)return 0;
+  // An unpaid code has no live price to find (Nov 10, 2026): its
+  // definition says $0 on purpose. (clarifiedRowPricing would say
+  // the same; this guard keeps the card fallback below from ever
+  // pricing the shift by its feed type instead.)
+  const udef=x.code?codeDefFor(fac,x.code):null;
+  if(udef&&udef.unpaid)return 0;
   const cp=clarifiedRowPricing(fac,x);
   if(cp&&num(cp.pay)>0)return num(cp.pay);
   const p=facilityPayFor(fac,x.type,x.date);
@@ -598,6 +610,20 @@ function healUnpricedShiftPays(){
   for(const x of (db.shifts||[])){
     if(!x||!x.facility)continue;
     const fac=facilityByNameOrAlias(x.facility);if(!fac)continue;
+    // Unpaid-definition shifts (Nov 10, 2026): a code the user
+    // defined as no-pay is a KNOWN $0, never an unusable stamp to
+    // reprice from the card. Stamp it (or clear a stale incomplete
+    // flag on it) exactly as stored — final. A hand-typed
+    // per-shift total (payUnit 'daily') with a real amount is the
+    // user's correction layer and is left alone, matching the
+    // derived-pay rule everywhere else.
+    const udef=x.code?codeDefFor(fac,x.code):null;
+    if(udef&&udef.unpaid){
+      const blank0=String(x.pay||'').trim()==='';
+      const derivedStamp=blank0||x.incomplete||x.payUnit==='hourly'||x.payUnit==='facility'||x.payUnit==='unpaid'||!x.payUnit;
+      if(derivedStamp&&(String(x.pay||'')!=='0'||x.payUnit!=='unpaid'||x.incomplete)){x.pay='0';x.payRate='';x.payUnit='unpaid';x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+      continue;
+    }
     const blank=String(x.pay||'').trim()==='';
     if(!blank&&!x.incomplete)continue;
     let pay=null,unit='';
@@ -703,6 +729,13 @@ function paystubPeriodTotals(stub,periodStart,periodEnd,claims){
     if(isW2SalaryShift(x))continue;
     out.shiftCount++;
     if(!isPricedShift(x)){
+      // A shift whose code the user defined as UNPAID (Nov 10,
+      // 2026) is a KNOWN $0: it counts as priced, adds nothing to
+      // the check, and is never live-priced from the card — the
+      // one $0 the live-pricing rule below must not "fix".
+      const ufac=x.facility?facilityByNameOrAlias(x.facility):null;
+      const udef=ufac&&x.code?codeDefFor(ufac,x.code):null;
+      if(udef&&udef.unpaid){out.pricedCount++;continue}
       // Nov 10, 2026 ($0.00 paycheck bug): an unusable stored stamp
       // is not a $0 shift. Price the shift live from its facility's
       // rate card before counting it unpriced — a state whose stored
@@ -2801,7 +2834,8 @@ function describeCodeBlocks(text,codes){
   const scopeRx=/\b(weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i;
   const out={};
   const addChunk=(code,chunk,after)=>{
-    const e=out[code]||(out[code]={phrase:'',amounts:[]});
+    const e=out[code]||(out[code]={phrase:'',amounts:[],text:''});
+    e.text=(e.text?e.text+' ':'')+String(chunk||'');
     if(!e.phrase){
       let p=String(after!=null?after:chunk||'').replace(/^[\s=:\-–—.()]+/,'').replace(/^(?:is|means|called|pays?|at)\s+/i,'');
       p=p.split(/\b(?:weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i)[0].split(/[.;\n$,]/)[0].trim().replace(/\s+/g,' ').replace(/[\s\-–—:]+$/,'');
@@ -2834,6 +2868,28 @@ function describeCodeBlocks(text,codes){
     const e=out[code];let wd=null,we=null;
     for(const a of e.amounts){if(a.scope==='we'){if(we==null)we=a.v;else if(wd==null)wd=a.v}else if(a.scope==='wd'){if(wd==null)wd=a.v;else if(we==null)we=a.v}else{if(wd==null)wd=a.v;else if(we==null)we=a.v}}
     e.wd=wd;e.we=we;e.hasAmounts=e.amounts.length>0;delete e.amounts;
+    // No-pay statements (Nov 10, 2026): the user's words can DENY
+    // pay, not just state it — "post call day off=no pay" was read
+    // as a label and the facility hourly default filled in $2,000
+    // the user had explicitly ruled out. The block's own text is
+    // the evidence: an explicit denial ("no pay", "unpaid", "not
+    // paid", a stated $0 — which the amount capture above drops,
+    // since it keeps only positive figures) or a day-off meaning
+    // ("day off", "PTO", "time off") with NO positive amount
+    // attached resolves the code UNPAID. A positive amount outranks
+    // a bare day-off phrase ("post call day off, paid $500 flat"
+    // pays $500 — "paid $" settles it); a positive amount beside
+    // an explicit denial with nothing settling which governs is a
+    // genuine conflict, left for the one follow-up question.
+    const lt=' '+(e.text||'').toLowerCase()+' ';
+    const zeroAmt=/\$\s*0(?:\.0{1,2})?\b/.test(e.text||'');
+    const noPay=/\b(?:no\s+pay(?:ment)?|unpaid|not\s+paid|isn'?t\s+paid|aren'?t\s+paid|doesn'?t\s+pay|does\s+not\s+pay|non-?billable)\b/.test(lt);
+    const dayOff=/\b(?:day\s+off|off\s+day|days?\s+off|pto|paid\s+time\s+off|time\s+off)\b/.test(lt);
+    const paidStmt=/(?:\bpaid\s+\$|\bpays?\s+\$|\bpay\s+of\s+\$|\bflat\s+\$)/.test(lt);
+    e.noPay=noPay||zeroAmt;e.dayOff=dayOff;
+    if(e.hasAmounts){if(e.noPay&&!paidStmt)e.conflict=true}
+    else if(e.noPay||dayOff)e.unpaid=true;
+    delete e.text;
   }
   return out;
 }
@@ -2908,6 +2964,24 @@ function describeParseLocal(text,fac,codes){
     if(blk)hit=true;
     let defHours=stmtHours!=null?String(stmtHours):((existing&&existing.hours)||c.hours||'');
     if((defHours===''||defHours==null)&&ct){const im=ct.match(/(\d+)-hour (?:day|shift)/);if(im)defHours=im[1]}
+    // An explicit no-pay statement is a COMPLETE answer, not a gap
+    // (Nov 10, 2026): the code resolves to an UNPAID definition.
+    // No priced canonical type may attach — the feed's own guess
+    // (an '8-hour day' for a PCDO row) must not fill the vacuum
+    // the way it did when "no pay" was read as a mere label — and
+    // the label keeps the user's meaning with the denial itself
+    // trimmed off ("post call day off=no pay" → "post call day
+    // off"). It never lands in unanswered: nothing is unknown.
+    if(blk&&blk.unpaid){
+      const cleanLbl=String(stmtLabel||'').replace(/\s*(?:=|:|—|–|-)?\s*(?:no\s+pay(?:ment)?|unpaid|not\s+paid)\b.*$/i,'').replace(/[\s=:\-–—]+$/,'').trim();
+      defs[c.code]={label:cleanLbl||(blk.dayOff?'Day off':'No pay'),hours:defHours,canonicalType:'',paidHours:null,unpaid:true};
+      continue;
+    }
+    // A positive amount AND an explicit denial for the same code,
+    // with no wording settling which governs ("paid $500" settles
+    // it for the amount), is the one genuine conflict: the code
+    // stays unanswered so the follow-up question asks in words.
+    if(blk&&blk.conflict){unanswered.push(c.code);continue}
     const covers=(ct==='Second call'?(eff.rateSecond!=null||eff.weekendRateSecond!=null||eff.callBonus!=null)
       :ct==='24-hour call'?(eff.rate24!=null||eff.weekendRate24!=null||eff.hourlyCall1st!=null)
       :ct?(eff.hourlyRate!=null||eff.rate8!=null||eff.rate10!=null||eff.rate12!=null)
@@ -2932,7 +3006,9 @@ function describeSummaryText(facName,parsed,fac){
   const flatFor=ct=>/8-hour/.test(ct||'')?eff.rate8:/10-hour/.test(ct||'')?eff.rate10:/12-hour/.test(ct||'')?eff.rate12:null;
   for(const [code,d] of Object.entries(parsed.defs||{})){
     const ct=d.canonicalType||'';
-    if(ct==='Second call'){
+    if(d.unpaid){
+      bits.push('“'+code+'”: no pay — '+(d.label||'day off')+'.');
+    }else if(ct==='Second call'){
       const parts=[];if(eff.rateSecond!=null)parts.push(moneyShort(eff.rateSecond)+' on weekdays');if(eff.weekendRateSecond!=null)parts.push(moneyShort(eff.weekendRateSecond)+' on weekends');if(!parts.length&&eff.callBonus!=null)parts.push('the day rate plus a '+moneyShort(eff.callBonus)+' overnight bonus');
       bits.push('“'+code+'” (2nd call): '+(parts.length?parts.join(', '):'priced from the rates below')+'.');
     }else if(ct==='24-hour call'){
@@ -2970,7 +3046,9 @@ function describePrefillText(fac,codes){
     const def=codeDefFor(fac,c.code)||{};
     const ct=c.ctype||def.canonicalType||canonicalTypeOf(def.label||'');
     const nm2=shortCallName(c.code,2),nm1=shortCallName(c.code,1);
-    if(ct==='Second call'&&nm2){
+    if(def.unpaid){
+      bits.push(c.code+' is '+(def.label||'a day off')+' — no pay.');
+    }else if(ct==='Second call'&&nm2){
       const wd=rateOrNull(fac.rateSecond),we=rateOrNull(fac.weekendRateSecond),bonus=rateOrNull(fac.callBonus);
       if(wd!=null&&we!=null)bits.push(nm2+' is '+moneyShort(wd)+' on weekdays and '+moneyShort(we)+' on weekends.');
       else if(wd!=null)bits.push(nm2+' is '+moneyShort(wd)+' on weekdays.');
@@ -3009,6 +3087,15 @@ function applyDescribedRules(fac,parsed){
     if(d.paidHours!=null&&rateOrNull(d.paidHours)!=null)merged.paidHours=String(rateOrNull(d.paidHours));
     if(d.weekdayPay!=null&&rateOrNull(d.weekdayPay)!=null)merged.weekdayPay=String(rateOrNull(d.weekdayPay));
     if(d.weekendPay!=null&&rateOrNull(d.weekendPay)!=null)merged.weekendPay=String(rateOrNull(d.weekendPay));
+    // The unpaid marker (Nov 10, 2026) persists like any other
+    // stated rule — and clears the priced residue a buggy read
+    // may have saved for the code earlier (a priced canonical
+    // type, per-code amounts, paid hours), so nothing downstream
+    // can resurrect pay from the saved definition. A later
+    // confirmed parse that prices the code clears the marker:
+    // the user's newest words govern.
+    if(d.unpaid){merged.unpaid=true;merged.canonicalType='';delete merged.weekdayPay;delete merged.weekendPay;delete merged.paidHours}
+    else{delete merged.unpaid}
     fac.codeMap[key]=merged;
     if(/8-hour/i.test(merged.canonicalType||merged.label||'')){const ph=rateOrNull(merged.paidHours);if(ph!=null)fac.paidHours8=String(ph)}
   }
@@ -3220,6 +3307,15 @@ function clarifiedRowPricing(fac,row){
   const key=rowCodeKey(row);if(!key)return null;
   const def=codeDefFor(fac,key);if(!def)return null;
   const label=String(def.label||'').trim()||key;
+  // An unpaid definition is FINAL (Nov 10, 2026): the user stated
+  // in their own words that this code pays nothing ("post call
+  // day off — no pay"). It prices exactly $0 as a COMPLETE price,
+  // stamped payUnit 'unpaid' so no heal or live-pricing pass can
+  // mistake the $0 for a missing stamp and reprice it from the
+  // card (the trap the v106 $0.00 fix would otherwise spring).
+  // Stated per-code amounts, canonical types and facility
+  // formulas never see an unpaid code.
+  if(def.unpaid)return{type:label,pay:'0',payRate:'',payUnit:'unpaid'};
   const canonical=String(def.canonicalType||'').trim()||canonicalTypeOf(label);
   // Per-code stated amounts (Nov 10, 2026): pay the user tied to
   // THIS code in their own words, saved on the definition. A
@@ -3365,7 +3461,7 @@ function importPaySchedHint(preview,kind,saved){
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return '';
   return ` No pay schedule for ${ctx.agency} yet — add one any time on its card on the Facilities tab and its paychecks will show on your calendar.`;
 }
-function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}
+function repriceUnpricedShiftsForFacility(f){if(!f)return 0;let n=0;for(const x of (db.shifts||[])){if(String(x.pay||'').trim()||!x.facility)continue;const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;const udef=x.code?codeDefFor(f,x.code):null;if(udef&&udef.unpaid){x.pay='0';x.payRate='';x.payUnit='unpaid';x.incomplete=false;x.updatedAt=new Date().toISOString();n++;continue}const pay=facilityPayFor(f,x.type,x.date);if(pay>0){x.pay=String(Math.round(pay*100)/100);x.incomplete=false;x.updatedAt=new Date().toISOString();n++}}
   // Derived pays re-price too (Nov 9, 2026): a shift whose amount
   // was CALCULATED from this facility's clarification answers or
   // rate rule — stamped payUnit 'hourly' or 'facility' when it was
