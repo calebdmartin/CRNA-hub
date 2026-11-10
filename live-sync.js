@@ -312,6 +312,7 @@ function liveSyncFacilitiesPayload() {
     hourlyRate: num(f.hourlyRate) || null,
     paidHours8: num(f.paidHours8) || null,
     callBonus: num(f.callBonus) || null,
+    weekendDays: Array.isArray(f.weekendDays) ? f.weekendDays.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6) : null,
   }));
 }
 

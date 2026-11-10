@@ -711,3 +711,26 @@ Deno.test("Bug 2: CAMC screenshot rates price day shifts, call stays unpriced (n
   assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-07", rules)?.pay, "");
   assertEquals(parseWorkShiftEvent("CAMC 2nd call", "", "2026-03-07", rules)?.facilityKnown, true);
 });
+
+Deno.test("weekendDays is per-facility data: a Friday-weekend facility prices Friday at weekend rates", () => {
+  // Nov 9, 2026: the weekend definition is the facility's own rule
+  // (captured in the user's words), never a global constant.
+  // 2026-11-06 is a Friday.
+  const fri = normalizeFacilityRules([
+    { name: "FRIWKND", rateSecond: 3000, weekendRateSecond: 2000, rate24: 4800, weekendRate24: 4200, weekendDays: [0, 5, 6] },
+  ]);
+  assertEquals(fri[0].weekendDays, [0, 5, 6]);
+  assertEquals(priceShiftWithFacility("Second call", fri[0], "2026-11-06"), "2000");
+  assertEquals(priceShiftWithFacility("24-hour call", fri[0], "2026-11-06"), "4200");
+  // The same rates WITHOUT a stated weekend keep the Sat/Sun
+  // default: Friday prices as a weekday.
+  const def = normalizeFacilityRules([
+    { name: "DEFAULT", rateSecond: 3000, weekendRateSecond: 2000, rate24: 4800, weekendRate24: 4200 },
+  ]);
+  assertEquals(def[0].weekendDays, null);
+  assertEquals(priceShiftWithFacility("Second call", def[0], "2026-11-06"), "3000");
+  assertEquals(priceShiftWithFacility("24-hour call", def[0], "2026-11-06"), "4800");
+  // Malformed entries are dropped, never honored.
+  const bad = normalizeFacilityRules([{ name: "BAD", weekendDays: [5, 9, -1, "x"] }]);
+  assertEquals(bad[0].weekendDays, [5]);
+});

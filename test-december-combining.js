@@ -154,7 +154,13 @@ setupWorld();
 const codes = run(CODES_EXPR);
 t('prompt: only G Main is asked about (call codes settled, absorbed days unasked)', Array.isArray(codes) && codes.length === 1 && codes[0].code === 'HOLZ - G Main (8)', JSON.stringify(codes));
 t('prompt: the G Main question is the PAID-hours question', !!(codes[0] && codes[0].paidHoursAsk) && !codes[0].splitType);
-run(`schedulePreview.clarifyDraft={hourlyRate:'',codes:{'HOLZ - G Main (8)':{paidHours:'8.5'}}};`);
+// Nov 9, 2026 (evening): the paid-hours answer is given in WORDS
+// now — the describe box replaced every per-code field. The user
+// writes the rule in a sentence; the parse is confirmed; approve
+// applies it. (The engine question is unchanged: unclarifiedCodes
+// still flags the code paidHoursAsk — only the answering surface
+// changed.)
+run(`schedulePreview.describe={text:"Day shifts pay $250/hr and I'm paid for 8.5 hours.",parsed:describeParseLocal("Day shifts pay $250/hr and I'm paid for 8.5 hours.",facilityByNameOrAlias('Holzer'),unclarifiedCodes(schedulePreview,importRatesTarget(schedulePreview))),confirmed:true};`);
 run(`approveScheduleImport()`);
 t('approve: 26 feed rows save as 20 shifts (6 combined days)', run(`db.shifts.length`) === 20, 'count=' + run(`db.shifts.length`));
 for (const d of ['2026-12-04', '2026-12-08', '2026-12-10', '2026-12-14', '2026-12-16', '2026-12-18']) {

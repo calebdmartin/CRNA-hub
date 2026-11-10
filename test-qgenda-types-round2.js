@@ -121,7 +121,7 @@ const HOLZ_ROW_REFINED = { date: '2026-08-22', facility: 'HOLZ', type: 'Second c
     t('a Shift type cell does NOT display the bucket "Call (unclassified)"',
       !html.includes('data-field="type" value="Call (unclassified)"'));
     t('a clarification prompt asks about the raw name "HOLZ Call"',
-      html.includes('What is “HOLZ Call”?'));
+      html.includes('“HOLZ Call”'));
     t('a fetch stamps the preview with the response parserVersion',
       w.run(`schedulePreview.parserVersion`) === 2);
   }
@@ -190,7 +190,7 @@ const HOLZ_ROW_REFINED = { date: '2026-08-22', facility: 'HOLZ', type: 'Second c
   t('pin: service worker update is re-checked when the app returns to the foreground',
     appSrc.includes('p2=reg.update()'));
   t('pin: service worker cache bumped to v98',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v102'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v103'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

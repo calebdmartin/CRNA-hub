@@ -76,11 +76,17 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   run(`db = empty(); db.settings.scheduleName='Martin'; db.facilities=[]; db.shifts=[]; persist();
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', type:'5**', code:'5**'}), mkRow({facility:'', type:'5*', code:'5*', date:'2026-12-08'})]))}; schedulePreview.facilityAll='CAMC';`);
   const html2 = run(`schedulePreviewHTML()`);
+  // Nov 9, 2026 (evening): clarification is ONE describe-in-words
+  // box — it lists the codes on this schedule and the user answers
+  // in sentences. No per-code fields, no separate hourly box.
   t('prompt appears for a brand-new facility', html2.includes('First time at CAMC') && html2.includes('Skip for now'));
-  t('prompt asks ONLY about the codes on this schedule', html2.includes('What is “5**”') && html2.includes('What is “5*”') && !html2.includes('What is “7”') && !html2.includes('importRateEdit') && !html2.includes('Weekend 24-hour call rate'));
-  t('prompt centres on ONE shared hourly rate field', (html2.match(/clarifyHourly/g) || []).length === 1 && html2.includes('Your hourly rate at CAMC'));
-  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{'5**':{label:'8-hour day shift', hours:'8.5'}}}; approveScheduleImport();`);
-  t('facility is created with the hourly rate + the code definition', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].codeMap['5**'].label`) === '8-hour day shift' && run(`db.facilities[0].codeMap['5**'].hours`) === '8.5');
+  t('prompt lists ONLY the codes on this schedule', html2.includes('5**') && html2.includes('5*') && !html2.includes('importRateEdit') && !html2.includes('Weekend 24-hour call rate'));
+  t('prompt is ONE words box, not a field grid', (html2.match(/describeText/g) || []).length === 1 && html2.includes('Make my rules') && !html2.includes('clarifyCode') && !html2.includes('clarifyHourly'));
+  run(`schedulePreview.describe={text:"5** is an 8-hour day shift. Day shifts pay $250/hr and I'm paid for 8.5 hours.",parsed:describeParseLocal("5** is an 8-hour day shift. Day shifts pay $250/hr and I'm paid for 8.5 hours.",null,unclarifiedCodes(schedulePreview,importRatesTarget(schedulePreview))),confirmed:true}; approveScheduleImport();`);
+  // In the words model the 8.5 lives where it belongs — the PAID
+  // hours (what prices the shift); the definition keeps the label
+  // the user stated, in their words.
+  t('facility is created with the hourly rate + the code definition', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].codeMap['5**'].label`) === '8-hour day shift' && run(`db.facilities[0].codeMap['5**'].paidHours`) === '8.5');
   t('the clarified code prices immediately (250 x 8.5) and takes its label', run(`db.shifts.length`) === 2 && run(`db.shifts[0].pay`) === '2125' && run(`db.shifts[0].type`) === '8-hour day shift' && run(`db.shifts[0].payUnit`) === 'facility' && run(`db.shifts[0].incomplete`) === false);
   // payUnit note (Nov 9, 2026): the label "8-hour day shift" names a
   // canonical type, so clarified pricing now routes through the
@@ -107,8 +113,8 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   run(`db = empty(); db.facilities=[{id:'f1',name:'CAMC',aliases:'',hourlyRate:'',rate8:''}]; db.shifts=[]; persist();
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({})]))};`);
   const html4 = run(`schedulePreviewHTML()`);
-  t('prompt appears for a saved facility with no rates, listing only the type present', html4.includes('First time at CAMC') && html4.includes('What is “8-hour day”') && !html4.includes('What is “5**”'));
-  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{}}; approveScheduleImport();`);
+  t('prompt appears for a saved facility with no rates, listing only the type present', html4.includes('First time at CAMC') && html4.includes('8-hour day') && !html4.includes('5**'));
+  run(`schedulePreview.describe={text:"Day shifts pay $250/hr.",parsed:describeParseLocal("Day shifts pay $250/hr.",facilityByNameOrAlias('CAMC'),unclarifiedCodes(schedulePreview,importRatesTarget(schedulePreview))),confirmed:true}; approveScheduleImport();`);
   t('hourly rate merges onto the existing facility (no duplicate)', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250');
   t('shift prices from the just-entered hourly rate', run(`db.shifts[0].pay`) === '2000');
 
@@ -127,15 +133,15 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   // ---------- Case 6: QGenda parity (shared preview + approve) ----------
   run(`db = empty(); db.facilities=[]; db.shifts=[]; persist();
        schedulePreview = ${JSON.stringify(mkPreview([mkRow({facility:'', type:'5*', code:'5*', source:'qgenda-feed'})], {fileName:'QGenda feed', source:'qgenda-feed'}))}; schedulePreview.facilityAll='CAMC';`);
-  t('QGenda preview shows the pay-unit control and the narrow prompt', run(`schedulePreviewHTML().includes('previewPayUnit') && schedulePreviewHTML().includes('First time at CAMC') && schedulePreviewHTML().includes('What is “5*”')`));
-  run(`schedulePreview.clarifyDraft={hourlyRate:'250', codes:{'5*':{label:'10-hour shift', hours:'10'}}}; approveScheduleImport();`);
+  t('QGenda preview shows the pay-unit control and the narrow prompt', run(`schedulePreviewHTML().includes('previewPayUnit') && schedulePreviewHTML().includes('First time at CAMC') && schedulePreviewHTML().includes('5*')`));
+  run(`schedulePreview.describe={text:"5* is a 10-hour shift. Day shifts pay $250/hr.",parsed:describeParseLocal("5* is a 10-hour shift. Day shifts pay $250/hr.",null,unclarifiedCodes(schedulePreview,importRatesTarget(schedulePreview))),confirmed:true}; approveScheduleImport();`);
   t('QGenda shifts price from the clarification', run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2500' && run(`db.shifts[0].type`) === '10-hour shift' && run(`db.facilities[0].codeMap['5*'].hours`) === '10');
 
   // ---------- Case 7: .ics preview parity ----------
   run(`db = empty(); db.facilities=[]; db.shifts=[]; persist();
        calPreview = {fileName:'cal.ics', sourceLabel:'Calendar file', sourceCode:'calendar-file', rows:[{date:'2026-12-07', facility:'CAMC', type:'8-hour day', pay:'', flags:[], include:true, duplicate:false, source:'calendar-file', note:'Imported from Calendar file (.ics): cal.ics'}]};`);
-  t('.ics preview shows the pay-unit control and the narrow prompt', run(`calPreviewHTML().includes('previewPayUnit') && calPreviewHTML().includes('First time at CAMC') && calPreviewHTML().includes('What is “8-hour day”')`));
-  run(`calPreview.clarifyDraft={hourlyRate:'250', codes:{}}; approveCalendarImport();`);
+  t('.ics preview shows the pay-unit control and the narrow prompt', run(`calPreviewHTML().includes('previewPayUnit') && calPreviewHTML().includes('First time at CAMC') && calPreviewHTML().includes('8-hour day')`));
+  run(`calPreview.describe={text:"Day shifts pay $250/hr.",parsed:describeParseLocal("Day shifts pay $250/hr.",null,unclarifiedCodes(calPreview,importRatesTarget(calPreview))),confirmed:true}; approveCalendarImport();`);
   t('.ics approve creates the facility with the hourly rate and prices the shift', run(`db.facilities.length`) === 1 && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.shifts.length`) === 1 && run(`db.shifts[0].pay`) === '2000');
 
   // ---------- Case 8: contract flow — clarify ONLY what the read extracted ----------

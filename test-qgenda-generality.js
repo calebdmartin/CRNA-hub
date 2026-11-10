@@ -65,9 +65,12 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   run(`db = empty(); db.settings.scheduleName='Martin'; db.facilities=[${maryFac}]; db.shifts=[]; persist();`);
   run(`schedulePreview = ${JSON.stringify(stmPreview([stmRow({}), stmRow({ date: '2026-11-12', type: 'STM - Backup', code: 'STM - Backup' })], { facilityAll: 'St. Mary' }))};`);
   const html1 = run(`schedulePreviewHTML()`);
-  t('prompt asks per distinct raw STM name', html1.includes('What is “STM - OR Day”') && html1.includes('What is “STM - Backup”'));
+  // Nov 9, 2026 (evening): clarification is ONE describe-in-words
+  // box now — the prompt lists the distinct raw names it read and
+  // the user answers in sentences, not per-code fields.
+  t('prompt lists each distinct raw STM name it read', html1.includes('STM - OR Day') && html1.includes('STM - Backup') && html1.includes('describeText'));
   t('prompt is for the linked facility, not the raw code', html1.includes('First time at St. Mary'));
-  run(`schedulePreview.clarifyDraft = {hourlyRate:'250', codes:{'STM - OR Day':{label:'OR day shift',hours:'8'},'STM - Backup':{label:'Backup call',hours:'4'}}};`);
+  run(`schedulePreview.describe = {text:"STM - OR Day is an OR day shift, 8 hours. STM - Backup is Backup call, 4 hours. Shifts pay $250/hr.", parsed:describeParseLocal("STM - OR Day is an OR day shift, 8 hours. STM - Backup is Backup call, 4 hours. Shifts pay $250/hr.", facilityByNameOrAlias('St. Mary'), unclarifiedCodes(schedulePreview, importRatesTarget(schedulePreview))), confirmed:true};`);
   run(`approveScheduleImport();`);
   t('two shifts imported', run(`db.shifts.length`) === 2);
   t('shifts belong to the linked facility', run(`db.shifts.every(s=>s.facility==='St. Mary')`));

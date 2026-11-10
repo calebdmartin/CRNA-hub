@@ -417,6 +417,11 @@ export interface FacilityPayRule {
   hourlyRate?: number | null;
   paidHours8?: number | null;
   callBonus?: number | null;
+  // Per-facility weekend definition (Nov 9, 2026): the weekday
+  // numbers (0=Sunday … 6=Saturday) that count as weekend for this
+  // facility's call pricing — the facility's own rule, captured in
+  // the user's words, never a global constant. Absent = Sat/Sun.
+  weekendDays?: number[] | null;
 }
 
 function ruleNum(v: unknown): number | null {
@@ -460,6 +465,9 @@ export function normalizeFacilityRules(input: unknown): FacilityPayRule[] {
       hourlyRate: ruleNum(r.hourlyRate),
       callBonus: ruleNum(r.callBonus),
       paidHours8: ruleNum(r.paidHours8),
+      weekendDays: Array.isArray(r.weekendDays)
+        ? [...new Set(r.weekendDays.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b)
+        : null,
     });
   }
   return out;
@@ -478,8 +486,12 @@ export function priceShiftWithFacility(type: string, rule: FacilityPayRule, date
     v === null || v === undefined ? "" : String(Math.round(v * 100) / 100);
   const hourly = rule.hourlyRate ?? null;
   const hours8 = rule.paidHours8 ?? 8;
+  // The facility's own weekend definition decides (rule.weekendDays);
+  // the Sat/Sun default applies only when the facility never stated
+  // one — and only when a date is given at all.
+  const weekendSet = rule.weekendDays && rule.weekendDays.length ? rule.weekendDays : [0, 6];
   const weekend = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? [0, 6].includes(new Date(date + "T12:00:00").getDay())
+    ? weekendSet.includes(new Date(date + "T12:00:00").getDay())
     : false;
   if (type === "8-hour day") {
     return money(rule.rate8 ?? (hourly !== null ? hourly * hours8 : null));

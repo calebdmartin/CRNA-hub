@@ -165,16 +165,19 @@ const NEW_SHIFTS = [
       JSON.stringify([{ code: '8/2nd call', hours: '', ctype: 'Second call', splitType: 'Second call' }, { code: '24/1st call', hours: '24', ctype: '24-hour call', splitType: '24-hour call' }, { code: 'Night Float', hours: '12', ctype: '', splitType: '' }]),
       JSON.stringify(w.run(`unclarifiedCodes(schedulePreview, { name: 'Holzer', fac: db.facilities[0] })`)));
     const html = w.run(`importRatesPromptHTML(schedulePreview, 'sched')`);
-    t('a prompt asks "What is" for "8/2nd call"', html.includes('What is “8/2nd call”?'));
-    t('a prompt asks "What is" for "24/1st call"', html.includes('What is “24/1st call”?'));
-    t('a prompt asks "What is" for "Night Float"', html.includes('What is “Night Float”?'));
-    t('a prompt does NOT collapse codes into "Shift" / "Call (unclassified)" questions',
-      !html.includes('What is “Shift”?') && !html.includes('What is “Call (unclassified)”?'));
+    // Nov 9, 2026 (evening): the clarification prompt is ONE
+    // describe-in-words box. It LISTS the distinct codes it read
+    // (the same set the field grid used to ask about, from the
+    // same unclarifiedCodes engine) — no per-code fields at all.
+    t('a prompt lists "8/2nd call" among the codes it read', html.includes('8/2nd call'));
+    t('a prompt lists "24/1st call" among the codes it read', html.includes('24/1st call'));
+    t('a prompt lists "Night Float" among the codes it read', html.includes('Night Float'));
+    t('a prompt is one words box — no per-code field grid',
+      html.includes('describeText') && html.includes('Make my rules') && !html.includes('clarifyCode') && !html.includes('What is'));
+    t('a prompt does NOT collapse codes into "Shift" / "Call (unclassified)"',
+      !html.includes('“Shift”') && !html.includes('Call (unclassified)'));
     t('a prompt does NOT ask about "Holzer 8" (already priced by its canonical type)',
-      !html.includes('What is “Holzer 8”?'));
-    const nf = html.match(/id="impCodeHours_sched_\d+"[^>]*value="([^"]*)"[^>]*>/g) || [];
-    t('a "Night Float" hours input is prefilled "12" from its rows',
-      /id="impCodeHours_sched_2"[^>]*value="12"/.test(html), html.slice(html.indexOf('Night Float'), html.indexOf('Night Float') + 400));
+      !html.includes('Holzer 8'));
 
     // ---------- b. Canonical-priced exclusion for Second call ----------
     w.run(`db.facilities[0].rateSecond = '3000'; db.facilities[0].weekendRateSecond = '2000';`);
@@ -184,8 +187,8 @@ const NEW_SHIFTS = [
     const htmlB = w.run(`importRatesPromptHTML(schedulePreview, 'sched')`);
     t('b "8/2nd call" no longer appears in the prompt (priced via its type)',
       !htmlB.includes('8/2nd call'));
-    t('b "Night Float" still appears in the prompt', htmlB.includes('What is “Night Float”?'));
-    t('b "24/1st call" still appears in the prompt', htmlB.includes('What is “24/1st call”?'));
+    t('b "Night Float" still appears in the prompt', htmlB.includes('Night Float'));
+    t('b "24/1st call" still appears in the prompt', htmlB.includes('24/1st call'));
   }
 
   // ---------- c. Regeneration replaces a stale generic preview ----------
@@ -232,7 +235,7 @@ const NEW_SHIFTS = [
     appSrc.includes(`code:String(sh.code||'').trim()`) &&
     appSrc.includes(`hours:(typeof sh.hours==='number'&&isFinite(sh.hours))?sh.hours:null`));
   t('pin: service worker cache bumped to v96',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v102'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v103'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

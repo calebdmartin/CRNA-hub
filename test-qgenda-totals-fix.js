@@ -14,8 +14,9 @@
 //   B. the same account plus the real Nov 10 stub -> headline
 //      $39,832.50 with Nov 10 an actual.
 //   C. the heal: an account already saved with the flat prices
-//      re-approves the refreshed preview, answers only the split,
-//      and every derived amount corrects with no duplicates.
+//      heals on plain open through the Dashboard describe-in-words
+//      prompt (Nov 9, 2026 evening redesign — no re-import), and
+//      every derived amount corrects with no duplicates.
 //   D. legacy "[ ]" code artifacts still display and match clean.
 //   E. a server-priced QGenda row is marked facility-derived and
 //      reprices when the facility's paid hours are corrected.
@@ -110,8 +111,12 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   t('A both call codes flagged for the split question', codesA.find(c => c.code === C2).splitType === 'Second call' && codesA.find(c => c.code === C1).splitType === '24-hour call');
   t('A the day code is NOT asked a weekend question', codesA.find(c => c.code === G).splitType === '');
   const htmlA = run(`schedulePreviewHTML()`);
-  t('A prompt renders weekday/weekend fields for both call codes only', (htmlA.match(/clarifyCodeWeekday/g) || []).length === 2 && htmlA.includes('Second call on a weekday') && htmlA.includes('24-hour call on a weekend'));
-  run(`schedulePreview.clarifyDraft={hourlyRate:'250',codes:{'${G}':{label:'8-hour day',hours:'8.5'},'${C2}':{label:'Second call',weekdayPay:'3000',weekendPay:'2000'},'${C1}':{label:'24-hour call',weekdayPay:'4800',weekendPay:'4200'}}}; schedulePreview.paySchedDraft=${JSON.stringify(paySched)}; approveScheduleImport();`);
+  // Nov 9, 2026 (evening): the prompt is ONE describe-in-words box
+  // listing the three codes — the weekday/weekend splits are
+  // answered in sentences now, not per-code fields.
+  t('A prompt is one words box listing the three codes (no field grid)', htmlA.includes('describeText') && htmlA.includes('Make my rules') && !htmlA.includes('clarifyCodeWeekday') && htmlA.includes(G) && htmlA.includes(C2) && htmlA.includes(C1));
+  const WORDS_A = "Day shifts pay $250/hr and I'm paid for 8.5 hours. Call 2 is $3,000 on weekdays, $2,000 on weekends. Call 1 is $4,800 weekdays, $4,200 weekends.";
+  run(`schedulePreview.describe={text:${JSON.stringify(WORDS_A)},parsed:describeParseLocal(${JSON.stringify(WORDS_A)},null,unclarifiedCodes(schedulePreview,importRatesTarget(schedulePreview))),confirmed:true}; schedulePreview.paySchedDraft=${JSON.stringify(paySched)}; approveScheduleImport();`);
   const facA = run(`db.facilities[0]`);
   t('A split answers saved into the facility rate fields', facA.rateSecond === '3000' && facA.weekendRateSecond === '2000' && facA.rate24 === '4800' && facA.weekendRate24 === '4200', JSON.stringify({ r2: facA.rateSecond, w2: facA.weekendRateSecond, r24: facA.rate24, w24: facA.weekendRate24 }));
   t('A hourly rate + 8.5 paid hours saved', facA.hourlyRate === '250' && facA.paidHours8 === '8.5');
@@ -133,35 +138,33 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   t('B Nov 10 becomes the stub actual', occ('2026-11', '2026-11-10').isActual === true && run(`paystubOccurrenceAmount(paystubOccurrencesInMonth('2026-11').find(o=>o.date==='2026-11-10'))`) === 12757.5);
   t('B headline is $39,832.50', run(`monthHeadline('2026-11').gross`) === 39832.5, 'got ' + run(`monthHeadline('2026-11').gross`));
 
-  // ---------- C: the heal — broken account, split-only re-approve ----------
-  run(`db = empty(); db.settings.scheduleName='Martin'; db.facilities=[]; db.shifts=[]; persist();`);
-  run(`schedulePreview = ${JSON.stringify(mkPreview())}; schedulePreview.clarifyDraft={hourlyRate:'250',codes:{}}; schedulePreview.paySchedDraft=${JSON.stringify(paySched)}; approveScheduleImport();`);
+  // ---------- C: the heal — broken account, healed in words ----------
+  // Nov 9, 2026 (evening) redesign: the broken account below is the
+  // state the OLD field clarifier saved (one hourly rate + per-code
+  // hours, no splits, pays stamped hourly x span). It no longer
+  // heals through a re-import: on plain open the Dashboard surfaces
+  // ONE describe-in-words prompt, and confirming the read-back
+  // reprices everything. The broken figures are constructed as
+  // saved state because the current import flow can no longer
+  // produce them (an unconfirmed approve saves no rules at all).
+  const brokenFac = { id: 'f1', name: 'Holzer', aliases: '', address: '', hourlyRate: '250', paidHours8: '', rate8: '', rate10: '', rate12: '', rate24: '', weekendRate24: '', rateSecond: '', weekendRateSecond: '', hourlyCall1st: '', callBonus: '', distance: '', notes: '', codeMap: { [G]: { label: '8-hour day', hours: '8.5' }, [C2]: { label: 'Second call', hours: '24' }, [C1]: { label: '24-hour call', hours: '24' } } };
+  const brokenShifts = rows.map((r, i) => ({ id: 'c' + i, date: r.date, facility: 'Holzer', type: r.type, code: r.code, pay: r.code === G ? '2000' : '6000', payRate: '250', payUnit: 'hourly', status: 'confirmed', source: 'qgenda-feed', sources: ['qgenda-feed'], incomplete: false, note: '' }));
+  run(`db = empty(); db.settings.scheduleName='Martin'; db.facilities=${JSON.stringify([brokenFac])}; db.shifts=${JSON.stringify(brokenShifts)}; db.payStubs=[{id:'ps1',agency:'Holzer',facility:'Holzer',frequency:'biweekly',payDate:'2026-11-10',periodStart:'2026-10-19',periodEnd:'2026-11-01',gross:'',net:'',source:'import',fileName:''}]; persist();`);
   t('C broken state reproduces: Call 2 flat $6,000 Tue and Sun', shiftOn('2026-11-03', C2).pay === '6000' && shiftOn('2026-11-08', C2).pay === '6000', shiftOn('2026-11-03', C2).pay + '/' + shiftOn('2026-11-08', C2).pay);
   t('C broken state reproduces: G Main $2,000, Call 1 $6,000', shiftOn('2026-11-02', G).pay === '2000' && shiftOn('2026-11-07', C1).pay === '6000');
   t('C broken paychecks reproduce the live figures ($14,000 / $38,000 / $52,000)', occ('2026-11', '2026-11-10').total === 14000 && occ('2026-11', '2026-11-24').total === 38000 && run(`monthHeadline('2026-11').gross`) === 52000);
-  run(`schedulePreview = ${JSON.stringify(mkPreview())};`);
-  const codesC = run(`unclarifiedCodes(schedulePreview, importRatesTarget(schedulePreview))`);
-  // December round (Nov 9, 2026): the first approve above ran the
-  // CURRENT clarifier, whose prompt shows the day code's
-  // paid-hours field — approving recorded the shown default, so
-  // the day code does NOT come back with a paid-hours question
-  // here (the re-ask stays split-only). The paid-hours RE-ask
-  // fires only for definitions saved before the question existed
-  // (no paidHours on the def) — covered by
-  // test-december-combining.js.
-  t('C re-ask is split-only: day code stays home, both call codes return flagged', codesC.length === 2 && codesC.every(c => c.splitType) && !codesC.some(c => c.code === G), JSON.stringify(codesC.map(c => [c.code, c.splitType])));
-  const htmlC = run(`schedulePreviewHTML()`);
-  t('C re-ask heading is the quick-check variant', htmlC.includes('Quick check — call pay at Holzer'));
-  run(`schedulePreview.clarifyDraft={hourlyRate:'',codes:{'${C2}':{weekdayPay:'3000',weekendPay:'2000'},'${C1}':{weekdayPay:'4800',weekendPay:'4200'}}}; approveScheduleImport();`);
-  t('C approve adds no duplicates', run(`db.shifts.length`) === 22, 'got ' + run(`db.shifts.length`));
-  t('C saved definitions kept their labels through the split-only re-ask', run(`codeDefFor(db.facilities[0],'${C2}').canonicalType`) === 'Second call');
+  const htmlC = run(`dashboardRulesHealHTML()`);
+  t('C the Dashboard surfaces the words prompt on plain open (no re-import)', htmlC.includes('Quick check — pay rules at Holzer') && htmlC.includes('describeText'), htmlC.slice(0, 100));
+  t('C the prompt asks about all three unverified codes', run(`facilityRulesUnverified(db.facilities[0]).codes.length`) === 3, JSON.stringify(run(`facilityRulesUnverified(db.facilities[0]).codes.map(c=>c.code)`)));
+  run(`window.__parsedC = describeParseLocal(${JSON.stringify(WORDS_A)}, db.facilities[0], facilityRulesUnverified(db.facilities[0]).codes); applyDescribedRules(db.facilities[0], window.__parsedC); persist();`);
+  t('C healing adds no duplicates', run(`db.shifts.length`) === 22, 'got ' + run(`db.shifts.length`));
+  t('C saved definitions kept their labels through the words heal', run(`codeDefFor(db.facilities[0],'${C2}').canonicalType`) === 'Second call');
   t('C Call 2 healed by day of week', shiftOn('2026-11-03', C2).pay === '3000' && shiftOn('2026-11-08', C2).pay === '2000', shiftOn('2026-11-03', C2).pay + '/' + shiftOn('2026-11-08', C2).pay);
   t('C Call 1 healed to the weekend flat', shiftOn('2026-11-07', C1).pay === '4200');
-  t('C Nov 24 healed to $27,075 before the paid-hours fix', occ('2026-11', '2026-11-24').total === 27075 - 875, 'got ' + occ('2026-11', '2026-11-24').total);
-  run(`const fC=db.facilities[0]; fC.paidHours8='8.5'; repriceUnpricedShiftsForFacility(fC); persist();`);
-  t('C paid-hours correction reprices the day shifts to $2,125', shiftOn('2026-11-02', G).pay === '2125');
+  t('C G Main healed to $2,125 in the same pass (paid hours came from the same sentence)', shiftOn('2026-11-02', G).pay === '2125');
   t('C November worked total healed to $39,825', novWorked() === 39825, 'got ' + novWorked());
   t('C Nov 24 healed to $27,075', occ('2026-11', '2026-11-24').total === 27075);
+  t('C the prompt is gone once the rules are confirmed', run(`dashboardRulesHealHTML()`) === '');
   run(`db.payStubs = db.payStubs.filter(s=>s.source!=='import'); db.payStubs.push({id:'stub1',agency:'Holzer',facility:'Holzer',frequency:'biweekly',payDate:'2026-11-10',periodStart:'2026-10-19',periodEnd:'2026-11-01',gross:'12757.50',net:'',source:'stub'}); persist();`);
   t('C healed headline with the stub is $39,832.50', run(`monthHeadline('2026-11').gross`) === 39832.5, 'got ' + run(`monthHeadline('2026-11').gross`));
 
