@@ -179,5 +179,5 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('plain sign out ends the session', run(`cloudSession`) === null);
   t('plain sign out leaves the data on the device (database and portal state intact)',
     store.has('crna-hub-v2') && JSON.parse(store.get('crna-hub-v2')).shifts.some(x => x.id === 'shift-1') && store.has('crna-hub-portal-check'));
-  t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v105'));
+  t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v106'));
 })().catch(e => { console.error('ERROR', e); process.exitCode = 1; });

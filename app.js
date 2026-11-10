@@ -116,6 +116,7 @@ let shiftDeleteConfirm=null;
 try{const bootDedupe=dedupeShiftsInPlace();if(bootDedupe.collapsed)persist()}catch(e){}
 try{const bootPairs=healDayCallShiftPairs();if(bootPairs.merged)persist()}catch(e){}
 try{const bootStubs=healPaystubRecordShapes();if(bootStubs)persist()}catch(e){}
+try{const bootPrices=healUnpricedShiftPays();if(bootPrices)persist()}catch(e){}
 function localDate(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 // Income totals are scoped to one calendar year at a time (default: the
 // current calendar year). Shifts from other years stay in the list and
@@ -565,6 +566,49 @@ function healPaystubRecordShapes(){
   }
   return changed;
 }
+// Live price for a shift whose stored pay cannot be used (Nov 10,
+// 2026 — the $0.00 paycheck bug): the paycheck estimate is DEFINED
+// as the period's shifts priced at the facility rate card, so a
+// blank (or incomplete-flagged) stored stamp must never read as $0
+// when the card can price the shift. Clarified per-code definitions
+// price first (they carry the weekday/weekend splits and per-code
+// amounts), then the facility card by canonical type. Returns 0
+// only when no card can price the shift.
+function paystubLiveShiftPrice(x){
+  const fac=x&&x.facility?facilityByNameOrAlias(x.facility):null;
+  if(!fac)return 0;
+  const cp=clarifiedRowPricing(fac,x);
+  if(cp&&num(cp.pay)>0)return num(cp.pay);
+  const p=facilityPayFor(fac,x.type,x.date);
+  return p>0?p:0;
+}
+// Boot heal (Nov 10, 2026 — the $0.00 paycheck bug): shifts saved
+// with a blank stored pay (an older build's import, a cloud download
+// shape the paycheck layer reads as unpriced) are priced from their
+// facility's rate card and stamped, on plain open — no re-import, no
+// re-upload, no manual rate edit. Only blank pays are stamped; an
+// amount already stored is never moved here (derived amounts follow
+// rule changes through repriceUnpricedShiftsForFacility, as before).
+// A stamped amount still flagged incomplete whose value equals the
+// card's price is a formula result the flag outlived, so the flag
+// clears; a differing amount is the user's number and stays flagged
+// exactly as stored (the paycheck layer still live-prices it).
+function healUnpricedShiftPays(){
+  let n=0;
+  for(const x of (db.shifts||[])){
+    if(!x||!x.facility)continue;
+    const fac=facilityByNameOrAlias(x.facility);if(!fac)continue;
+    const blank=String(x.pay||'').trim()==='';
+    if(!blank&&!x.incomplete)continue;
+    let pay=null,unit='';
+    const cp=clarifiedRowPricing(fac,x);if(cp&&num(cp.pay)>0){pay=String(cp.pay);unit=cp.payUnit||''}
+    if(pay==null){const p=facilityPayFor(fac,x.type,x.date);if(p>0){pay=String(Math.round(p*100)/100);unit='facility'}}
+    if(pay==null)continue;
+    if(blank){x.pay=pay;if(unit)x.payUnit=unit;x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+    else if(Math.abs(num(x.pay)-num(pay))<0.005&&x.incomplete){x.incomplete=false;x.updatedAt=new Date().toISOString();n++}
+  }
+  return n;
+}
 function paystubSamePayer(a,b){
   if(!a||!b)return false;
   if(a.id&&b.id&&a.id===b.id)return true;
@@ -658,7 +702,27 @@ function paystubPeriodTotals(stub,periodStart,periodEnd,claims){
     const st=normalizeShiftStatus(x.status);if(st==='rejected'||st==='canceled')continue;
     if(isW2SalaryShift(x))continue;
     out.shiftCount++;
-    if(!isPricedShift(x)){out.unpriced++;continue}
+    if(!isPricedShift(x)){
+      // Nov 10, 2026 ($0.00 paycheck bug): an unusable stored stamp
+      // is not a $0 shift. Price the shift live from its facility's
+      // rate card before counting it unpriced — a state whose stored
+      // pays never landed showed "est. $0.00" for a fully priceable
+      // period and dropped the whole check out of the month
+      // headline. The stored record is also healed on open
+      // (healUnpricedShiftPays); this read-time pass covers anything
+      // that reaches the paycheck layer unhealed. Only a shift no
+      // card can price stays unpriced.
+      const live=paystubLiveShiftPrice(x);
+      // (isBillableShift embeds isPricedShift, so it cannot gate
+      // this branch; W-2 salary shifts were already skipped above —
+      // what remains of the billable rule here is the 1099 check.)
+      if(!(live>0)||!employmentIncludes1099()){out.unpriced++;continue}
+      out.pricedCount++;
+      out.total+=live;
+      if(st==='confirmed'||st==='completed')out.gross+=live;
+      else if(st==='proposed')out.grossWithProposed+=live;
+      continue;
+    }
     if(!isBillableShift(x))continue;
     out.pricedCount++;
     out.total+=num(x.pay);
@@ -766,7 +830,12 @@ function paystubOccurrenceTotal(x){if(!x)return 0;if(x.total!=null)return x.tota
 // The amount a paycheck displays: the stub actual for a stub's own
 // check, the calculated period total otherwise, null when no shifts
 // are recorded for the period yet (never a fake $0 from the stub).
-function paystubOccurrenceAmount(x){if(!x)return null;if(x.isActual)return x.actual;return x.shiftCount?paystubOccurrenceTotal(x):null}
+function paystubOccurrenceAmount(x){if(!x)return null;if(x.isActual)return x.actual;if(!x.shiftCount)return null;
+// Nov 10, 2026: a period whose counted shifts are ALL unpriceable
+// (no rate card can price any of them) has no amount — null, so
+// surfaces render "incomplete" / "—", never a false "est. $0.00".
+if(x.total===0&&(x.unpriced||0)>0&&(x.unpriced||0)>=(x.shiftCount||0))return null;
+return paystubOccurrenceTotal(x)}
 function paystubForAgency(agency){const n=String(agency||'').trim().toLowerCase();if(!n)return null;return (db.payStubs||[]).find(x=>String(x.agency||'').trim().toLowerCase()===n)||null}
 function paystubNextDatesText(p){if(!p||!normalizePayFrequency(p.frequency)||!psValidISO(p.payDate))return 'Add a pay frequency and a pay date to see the next expected pay dates.';const fake={...p};const first=paystubNextPayDate(fake);if(!first)return 'Add a pay frequency and a pay date to see the next expected pay dates.';const dates=[first];let d=first;for(let i=0;i<2;i++){const n=paystubStepDate(d,fake.frequency,+fake.payDate.slice(8,10));if(!n||n<=d)break;dates.push(n);d=n}return 'Next expected pay dates (estimates): '+dates.map(x=>fmt(x)).join(' · ')+'.'}
 // --- Deterministic pay-stub text parsing (pasted text / text-layer PDF) ---
@@ -824,6 +893,7 @@ function paystubPaycheckLineHTML(x){
   if(x.isActual&&x.actualBasis==='entered')return `<div class="muted">${currency(x.actual)} actual · entered from calendar <span class="pill">actual</span></div>${x.shiftCount?`<div class="muted">Your shifts for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} added up to ${currency(paystubOccurrenceTotal(x))} — the amount you entered replaces the estimate for this check only.</div>`:`<div class="muted">No shifts recorded for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} — the amount you entered is counted for this check.</div>`}`;
   if(x.isActual)return `<div class="muted">${currency(x.actual)} actual · from pay stub <span class="pill">actual</span></div>${x.shiftCount?`<div class="muted">Your shifts for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} added up to ${currency(paystubOccurrenceTotal(x))} — the stub is the actual for this period.</div>`:`<div class="muted">No shifts recorded for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} — this is income the calendar didn't see, counted from the stub alone.</div>`}`;
   if(!x.shiftCount)return `<div class="muted">No shifts recorded for this pay period yet — its amount is calculated once shifts are on the calendar. <span class="pill">estimate</span></div>`;
+  if(paystubOccurrenceTotal(x)===0&&(x.unpriced||0)>0&&(x.unpriced||0)>=(x.shiftCount||0))return `<div class="muted">Not priced yet — the ${x.shiftCount} shift${x.shiftCount===1?'':'s'} in this period need pay rules before this check can be estimated. <span class="pill">estimate</span></div>`;
   return `<div class="muted">Estimated ${currency(paystubOccurrenceTotal(x))} gross${paystubOccurrenceTotal(x)>x.gross?` · includes ${currency(paystubOccurrenceTotal(x)-x.gross)} from proposed shifts`:''} · <span class="pill">estimate</span></div>${x.unpriced?`<div class="muted">${x.unpriced} shift${x.unpriced===1?'':'s'} in this period ${x.unpriced===1?'is':'are'} not priced yet — this estimate may be low.</div>`:''}`;
 }
 // Short pay-period range for the condensed paycheck row:
@@ -1920,7 +1990,7 @@ function select(name,label,options,value){return `<div class="field"><label for=
 function selectLabeled(name,label,pairs,value){return `<div class="field"><label for="f_${name}">${label}</label><select name="${name}" id="f_${name}">${pairs.map(([v,l])=>`<option value="${escapeHTML(v)}" ${v===value?'selected':''}>${escapeHTML(l)}</option>`).join('')}</select></div>`}
 function formEnd(label){return `<div class="form-actions"><button type="submit">${label}</button>${editId?'<button type="button" class="secondary" data-action="cancel">Cancel</button>':''}</div></form>`}
 function list(kind,items,description){return items.length?items.map(x=>`<div class="item"><div>${description(x)}</div><div class="item-actions"><button class="tiny secondary" data-action="edit-${kind}" data-id="${escapeHTML(x.id)}">Edit</button><button class="tiny danger" data-action="delete-${kind}" data-id="${escapeHTML(x.id)}">Delete</button></div></div>`).join(''):'<p class="muted">No records yet.</p>'}
-function calendar(){const y=month.getFullYear(),m=month.getMonth(),prefix=`${y}-${String(m+1).padStart(2,'0')}`,start=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate();let grid=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x=>`<div class="weekday">${x}</div>`).join('');for(let n=0;n<start;n++)grid+='<div class="day blank"></div>';const paysByMonth=paystubOccurrencesInMonth(prefix);for(let n=1;n<=days;n++){const date=`${prefix}-${String(n).padStart(2,'0')}`,entries=shiftsOnDay(date),pays=paysByMonth.filter(p=>p.date===date);grid+=`<button class="day ${date===localDate(new Date())?'today':''} ${date===selected?'selected':''}" data-action="day" data-date="${date}" aria-label="${fmt(date)}: ${entries.length} shifts${pays.length?`, ${pays.length} estimated paycheck(s)`:''}"><span class="day-number">${n}</span>${entries.slice(0,3).map(x=>`<span class="chip ${/24.hour/i.test(x.type)?'call':/second/i.test(x.type)?'second':/off|pto/i.test(x.type)?'off':''}">${escapeHTML(shiftChipLabel(x))}</span>`).join('')}${pays.slice(0,2).map(p=>{const amt=paystubOccurrenceAmount(p);return `<span class="chip paycheck" title="${p.isActual?`Paycheck — ${escapeHTML(p.agency)} — ${currency(p.actual)} actual ${p.actualBasis==='entered'?'you entered from the calendar':'from your pay stub'} for ${fmt(p.periodStart)} – ${fmt(p.periodEnd)}.`:`Estimated paycheck — ${escapeHTML(p.agency)} — calculated from your shifts in ${fmt(p.periodStart)} – ${fmt(p.periodEnd)}${p.shiftCount?`: ${currency(paystubOccurrenceTotal(p))} gross${p.unpriced?`, ${p.unpriced} shift(s) not priced yet — may be low`:''}`:' — no shifts recorded for this period yet'}. Always double-check against your actual paystubs.`}">💰 ${escapeHTML(p.agency||'Paycheck')}<br>${p.isActual?'actual '+currency(p.actual):amt!=null?'est. '+currency(amt):'payday'}</span>`}).join('')}${entries.length+pays.length>3?`<span class="muted">+${entries.length+pays.length-3}</span>`:''}</button>`}const shifts=db.shifts.filter(x=>x.date?.startsWith(prefix));const head=monthHeadline(prefix);const bannerQual=head.anyActual?'incl. actual from pay stub':head.partial?'paychecks + other shifts':'';const banner=`<div class="month-banner"><span>${month.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</span><span>Expected gross <strong>${currency(head.gross)}</strong>${bannerQual?` <span class="mb-qual">· ${bannerQual}</span>`:''}</span></div>`;return `<section class="panel"><div class="toolbar"><button class="secondary" data-action="prev" aria-label="Previous month">‹</button><h2>${month.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><button class="secondary" data-action="next" aria-label="Next month">›</button><button class="secondary tiny" data-action="today">Today</button></div>${banner}<div class="calendar">${grid}</div><p class="muted">${shifts.length} shifts · Tap a day to see its shifts, add one, or delete one</p>${paysByMonth.length?`<p class="muted">💰 = paycheck calculated from your shifts in its pay period (a stub's own check shows its actual) — ${PAYSTUB_DISCLAIMER}</p>`:''}</section>`}
+function calendar(){const y=month.getFullYear(),m=month.getMonth(),prefix=`${y}-${String(m+1).padStart(2,'0')}`,start=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate();let grid=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x=>`<div class="weekday">${x}</div>`).join('');for(let n=0;n<start;n++)grid+='<div class="day blank"></div>';const paysByMonth=paystubOccurrencesInMonth(prefix);for(let n=1;n<=days;n++){const date=`${prefix}-${String(n).padStart(2,'0')}`,entries=shiftsOnDay(date),pays=paysByMonth.filter(p=>p.date===date);grid+=`<button class="day ${date===localDate(new Date())?'today':''} ${date===selected?'selected':''}" data-action="day" data-date="${date}" aria-label="${fmt(date)}: ${entries.length} shifts${pays.length?`, ${pays.length} estimated paycheck(s)`:''}"><span class="day-number">${n}</span>${entries.slice(0,3).map(x=>`<span class="chip ${/24.hour/i.test(x.type)?'call':/second/i.test(x.type)?'second':/off|pto/i.test(x.type)?'off':''}">${escapeHTML(shiftChipLabel(x))}</span>`).join('')}${pays.slice(0,2).map(p=>{const amt=paystubOccurrenceAmount(p);return `<span class="chip paycheck" title="${p.isActual?`Paycheck — ${escapeHTML(p.agency)} — ${currency(p.actual)} actual ${p.actualBasis==='entered'?'you entered from the calendar':'from your pay stub'} for ${fmt(p.periodStart)} – ${fmt(p.periodEnd)}.`:`Estimated paycheck — ${escapeHTML(p.agency)} — calculated from your shifts in ${fmt(p.periodStart)} – ${fmt(p.periodEnd)}${p.shiftCount?`: ${currency(paystubOccurrenceTotal(p))} gross${p.unpriced?`, ${p.unpriced} shift(s) not priced yet — may be low`:''}`:' — no shifts recorded for this period yet'}. Always double-check against your actual paystubs.`}">💰 ${escapeHTML(p.agency||'Paycheck')}<br>${p.isActual?'actual '+currency(p.actual):amt!=null?'est. '+currency(amt):p.shiftCount?'incomplete':'payday'}</span>`}).join('')}${entries.length+pays.length>3?`<span class="muted">+${entries.length+pays.length-3}</span>`:''}</button>`}const shifts=db.shifts.filter(x=>x.date?.startsWith(prefix));const head=monthHeadline(prefix);const bannerQual=head.anyActual?'incl. actual from pay stub':head.partial?'paychecks + other shifts':'';const banner=`<div class="month-banner"><span>${month.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</span><span>Expected gross <strong>${currency(head.gross)}</strong>${bannerQual?` <span class="mb-qual">· ${bannerQual}</span>`:''}</span></div>`;return `<section class="panel"><div class="toolbar"><button class="secondary" data-action="prev" aria-label="Previous month">‹</button><h2>${month.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><button class="secondary" data-action="next" aria-label="Next month">›</button><button class="secondary tiny" data-action="today">Today</button></div>${banner}<div class="calendar">${grid}</div><p class="muted">${shifts.length} shifts · Tap a day to see its shifts, add one, or delete one</p>${paysByMonth.length?`<p class="muted">💰 = paycheck calculated from your shifts in its pay period (a stub's own check shows its actual) — ${PAYSTUB_DISCLAIMER}</p>`:''}</section>`}
 
 function onboardingSteps(){
   const signedIn = (typeof cloudSession !== 'undefined') && !!cloudSession;
@@ -2084,7 +2154,16 @@ function shiftFacilityLabel(x){const f=String((x&&x.facility)||'').trim();if(f)r
 // and are deliberately NOT changed here.)
 function shiftChipLabel(x){
   if(!x)return 'Shift';
-  const code=normalizeCodeKey(x.code||'');if(code)return code;
+  let code=normalizeCodeKey(x.code||'');
+  // A trailing bracketed assignee the name cleaner could not judge
+  // (this device does not know the schedule name yet, so "[Martin]"
+  // survived normalizeCodeKey) is still never part of what the shift
+  // IS — the chip drops a trailing name-like bracket group (letters
+  // and spaces only). A bracket holding digits or symbols is real
+  // code text and stays. Display only: the stored code is untouched,
+  // and every lookup normalizes both sides identically either way.
+  if(code)code=code.replace(/\s*\[[A-Za-z][A-Za-z\s,.'-]*\]$/,'').trim();
+  if(code)return code;
   const fac=x.facility?facilityByNameOrAlias(x.facility):null;
   if(fac){const defs=facilityCodeDefs(fac);const t=String(x.type||'').trim();for(const k of Object.keys(defs)){const lab=String((defs[k]&&defs[k].label)||'').trim();if(lab&&lab===t)return k}}
   return shiftShortTypeLabel(x.type);
@@ -2399,7 +2478,15 @@ function codeKeyBracket(m){
   return m;
 }
 function normalizeCodeKey(code){return String(code||'').replace(/\[[^\[\]]*\]/g,codeKeyBracket).replace(/\s+/g,' ').trim()}
-function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;const defs=facilityCodeDefs(f);if(defs[k])return defs[k];const nk=normalizeCodeKey(k);if(nk){for(const key of Object.keys(defs)){if(normalizeCodeKey(key)===nk)return defs[key]}}return null}
+function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;const defs=facilityCodeDefs(f);if(defs[k])return defs[k];const nk=normalizeCodeKey(k);if(nk){for(const key of Object.keys(defs)){if(normalizeCodeKey(key)===nk)return defs[key]}
+  // Last resort (Nov 10, 2026): a trailing name-like bracket group
+  // (the feed's assignee annotation, "[Martin]") is not part of a
+  // code's identity — when this device did not know the schedule
+  // name, normalizeCodeKey kept it on one side only, and the def
+  // missed. Compare once more with that suffix dropped from both
+  // sides; a bracket holding digits or symbols still distinguishes.
+  const loose=s=>s.replace(/\s*\[[A-Za-z][A-Za-z\s,.'-]*\]$/,'').trim();
+  const lk=loose(nk);if(lk&&lk!==nk){for(const key of Object.keys(defs)){if(loose(normalizeCodeKey(key))===lk)return defs[key]}}}return null}
 // The canonical shift type a free-text label names, when it names
 // one the facility pay rule prices directly ("Second call",
 // "24-hour call", "8-hour day", ...). Generic patterns only — a
