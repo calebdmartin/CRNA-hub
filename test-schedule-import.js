@@ -126,7 +126,22 @@ run(`
   globalThis.__parsed = parseScheduleText(${JSON.stringify(CSV)}, 'staff-nov.csv');
 `);
 const parsed = sandbox.__parsed;
-t('CSV staff list parses to 5 rows with matched/other/uncertain split',
+// Nov 10, 2026 (Caleb's same-last-name rule) supersedes the silent
+// split this fixture used to assert: the file carries TWO different
+// Martins (the user's C./Caleb cluster and Jordan Martin), so the
+// preview ASKS once and every same-name row waits unchecked until
+// the pick. After the pick, the split below is exactly the old one.
+t('CSV staff list: two different Martins trigger the one clarification ask',
+  parsed.rows.length === 5 && !!parsed.nameAmb &&
+  parsed.nameAmb.candidates.length === 2 &&
+  parsed.rows.slice(0, 3).every(r => r.match === 'uncertain' && r.include === false) &&
+  parsed.rows[4].match === 'other');
+run(`
+  const key = globalThis.__parsed.nameAmb.candidates.find(c => c.label !== 'Martin, Jordan').key;
+  globalThis.__parsed.nameAmb.picks = [key];
+  applyNameAmbiguity(globalThis.__parsed);
+`);
+t('CSV staff list parses to 5 rows with matched/other/uncertain split (after the pick)',
   parsed.rows.length === 5 &&
   parsed.rows.filter(r => r.match === 'matched').length === 2 &&
   parsed.rows.filter(r => r.match === 'other').length === 2 &&
@@ -166,6 +181,15 @@ t('text lines: dates, Holzer types, and names all read',
   tp.rows.length === 3 &&
   tp.rows[0].date === '2026-11-10' && tp.rows[0].type === '8-hour day' &&
   tp.rows[2].date === '2026-11-12' && tp.rows[2].type === 'Second call');
+// Same Nov 10, 2026 rule: C. Martin + Martin, Caleb + Jordan Martin
+// is an ask-first import; the pick restores the classified split.
+run(`
+  if (globalThis.__textParsed.nameAmb) {
+    const key = globalThis.__textParsed.nameAmb.candidates.find(c => c.label !== 'Martin, Jordan').key;
+    globalThis.__textParsed.nameAmb.picks = [key];
+    applyNameAmbiguity(globalThis.__textParsed);
+  }
+`);
 t('text lines: own rows matched, Jordan Martin excluded',
   tp.rows[0].match === 'matched' && tp.rows[1].match === 'other' &&
   tp.rows[2].match === 'matched');
@@ -195,6 +219,16 @@ run(`
     {date:'2026-11-12', facility:'Holzer', type:'Second call', name:''}
   ]}, 'photo.jpg');
   globalThis.__aiRows = schedulePreview.rows;
+`);
+// Same Nov 10, 2026 rule on the AI path: C. Martin + Jordan Martin
+// asks first; after the pick the classification is the shared one.
+run(`
+  if (schedulePreview.nameAmb) {
+    const key = schedulePreview.nameAmb.candidates.find(c => c.label !== 'Martin, Jordan').key;
+    schedulePreview.nameAmb.picks = [key];
+    applyNameAmbiguity(schedulePreview);
+    globalThis.__aiRows = schedulePreview.rows;
+  }
 `);
 t('AI schedule preview classifies matched / other / uncertain the same way',
   sandbox.__aiOk === true &&

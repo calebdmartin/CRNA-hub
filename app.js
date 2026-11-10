@@ -1,6 +1,6 @@
 'use strict';
 const KEY='crna-hub-v2',OLD='crna-hub-starter-v1',tabs=['Account','Dashboard','Facilities','Credentials','Mileage','Assistant'];
-const empty=()=>({shifts:[],facilities:[],pto:[],credentials:[],mileage:[],vehicles:[],contracts:[],payStubs:[],nbcrna:{status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',classA:'',classB:'',macEd:'',macDev:'',macEdRequired:60,macDevRequired:40,docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},aana:{status:'',number:'',expiration:'',docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},nbcrnaCE:[],aanaCE:[],licenses:[],documents:[],assistantChat:[],portalChecks:[],portalMonitoring:[],hotelStays:[],facilitySuggestions:[],settings:{monthlyIncomeGoal:0,employmentType:'',scheduleName:'',scheduleImported:false,scheduleImportFile:'',scheduleImportedAt:'',qgendaConnected:false,qgendaMasked:'',qgendaLastCheckedAt:'',ptoAnnual:0,ptoStarting:0,ptoHoursPerPeriod:0,homeAddress:'',hotelAddress:'',homeLat:'',homeLng:'',homeGeocodedAddress:'',lastHotelAddress:'',mileageTripType:'round-trip',deleteAlsoFromCalendar:false,featureMileage:true,featurePaychecks:true,featureCredentials:true,featureQgenda:true}});
+const empty=()=>({shifts:[],facilities:[],pto:[],credentials:[],mileage:[],vehicles:[],contracts:[],payStubs:[],nbcrna:{status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',classA:'',classB:'',macEd:'',macDev:'',macEdRequired:60,macDevRequired:40,docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},aana:{status:'',number:'',expiration:'',docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},nbcrnaCE:[],aanaCE:[],licenses:[],documents:[],assistantChat:[],portalChecks:[],portalMonitoring:[],hotelStays:[],facilitySuggestions:[],settings:{monthlyIncomeGoal:0,employmentType:'',scheduleName:'',scheduleImported:false,scheduleImportFile:'',scheduleImportedAt:'',qgendaConnected:false,qgendaMasked:'',qgendaLastCheckedAt:'',ptoAnnual:0,ptoStarting:0,ptoHoursPerPeriod:0,namePicks:{},homeAddress:'',hotelAddress:'',homeLat:'',homeLng:'',homeGeocodedAddress:'',lastHotelAddress:'',mileageTripType:'round-trip',deleteAlsoFromCalendar:false,featureMileage:true,featurePaychecks:true,featureCredentials:true,featureQgenda:true}});
 // --- Facility rates: blank means "doesn't apply / not taken here", never $0.
 // rateOrNull returns the rate as a positive number, or null when the field
 // is blank, 0, or negative. A stored 0 (e.g. a "24-hour call rate ($)" of 0
@@ -681,7 +681,50 @@ function repairShiftPaysForFacility(f){
 // edit happened to reprice it (Caleb's nine HOLZ shifts). Derived
 // stamps now follow the rules here too; a number the user typed
 // stays exactly as stored.
+function facilityHasPayRules(f){
+  if(!f)return false;
+  const money=['hourlyRate','rate8','rate10','rate12','rate24','weekendRate24','rateSecond','weekendRateSecond','hourlyCall1st','callBonus'];
+  if(money.some(k=>rateOrNull(f[k])!=null))return true;
+  return Object.keys(facilityCodeDefs(f)).length>0;
+}
+function facilityNameVariantOf(a,b){
+  const x=facilityNameKey(a),y=facilityNameKey(b);
+  if(!x||!y||x===y)return false;
+  const s=x.length<=y.length?x:y,l=x.length<=y.length?y:x;
+  return s.length>=4&&(l.length-s.length)<=3&&l.startsWith(s);
+}
+// Facility-identity heal (Nov 10, 2026): an unpriced shift whose
+// facility TEXT is a name variant of the facility that holds the
+// rules ("HOLZ" vs "Holzer" — a feed's short code vs the full name)
+// resolves nowhere: the paycheck claim path still claims the shift,
+// but the ONE matcher every path shares (facilityByNameOrAlias)
+// cannot price it, so the check reports "incomplete" forever. When
+// exactly ONE facility with rules is a close prefix variant of the
+// shift's facility text — or of the blank facility record that text
+// resolves to — link them the way the app always links name
+// variants: an alias when the text resolves nowhere; a re-point of
+// the unpriced shifts when the text resolves to a blank record of
+// its own. Only unpriced shifts are touched and no stored amount
+// ever changes here; the repair pass below then prices them through
+// the same matcher as everything else.
+function healFacilityIdentities(){
+  let linked=0;
+  for(const x of (db.shifts||[])){
+    if(!x||!String(x.facility||'').trim())continue;
+    if(isPricedShift(x))continue;
+    const resolved=facilityByNameOrAlias(x.facility);
+    if(resolved&&resolveShiftPrice(resolved,x))continue;
+    const probe=(resolved&&resolved.name)||x.facility;
+    const cands=(db.facilities||[]).filter(g=>g&&(!resolved||g.id!==resolved.id)&&facilityHasPayRules(g)&&facilityNameVariantOf(g.name,probe)&&resolveShiftPrice(g,x));
+    if(cands.length!==1)continue;
+    const g=cands[0];
+    if(!resolved){if(addFacilityAlias(g,x.facility)){try{cloudSaveKind('facilities',g.id)}catch(e){}linked++}}
+    else if(!facilityHasPayRules(resolved)){x.facility=g.name;x.updatedAt=new Date().toISOString();linked++}
+  }
+  return linked;
+}
 function healUnpricedShiftPays(){
+  try{healFacilityIdentities()}catch(e){}
   let n=0;
   for(const f of (db.facilities||[])){const r=repairShiftPaysForFacility(f);n+=r.priced+r.updated}
   return n;
@@ -958,6 +1001,7 @@ function paystubPreviewFromParsed(parsed,fileName,method,aiRead){const clean={ag
   // honest about which values came from the card, and stay on the
   // preview only — approvePaystub saves the plain record.
   if(paystubCardFacId){const f=(db.facilities||[]).find(x=>x.id===paystubCardFacId);if(f){pv.cardFacId=f.id;pv.cardFacName=f.name;if(!pv.facility){pv.facility=f.name;pv.facilityFromCard=true}if(!pv.agency){pv.agency=f.name;pv.agencyFromCard=true}}}
+  if(paystubImportCtx){const c=paystubImportCtx;pv.importKind=c.kind;pv.importAgency=c.agency||'';pv.importFacility=c.facility||'';if(!pv.facility&&c.facility){pv.facility=c.facility;pv.facilityFromImport=true}if(!pv.agency&&c.agency){pv.agency=c.agency;pv.agencyFromImport=true}}
   return pv}
 let paystubPreview=null,paystubError='',paystubStatus='',paystubBusy=false;
 let paystubPendingImages=[];
@@ -974,6 +1018,13 @@ let paystubPendingImages=[];
 // link it to that facility's shifts instead of floating as a
 // second, unlinked schedule (the Nov 9 agency-string bug shape).
 let paystubCardFacId='',paystubCardOpenFac='';
+// The import-time sibling of the card binding (Nov 10, 2026): a
+// stub read started inside an import preview's pay-schedule section
+// binds to THAT import (paystubImportCtx = {kind, agency, facility}
+// from the section). Exactly one read context is live at a time —
+// starting a read from any surface clears the other bindings — and
+// a preview renders only on the surface that started it.
+let paystubImportCtx=null;
 function paystubPreviewHTML(){
   if(paystubError)return `<p class="hint">${escapeHTML(paystubError)}</p>`;
   if(!paystubPreview)return '<p class="muted">No pay stub read yet. Upload a photo or PDF, or paste its text below, then check the preview — nothing is saved until you approve it.</p>';
@@ -989,6 +1040,12 @@ function paystubPreviewHTML(){
     if(p.agencyFromCard)cardNote=`<p class="hint">Uploaded from the ${escapeHTML(fac)} card. This stub didn't name a payer, so the schedule is saved under ${escapeHTML(fac)} — the facility you uploaded it from — and its paychecks come from your ${escapeHTML(fac)} shifts.</p>`;
     else if(p.facilityFromCard&&paystubNameKey(p.agency)!==paystubNameKey(fac))cardNote=`<p class="hint">Uploaded from the ${escapeHTML(fac)} card. This stub names ${escapeHTML(p.agency)} as the payer; the schedule is linked to ${escapeHTML(fac)}, so its paychecks are calculated from your ${escapeHTML(fac)} shifts.</p>`;
     else cardNote=`<p class="hint">Uploaded from the ${escapeHTML(fac)} card — this pay schedule is for ${escapeHTML(fac)}.</p>`;
+  }
+  else if(p.importKind){
+    const fac=p.importFacility||p.facility||'this facility';
+    if(p.agencyFromImport)cardNote=`<p class="hint">Uploaded with this import. This stub didn't name a payer, so the schedule is saved under ${escapeHTML(p.agency)} — the agency on this import — and its paychecks come from your ${escapeHTML(fac)} shifts.</p>`;
+    else if(p.facilityFromImport&&paystubNameKey(p.agency)!==paystubNameKey(fac))cardNote=`<p class="hint">Uploaded with this import. This stub names ${escapeHTML(p.agency)} as the payer; the schedule is linked to ${escapeHTML(fac)}, so its paychecks are calculated from your ${escapeHTML(fac)} shifts.</p>`;
+    else cardNote=`<p class="hint">Uploaded with this import — this pay schedule is for ${escapeHTML(fac)}.</p>`;
   }
   return `<p><strong>Read from:</strong> ${escapeHTML(p.fileName||'pasted text')}</p><p><strong>Nothing is saved yet.</strong> Correct anything wrong below, then save. Fields the stub did not state are left blank — blank means “not stated”, never $0. ${p.found&&p.found.length?('Found: '+escapeHTML(p.found.join(', '))+'.'):''}</p>${replaces?`<p class="hint">This will replace the existing pay schedule for ${escapeHTML(p.agency)} — the old schedule is removed when you save. Other agencies are untouched.</p>`:''}${cardNote}<div class="form-grid"><div class="field"><label for="f_payPrev_agency">Agency / employer *</label><input id="f_payPrev_agency" class="paystubEdit" data-field="agency" type="text" value="${escapeHTML(p.agency||'')}" placeholder="e.g. Example Anesthesia Group"></div><div class="field"><label for="f_payPrev_facility">Facility (if the stub names one)</label><input id="f_payPrev_facility" class="paystubEdit" data-field="facility" type="text" value="${escapeHTML(p.facility||'')}" placeholder="e.g. Riverside General"></div><div class="field"><label for="f_payPrev_frequency">Pay frequency *</label><select id="f_payPrev_frequency" class="paystubEdit" data-field="frequency"><option value="">— choose —</option>${PAY_FREQUENCIES.map(f=>`<option value="${f}" ${f===p.frequency?'selected':''}>${PAY_FREQUENCY_LABELS[f]}</option>`).join('')}</select></div><div class="field"><label for="f_payPrev_payDate">Pay date (this check) *</label><input id="f_payPrev_payDate" class="paystubEdit" data-field="payDate" type="date" value="${escapeHTML(p.payDate||'')}"></div><div class="field"><label for="f_payPrev_periodStart">Pay period start</label><input id="f_payPrev_periodStart" class="paystubEdit" data-field="periodStart" type="date" value="${escapeHTML(p.periodStart||'')}"></div><div class="field"><label for="f_payPrev_periodEnd">Pay period end</label><input id="f_payPrev_periodEnd" class="paystubEdit" data-field="periodEnd" type="date" value="${escapeHTML(p.periodEnd||'')}"></div><div class="field"><label for="f_payPrev_gross">Gross on this stub ($)</label><input id="f_payPrev_gross" class="paystubEdit" data-field="gross" type="number" min="0" step="0.01" value="${escapeHTML(p.gross||'')}" placeholder="Not stated"></div><div class="field"><label for="f_payPrev_net">Net on this stub ($)</label><input id="f_payPrev_net" class="paystubEdit" data-field="net" type="number" min="0" step="0.01" value="${escapeHTML(p.net||'')}" placeholder="Not stated"></div></div><p class="muted">The amounts on this stub are the actual for this check's pay period only — they are never copied onto later checks. Later paychecks are calculated from your shifts in each period.</p><p class="muted" id="paystubNextDates">${escapeHTML(paystubNextDatesText(p))}</p><div class="toolbar" style="margin-top:12px"><button data-action="paystub-approve">Save pay schedule — I checked this</button><button type="button" class="secondary" data-action="paystub-discard">Discard preview (save nothing)</button></div>`;
 }
@@ -1046,8 +1103,24 @@ function paystubPanelPreviewHTML(){
     const f=(db.facilities||[]).find(x=>x.id===paystubPreview.cardFacId);
     return `<p class="muted">A pay stub preview is waiting on the ${escapeHTML(f?f.name:'facility')} card above — review it and save it there.</p>`;
   }
-  if(paystubCardFacId&&paystubError)return '';
+  if(paystubPreview&&paystubPreview.importKind){
+    return `<p class="muted">A pay stub preview is waiting in the import preview — review it and save it there.</p>`;
+  }
+  if((paystubCardFacId||paystubImportCtx)&&paystubError)return '';
   return paystubPreviewHTML();
+}
+const PAYSTUB_TEXT_PLACEHOLDER='Employer: Example Anesthesia Group\nPay Period: 09/07/2026 - 09/20/2026\nPay Date: 09/29/2026\nGross Pay: $3,200.00\nNet Pay: $2,400.00';
+const PAYSTUB_INTRO='One stub per agency — it sets the pay dates, and each paycheck is calculated from your shifts in that period. The stub itself is never stored.';
+// ONE pay-stub upload component (Nov 10, 2026 — Caleb's rule: anywhere
+// the app repeats a function it is ONE component that looks and feels
+// the same everywhere). The general Facilities panel, every facility
+// card, and every import pay-schedule section render THIS form — same
+// labels, same layout, same "Read my pay stub" — and the same preview
+// (paystubPreviewHTML). Surfaces differ only in the binding context a
+// read starts from (see paystubPreviewFromParsed) and the note that
+// states it.
+function paystubUploadFormHTML(formAttrs,fileId,textId){
+  return `<form ${formAttrs}><div class="form-grid"><div class="field"><label for="${fileId}">Choose a pay stub — photo or PDF (several photos for a multi-page stub)</label><input id="${fileId}" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,image/*" multiple></div><div class="field wide"><label for="${textId}">Or paste the pay stub text</label><textarea id="${textId}" placeholder="${escapeHTML(PAYSTUB_TEXT_PLACEHOLDER)}"></textarea></div></div><div class="form-actions"><button type="submit">Read my pay stub</button></div></form>`;
 }
 // Card section (Nov 10, 2026): the same stub pipeline as the
 // general panel — same reader, same preview, same approve — opened
@@ -1060,16 +1133,12 @@ function paystubCardSectionHTML(f){
   if(!featureOn('featurePaychecks'))return `<div class="muted" style="margin-top:10px">Paycheck estimates are off. Your data is saved — turn it back on any time. <button type="button" class="secondary tiny" data-action="feature-toggle" data-id="featurePaychecks">Turn on</button></div>`;
   const mine=paystubCardFacId===f.id;
   const open=paystubCardOpenFac===f.id||(paystubPreview&&paystubPreview.cardFacId===f.id)||(mine&&(!!paystubError||!!paystubStatus||paystubBusy));
-  return `<div class="toolbar" style="margin-top:10px"><button type="button" class="tiny secondary" data-action="paystub-card-toggle" data-id="${escapeHTML(f.id)}">${open?'Close pay stub upload':'Upload a pay stub'}</button></div>${open?`<div class="item" style="display:block;margin-top:10px"><p class="muted">One stub per agency — uploaded here, it sets the pay dates for ${escapeHTML(f.name)}, and each paycheck is calculated from your shifts in that period. The stub itself is never stored.</p><form class="paystubCardForm" data-fac="${escapeHTML(f.id)}"><div class="form-grid"><div class="field"><label for="f_paystubCardFile_${escapeHTML(f.id)}">Choose a pay stub — photo or PDF (several photos for a multi-page stub)</label><input id="f_paystubCardFile_${escapeHTML(f.id)}" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,image/*" multiple></div><div class="field"><label for="f_paystubCardText_${escapeHTML(f.id)}">Or paste the pay stub text</label><textarea id="f_paystubCardText_${escapeHTML(f.id)}" rows="5" placeholder="Employer: Example Anesthesia Group
-Pay Period: 09/07/2026 - 09/20/2026
-Pay Date: 09/29/2026
-Gross Pay: $3,200.00
-Net Pay: $2,400.00"></textarea></div></div><div class="form-actions"><button type="submit">Read my pay stub</button></div></form>${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.cardFacId===f.id?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}</div>`:''}`;
+  return `<div class="toolbar" style="margin-top:10px"><button type="button" class="tiny secondary" data-action="paystub-card-toggle" data-id="${escapeHTML(f.id)}">${open?'Close pay stub upload':'Upload a pay stub'}</button></div>${open?`<div class="item" style="display:block;margin-top:10px"><p class="muted">${PAYSTUB_INTRO}</p>${paystubUploadFormHTML(`class="paystubCardForm" data-fac="${escapeHTML(f.id)}"`,`f_paystubCardFile_${escapeHTML(f.id)}`,`f_paystubCardText_${escapeHTML(f.id)}`)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.cardFacId===f.id?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}</div>`:''}`;
 }
 function paystubPanelHTML(){
   if(!featureOn('featurePaychecks'))return collapsePanelHTML('paystub-panel','Paycheck estimates',featureOffHTML('featurePaychecks'),false);
   const px=db.payStubs.find(x=>x.id===editId)||{};
-  return collapsePanelHTML('paystub-panel','Upload a pay stub (optional)',`<p class="muted">One stub per agency — it sets the pay dates, and each paycheck is calculated from your shifts in that period. The stub itself is never stored.</p><form id="paystubForm"><div class="form-grid">${field('paystubFile','Choose a pay stub — photo or PDF (several photos for a multi-page stub)','file','','accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,image/*" multiple')}${area('paystubText','Or paste the pay stub text','','Employer: Example Anesthesia Group\nPay Period: 09/07/2026 - 09/20/2026\nPay Date: 09/29/2026\nGross Pay: $3,200.00\nNet Pay: $2,400.00')}</div><div class="form-actions"><button type="submit">Read my pay stub</button></div></form>${paystubStatus?`<p class="hint" id="paystubStatus">${escapeHTML(paystubStatus)}</p>`:''}<div style="margin-top:14px">${paystubPanelPreviewHTML()}</div><h3>Saved pay schedules — one per agency</h3>${paystubListHTML()}<details class="collapse-sub" id="paystub-manual"${editId&&px.id?' open':''}><summary class="collapse-head"><span class="collapse-title">${editId&&px.id?'Edit pay schedule':'Add a pay schedule manually'}</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><form id="entryForm" data-kind="payStubs"><div class="form-grid">${field('agency','Agency / employer','text',px.agency||'','required')}${field('facility','Facility (if it applies)','text',px.facility||'')}${select('frequency','Pay frequency',PAY_FREQUENCIES,px.frequency||'')}${field('payDate','Pay date (this check)','date',px.payDate||'','required')}${field('periodStart','Pay period start','date',px.periodStart||'')}${field('periodEnd','Pay period end','date',px.periodEnd||'')}${field('gross','Gross on this check ($)','number',px.gross??'','min="0" step="0.01"')}${field('net','Net on this check ($)','number',px.net??'','min="0" step="0.01"')}</div><p class="muted">Amounts belong to this check only — later paychecks are calculated from your shifts.</p>${formEnd(editId&&px.id?'Save pay schedule':'Add pay schedule')}</details>`,!!(paystubPreview||paystubError||paystubStatus||(editId&&px.id)));
+  return collapsePanelHTML('paystub-panel','Upload a pay stub (optional)',`<p class="muted">${PAYSTUB_INTRO}</p>${paystubUploadFormHTML('id="paystubForm"','f_paystubFile','f_paystubText')}${paystubStatus?`<p class="hint" id="paystubStatus">${escapeHTML(paystubStatus)}</p>`:''}<div style="margin-top:14px">${paystubPanelPreviewHTML()}</div><h3>Saved pay schedules — one per agency</h3>${paystubListHTML()}<details class="collapse-sub" id="paystub-manual"${editId&&px.id?' open':''}><summary class="collapse-head"><span class="collapse-title">${editId&&px.id?'Edit pay schedule':'Add a pay schedule manually'}</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><form id="entryForm" data-kind="payStubs"><div class="form-grid">${field('agency','Agency / employer','text',px.agency||'','required')}${field('facility','Facility (if it applies)','text',px.facility||'')}${select('frequency','Pay frequency',PAY_FREQUENCIES,px.frequency||'')}${field('payDate','Pay date (this check)','date',px.payDate||'','required')}${field('periodStart','Pay period start','date',px.periodStart||'')}${field('periodEnd','Pay period end','date',px.periodEnd||'')}${field('gross','Gross on this check ($)','number',px.gross??'','min="0" step="0.01"')}${field('net','Net on this check ($)','number',px.net??'','min="0" step="0.01"')}</div><p class="muted">Amounts belong to this check only — later paychecks are calculated from your shifts.</p>${formEnd(editId&&px.id?'Save pay schedule':'Add pay schedule')}</details>`,!!(paystubPreview||paystubError||paystubStatus||(editId&&px.id)));
 }
 function paystubPaycheckLineHTML(x){
   if(x.isActual&&x.actualBasis==='entered')return `<div class="muted">${currency(x.actual)} actual · entered from calendar <span class="pill">actual</span></div>${x.shiftCount?`<div class="muted">Your shifts for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} added up to ${currency(paystubOccurrenceTotal(x))} — the amount you entered replaces the estimate for this check only.</div>`:`<div class="muted">No shifts recorded for ${fmt(x.periodStart)} – ${fmt(x.periodEnd)} — the amount you entered is counted for this check.</div>`}`;
@@ -2163,7 +2232,7 @@ function captureMileageLogDraft(){
     mileageFormDraft={forEditId:mileageFormRenderedFor||'',values:Object.fromEntries(new FormData(form)),open:!!(panel&&panel.open)};
   }catch(_){}
 }
-function render(){ captureMileageLogDraft(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);document.querySelectorAll('form.paystubCardForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubCard(e,fm.dataset.fac)));const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));
+function render(){ captureMileageLogDraft(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);document.querySelectorAll('form.paystubCardForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubCard(e,fm.dataset.fac)));document.querySelectorAll('form.paystubImportForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubImport(e,fm.dataset.kind)));const ruleChatForm=$('ruleChatForm');if(ruleChatForm)ruleChatForm.addEventListener('submit',submitRuleChat);document.querySelectorAll('.ruleEdit').forEach(el=>el.addEventListener('change',()=>{if(!ruleChatPreview)return;ruleChatPreview.rates[el.dataset.field]=el.value;render()}));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));
 document.querySelectorAll('.previewPayUnit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.payUnit=el.value==='hourly'?'hourly':'daily';render()}}));
 document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.clarifyCodeWeekday').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekdayPay=el.value}}));document.querySelectorAll('.clarifyCodeWeekend').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekendPay=el.value}}));document.querySelectorAll('.clarifyCodePaidHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.paidHours=el.value}}));document.querySelectorAll('.describeText').forEach(el=>el.addEventListener('change',()=>{const st=describeState(el.dataset.key);if(st){st.text=el.value;st.parsed=null;st.confirmed=false;st.error=''}}));document.querySelectorAll('.facContractKind').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f||!el.dataset.field||el.value===el.dataset.field)return;f.rates=f.rates||{};if(f.rates[el.dataset.field]!=null){f.rates[el.value]=f.rates[el.dataset.field];delete f.rates[el.dataset.field]}render()}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
@@ -3361,14 +3430,23 @@ function facilityDescribeCodes(fac){
   return Object.keys(defs).map(code=>({code,ctype:String(defs[code].canonicalType||'').trim()||canonicalTypeOf(defs[code].label||''),hours:defs[code].hours||''}));
 }
 function applyImportDescribed(preview,target){
-  // The import approve path's rate save (Nov 9, 2026): what the old
-  // field-grid draft applied, the confirmed words-box parse applies
-  // now — and ONLY a confirmed parse: approving an import without
-  // confirming the read-back summary saves no rules at all, so a
-  // default can never again slip in as an "answer".
+  // The import approve path's rate save. Nov 9, 2026: only a
+  // confirmed words-box parse applied, so a default could never slip
+  // in as an "answer". Nov 10, 2026 (Caleb's live bug — "it didn't
+  // calculate any pay after I uploaded my rules"): that gate made
+  // the preview's own "Approve selected" button silently DISCARD
+  // the typed rules — the read-back was on screen, the shifts saved
+  // with no rate card behind them, and the paycheck that claimed
+  // them honestly reported "incomplete" with no hint why. A parse
+  // is not a default: every amount in it traces to a number the
+  // user typed, and the read-back is the confirmation surface — so
+  // a present parse now applies on EVERY approve path. Two things
+  // still save no rules, exactly as before: no parse at all (nothing
+  // typed, or the text was edited after parsing, which clears the
+  // parse), and an explicit "Skip for now" on this prompt.
   if(!target)return{fac:null,saved:false};
   const st=preview&&preview.describe;
-  if(!st||!st.parsed||!st.confirmed)return{fac:target.fac||null,saved:false};
+  if(!st||!st.parsed||preview.ratesSkipped)return{fac:target.fac||null,saved:false};
   let fac=target.fac;
   if(!fac){fac={id:id(),name:target.name,aliases:'',address:'',distance:'',notes:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',hourlyCall1st:'',weekendRate24:'',weekendRateSecond:'',codeMap:{},ratesPromptSkipped:false};db.facilities=db.facilities||[];db.facilities.push(fac)}
   applyDescribedRules(fac,st.parsed);
@@ -3531,17 +3609,48 @@ function importPaySchedCtx(preview,kind){
 }
 function importPaySchedTarget(preview,kind){
   if(!preview||preview.paySchedSkipped)return null;
+  // A stub approved from this section already saved the schedule —
+  // the manual fields never double-save on top of it.
+  if(preview.paySchedStubSaved)return null;
   const ctx=importPaySchedCtx(preview,kind);if(!ctx)return null;
   if(paystubForAgency(ctx.agency))return null;
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return null;
   preview._paySchedAgency=ctx.agency;
   return ctx;
 }
+// ONE pay-schedule fields block (Nov 10, 2026 — Caleb's rule: a
+// repeated function is one component, identical everywhere). The
+// import pay-schedule section and the facility card's pay-schedule
+// offer render THIS grid — same six fields, same labels, same
+// order, same helper copy — differing only in the data they bind
+// to (an import preview's draft vs a facility card's draft). The
+// surfaces keep their own heading and commit row, because those
+// genuinely differ: an import saves its schedule when the import
+// is approved (its only action is Skip), the card saves on its own
+// button. The intro sentence is shared too.
+const PAYSCHED_PERIOD_HINT='The period dates anchor how long after a period ends the check lands — leave them blank and the schedule still works from the pay date and frequency alone.';
+function paySchedIntroHTML(name){return `<p class="muted">Tell us how ${escapeHTML(name)} pays you and we'll put the paychecks on your calendar automatically — each one calculated from your shifts in its pay period.</p>`}
+function paySchedFieldsGridHTML(o){
+  const d=o.draft||{};
+  const val=(k,fb)=>escapeHTML(d[k]!=null&&String(d[k])!==''?d[k]:(fb||''));
+  const F=(field,label,inner)=>`<div class="field"><label for="${o.prefix}_${field}">${label}</label>${inner}</div>`;
+  const attrs=(field)=>`class="${o.cls}" ${o.dataFor(field)}`;
+  return `<div class="form-grid">${F('agency','Agency / employer',`<input id="${o.prefix}_agency" ${attrs('agency')} type="text" value="${val('agency',o.agency)}">`)}${F('facility','Facility (if it applies)',`<input id="${o.prefix}_facility" ${attrs('facility')} type="text" value="${val('facility',o.facility)}">`)}${F('frequency','Pay frequency',`<select id="${o.prefix}_frequency" ${attrs('frequency')}><option value="">— choose —</option>${PAY_FREQUENCIES.map(fr=>`<option value="${fr}" ${d.frequency===fr?'selected':''}>${PAY_FREQUENCY_LABELS[fr]}</option>`).join('')}</select>`)}${F('payDate','A pay date you know (one real payday)',`<input id="${o.prefix}_payDate" ${attrs('payDate')} type="date" value="${val('payDate','')}">`)}${F('periodStart','Pay period start (for that payday, if you know it)',`<input id="${o.prefix}_periodStart" ${attrs('periodStart')} type="date" value="${val('periodStart','')}">`)}${F('periodEnd','Pay period end (for that payday, if you know it)',`<input id="${o.prefix}_periodEnd" ${attrs('periodEnd')} type="date" value="${val('periodEnd','')}">`)}</div><p class="muted">${PAYSCHED_PERIOD_HINT}</p>`;
+}
 function importPaySchedHTML(preview,kind){
+  if(!preview)return '';
+  // A stub approved from THIS section earlier in this preview's
+  // life already saved the schedule: the section says so instead of
+  // asking again, and the import's approve finishes normally with
+  // paychecks generated from that schedule.
+  if(preview.paySchedStubSaved){
+    const sv=preview.paySchedStubSaved;
+    return `<div class="item" style="display:block"><p><strong>Pay schedule on file for these shifts.</strong></p><p class="muted">Saved from the pay stub you uploaded here — ${escapeHTML(sv.agency||'your agency')}${PAY_FREQUENCY_LABELS[sv.frequency]?` · ${escapeHTML(PAY_FREQUENCY_LABELS[sv.frequency])}`:''}. Paychecks for these shifts show on your calendar, and the stub's own check counts as the actual.</p></div>`;
+  }
   const ctx=importPaySchedTarget(preview,kind);if(!ctx)return '';
   const d=preview.paySchedDraft||{};
-  const val=(k,fb)=>escapeHTML(d[k]!=null&&String(d[k])!==''?d[k]:(fb||''));
-  return `<div class="item" style="display:block"><p><strong>Want paychecks for these shifts on your calendar?</strong></p><p class="muted">Tell us how ${escapeHTML(ctx.agency)} pays you and we'll put the paychecks on your calendar automatically — each one calculated from your shifts in its pay period. Optional: skip it and the import works exactly as it does now.</p><div class="form-grid"><div class="field"><label for="impPaySched_${kind}_agency">Agency / employer</label><input id="impPaySched_${kind}_agency" class="impPaySched" data-kind="${kind}" data-field="agency" type="text" value="${val('agency',ctx.agency)}"></div><div class="field"><label for="impPaySched_${kind}_facility">Facility (if it applies)</label><input id="impPaySched_${kind}_facility" class="impPaySched" data-kind="${kind}" data-field="facility" type="text" value="${val('facility',ctx.facility)}"></div><div class="field"><label for="impPaySched_${kind}_frequency">Pay frequency</label><select id="impPaySched_${kind}_frequency" class="impPaySched" data-kind="${kind}" data-field="frequency"><option value="">— choose —</option>${PAY_FREQUENCIES.map(f=>`<option value="${f}" ${d.frequency===f?'selected':''}>${PAY_FREQUENCY_LABELS[f]}</option>`).join('')}</select></div><div class="field"><label for="impPaySched_${kind}_payDate">A pay date you know (one real payday)</label><input id="impPaySched_${kind}_payDate" class="impPaySched" data-kind="${kind}" data-field="payDate" type="date" value="${val('payDate')}"></div><div class="field"><label for="impPaySched_${kind}_periodStart">Pay period start (for that payday, if you know it)</label><input id="impPaySched_${kind}_periodStart" class="impPaySched" data-kind="${kind}" data-field="periodStart" type="date" value="${val('periodStart')}"></div><div class="field"><label for="impPaySched_${kind}_periodEnd">Pay period end (for that payday, if you know it)</label><input id="impPaySched_${kind}_periodEnd" class="impPaySched" data-kind="${kind}" data-field="periodEnd" type="date" value="${val('periodEnd')}"></div></div><p class="muted">The period dates anchor how long after a period ends the check lands — leave them blank and the schedule still works from the pay date and frequency alone.</p><div class="toolbar"><button type="button" class="secondary" data-action="import-paysched-skip" data-id="${kind}">Skip — no pay schedule</button></div></div>`;
+  const mine=paystubImportCtx&&paystubImportCtx.kind===kind;
+  return `<div class="item" style="display:block"><p><strong>Want paychecks for these shifts on your calendar?</strong></p>${paySchedIntroHTML(ctx.agency)}${paySchedFieldsGridHTML({prefix:'impPaySched_'+kind,cls:'impPaySched',dataFor:(f)=>`data-kind="${kind}" data-field="${f}"`,draft:d,agency:ctx.agency,facility:ctx.facility})}<p class="muted">— or upload a pay stub and we'll fill this in from it —</p>${paystubUploadFormHTML(`class="paystubImportForm" data-kind="${kind}"`,'f_paystubImpFile_'+kind,'f_paystubImpText_'+kind)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.importKind===kind?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}<div class="toolbar"><button type="button" class="secondary" data-action="import-paysched-skip" data-id="${kind}">Skip — no pay schedule</button></div></div>`;
 }
 function applyImportPaySched(preview,kind){
   // Stores the preview's pay-schedule draft as a normal pay schedule
@@ -3550,6 +3659,9 @@ function applyImportPaySched(preview,kind){
   // frequency or no pay date) / a schedule already exists — in every
   // null case the import proceeds exactly as it did before.
   if(!preview||preview.paySchedSkipped)return null;
+  // A stub approved from this section already saved the schedule —
+  // the manual fields never double-save on top of it.
+  if(preview.paySchedStubSaved)return null;
   const ctx=importPaySchedCtx(preview,kind);if(!ctx)return null;
   const d=preview.paySchedDraft||{};
   const agency=String(d.agency||ctx.agency||'').trim();if(!agency)return null;
@@ -3598,13 +3710,13 @@ function facilityPaySchedMissing(f){
 function facilityPaySchedHTML(f){
   if(!facilityPaySchedMissing(f))return '';
   const d=facPaySchedDrafts[f.id]||{};
-  const val=(k,fb)=>escapeHTML(d[k]!=null&&String(d[k])!==''?d[k]:(fb||''));
-  return `<div class="item" style="display:block;margin-top:10px"><p><strong>Want paychecks for ${escapeHTML(f.name)} on your calendar?</strong></p><p class="muted">These shifts have no pay schedule yet. Tell us how ${escapeHTML(f.name)} pays you and we'll put the paychecks on your calendar automatically — each one calculated from your shifts in its pay period.</p><div class="form-grid"><div class="field"><label for="facPaySched_${f.id}_agency">Agency / employer</label><input id="facPaySched_${f.id}_agency" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="agency" type="text" value="${val('agency',f.name)}"></div><div class="field"><label for="facPaySched_${f.id}_facility">Facility (if it applies)</label><input id="facPaySched_${f.id}_facility" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="facility" type="text" value="${val('facility',f.name)}"></div><div class="field"><label for="facPaySched_${f.id}_frequency">Pay frequency</label><select id="facPaySched_${f.id}_frequency" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="frequency"><option value="">— choose —</option>${PAY_FREQUENCIES.map(fr=>`<option value="${fr}" ${d.frequency===fr?'selected':''}>${PAY_FREQUENCY_LABELS[fr]}</option>`).join('')}</select></div><div class="field"><label for="facPaySched_${f.id}_payDate">A pay date you know (one real payday)</label><input id="facPaySched_${f.id}_payDate" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="payDate" type="date" value="${val('payDate')}"></div><div class="field"><label for="facPaySched_${f.id}_periodStart">Pay period start (for that payday, if you know it)</label><input id="facPaySched_${f.id}_periodStart" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="periodStart" type="date" value="${val('periodStart')}"></div><div class="field"><label for="facPaySched_${f.id}_periodEnd">Pay period end (for that payday, if you know it)</label><input id="facPaySched_${f.id}_periodEnd" class="facPaySched" data-fac="${escapeHTML(f.id)}" data-field="periodEnd" type="date" value="${val('periodEnd')}"></div></div><div class="toolbar"><button type="button" data-action="facility-paysched-save" data-id="${escapeHTML(f.id)}">Save pay schedule</button><button type="button" class="secondary" data-action="facility-paysched-dismiss" data-id="${escapeHTML(f.id)}">No thanks</button></div></div>`;
+  return `<div class="item" style="display:block;margin-top:10px"><p><strong>Want paychecks for ${escapeHTML(f.name)} on your calendar?</strong></p>${paySchedIntroHTML(f.name)}${paySchedFieldsGridHTML({prefix:'facPaySched_'+f.id,cls:'facPaySched',dataFor:(fld)=>`data-fac="${escapeHTML(f.id)}" data-field="${fld}"`,draft:d,agency:f.name,facility:f.name})}<div class="toolbar"><button type="button" data-action="facility-paysched-save" data-id="${escapeHTML(f.id)}">Save pay schedule</button><button type="button" class="secondary" data-action="facility-paysched-dismiss" data-id="${escapeHTML(f.id)}">No thanks</button></div></div>`;
 }
 function importPaySchedHint(preview,kind,saved){
   // Approval-message pointer for an import that finished WITHOUT a
   // pay schedule: where to add one after the fact (the facility card).
   if(saved)return '';
+  if(preview&&preview.paySchedStubSaved)return '';
   const ctx=importPaySchedCtx(preview,kind);if(!ctx)return '';
   if(paystubForAgency(ctx.agency))return '';
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return '';
@@ -4976,10 +5088,19 @@ function scheduleNameParts(name){
   const raw=String(name||'').trim(); if(!raw) return null;
   const hasComma=raw.includes(',');
   const s=raw.toLowerCase().replace(/\./g,'').replace(/,/g,' ').replace(/\s+/g,' ').trim();
-  const toks=s.split(' ').filter(Boolean);
+  let toks=s.split(' ').filter(Boolean);
   if(!toks.length) return null;
   if(toks.length===1) return {first:'',last:toks[0]};
   if(hasComma) return {first:toks.slice(1).join(' '),last:toks[0]};
+  // No comma: a lone single-letter token is an initial, never the
+  // surname — "Martin C" and "C Martin" are the same person shape
+  // (Nov 10, 2026: the profile "Caleb Martin" must match a schedule
+  // row labelled "Martin C" exactly as it matches "C. Martin").
+  if(toks.length===2){
+    if(toks[1].length===1&&toks[0].length>1) return {first:toks[1],last:toks[0]};
+    return {first:toks[0],last:toks[1]};
+  }
+  if(toks[toks.length-1].length===1) toks=toks.slice(0,-1);
   return {first:toks.slice(0,-1).join(' '),last:toks[toks.length-1]};
 }
 function scheduleNamesMatch(a,b){
@@ -5064,6 +5185,93 @@ function scheduleClassifyRow(r){
   }
   return {match,matchedName,hasName:!!String(r.name||'').trim()||cands.length>0};
 }
+// --- Whose rows are these? (Nov 10, 2026 — Caleb's rule) ---
+// Every import path decides "is this row the signed-in user?" the
+// same way: scheduleNamesMatch on parsed name parts. A profile
+// "Caleb Martin" matches a row labelled "Martin", "C. Martin",
+// "Martin, Caleb", "MARTIN" or "Martin C" — last name equal and the
+// first name compatible or absent. The ONE gap that rule can't
+// close: the same import carrying two DIFFERENT people who share
+// the user's last name ("Martin, Caleb" next to "Martin, Josh", or
+// a bare "Martin" beside a "J. Martin"). Then the preview asks —
+// once, in words, listing the labels — and remembers the answer per
+// import source + last name. Unchosen labels stay out and are
+// reported, never silently imported and never silently dropped; a
+// bare last name with no competing same-name person resolves to the
+// user without asking.
+function scheduleRowSurnameIds(r){
+  const pp=scheduleNameParts(scheduleName()); if(!pp)return[];
+  const names=[]; const push=(n)=>{const s=String(n||'').trim(); if(s&&!names.includes(s))names.push(s)};
+  push(r.name);
+  for(const c of scheduleNameCandidates(r.text||''))push(c);
+  return names.map(n=>({raw:n,parts:scheduleNameParts(n)})).filter(x=>x.parts&&x.parts.last===pp.last);
+}
+function namePartsCompatible(a,b){
+  if(!a||!b||a.last!==b.last)return false;
+  if(!a.first||!b.first)return true;
+  if(a.first===b.first)return true;
+  return a.first[0]===b.first[0]&&(a.first.length===1||b.first.length===1);
+}
+function scheduleNameAmbiguityOf(preview){
+  const pp=scheduleNameParts(scheduleName()); if(!pp||!preview)return null;
+  const byKey=new Map();
+  (preview.rows||[]).forEach((r,i)=>{
+    const ids=scheduleRowSurnameIds(r); if(!ids.length)return;
+    const id=ids[0]; const key=id.parts.last+'|'+id.parts.first;
+    if(!byKey.has(key))byKey.set(key,{key,first:id.parts.first,last:id.parts.last,rows:new Set()});
+    byKey.get(key).rows.add(i);
+  });
+  if(!byKey.size)return null;
+  const named=[...byKey.values()].filter(e=>e.first);
+  const bare=[...byKey.values()].filter(e=>!e.first);
+  const clusters=[];
+  for(const e of named){
+    const hit=clusters.find(c=>namePartsCompatible(c,e));
+    if(hit){hit.entries.push(e);hit.rows=new Set([...hit.rows,...e.rows]);if(e.first.length>hit.first.length)hit.first=e.first}
+    else clusters.push({first:e.first,last:e.last,entries:[e],rows:new Set(e.rows)});
+  }
+  if(bare.length){
+    if(clusters.length===1){const c=clusters[0];c.entries.push(...bare);c.rows=new Set([...c.rows,...bare[0].rows]);if(bare.length>1)for(let k=1;k<bare.length;k++){c.entries.push(bare[k]);c.rows=new Set([...c.rows,...bare[k].rows])}}
+    else if(!clusters.length)return null;
+    else clusters.push({first:'',last:pp.last,entries:bare,rows:new Set(bare.flatMap(e=>[...e.rows]))});
+  }
+  if(clusters.length<2)return null;
+  const cap=(s)=>s?s.charAt(0).toUpperCase()+s.slice(1):'';
+  return clusters.map(c=>({key:c.entries.map(e=>e.key).sort().join('+'),label:cap(c.last)+(c.first?', '+cap(c.first):''),rows:[...c.rows],count:c.rows.size}));
+}
+function applyNameAmbiguity(preview){
+  const amb=preview&&preview.nameAmb; if(!amb)return;
+  const candRows=new Map(); amb.candidates.forEach(c=>c.rows.forEach(i=>candRows.set(i,c)));
+  (preview.rows||[]).forEach((r,i)=>{
+    const c=candRows.get(i); if(!c)return;
+    r.flags=(r.flags||[]).filter(f=>f!=='other person — excluded'&&f!=='uncertain — check to include'&&!f.startsWith('same last name as you')&&!f.startsWith('left out — same last name'));
+    if(!amb.picks){r.match='uncertain';r.include=false;r.flags.push('same last name as you — pick which label is you below')}
+    else if(amb.picks.includes(c.key)){r.match='matched';if(!r.matchedName)r.matchedName=r.name||'';r.include=true}
+    else{r.match='other';r.include=false;r.flags.push('left out — same last name, not the label you picked')}
+  });
+}
+function finalizeScheduleNameMatching(preview){
+  if(!preview)return;
+  const candidates=scheduleNameAmbiguityOf(preview);
+  if(!candidates){preview.nameAmb=null;return}
+  const pp=scheduleNameParts(scheduleName());
+  const source=preview.source||'schedule-import';
+  const memKey=source+'|'+pp.last;
+  const candKeys=candidates.map(c=>c.key).sort();
+  const stored=(db.settings&&db.settings.namePicks&&db.settings.namePicks[memKey])||null;
+  let picks=null,preselect=[];
+  if(stored&&Array.isArray(stored.cands)&&stored.cands.slice().sort().join('~')===candKeys.join('~')&&Array.isArray(stored.picks))picks=stored.picks.slice();
+  else if(stored&&Array.isArray(stored.picks))preselect=stored.picks.filter(k=>candKeys.includes(k));
+  preview.nameAmb={surname:pp.last.charAt(0).toUpperCase()+pp.last.slice(1),memKey,candidates,picks,preselect};
+  applyNameAmbiguity(preview);
+}
+function scheduleNameAmbiguityHTML(preview){
+  const amb=preview&&preview.nameAmb; if(!amb)return'';
+  const leftOut=amb.picks?amb.candidates.filter(c=>!amb.picks.includes(c.key)):[];
+  const leftCount=leftOut.reduce((n,c)=>n+c.count,0);
+  const checked=(c)=>amb.picks?amb.picks.includes(c.key):(amb.preselect||[]).includes(c.key);
+  return `<div class="item" style="display:block"><p><strong>More than one ${escapeHTML(amb.surname)} on this schedule.</strong></p><p class="muted">Tick every label that is you — we'll remember for this kind of import, so we only ask once.</p>${amb.candidates.map(c=>`<label style="display:block;margin:4px 0"><input type="checkbox" class="nameAmbPick" data-key="${escapeHTML(c.key)}" ${checked(c)?'checked':''}> ${escapeHTML(c.label)} — ${c.count} row${c.count===1?'':'s'}</label>`).join('')}<div class="form-actions"><button type="button" data-action="name-amb-confirm">These are mine — keep going</button></div>${amb.picks&&leftCount?`<p class="hint">${leftCount} row${leftCount===1?'':'s'} under a similar name (${leftOut.map(c=>escapeHTML(c.label)).join(', ')}) ${leftCount===1?'was':'were'} left out — if one of those is you, tick it above and confirm again.</p>`:''}</div>`;
+}
 function parseScheduleText(text,fileName){
   const clean=String(text||'').replace(/^\uFEFF/,'');
   const name=scheduleName();
@@ -5115,7 +5323,9 @@ function parseScheduleText(text,fileName){
   if(rows.length&&!anyName){
     for(const r of rows){r.match='matched';r.matchedName='';r.include=true;r.flags=r.flags.filter(f=>f!=='uncertain — check to include')}
   }
-  return {fileName,source:'schedule-import',matchedName:name,rows,noNamesInFile:rows.length>0&&!anyName,ai:false};
+  const built={fileName,source:'schedule-import',matchedName:name,rows,noNamesInFile:rows.length>0&&!anyName,ai:false};
+  finalizeScheduleNameMatching(built);
+  return built;
 }
 async function loadSheetJS(){
   if(typeof window!=='undefined'&&window.XLSX)return window.XLSX;
@@ -5177,7 +5387,7 @@ function schedulePreviewHTML(){
   if(!schedulePreview)return '<p class="muted">No schedule parsed yet. Choose a file above, then read it — nothing is saved until you approve the preview.</p>';
   const rows=schedulePreview.rows;
   const matched=rows.filter(r=>r.match==='matched').length,other=rows.filter(r=>r.match==='other').length,unc=rows.filter(r=>r.match==='uncertain').length,dup=rows.filter(r=>r.duplicate).length;
-  return `<p><strong>Parsed from:</strong> ${escapeHTML(schedulePreview.fileName)} · ${rows.length} row(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Matched name: <strong>${escapeHTML(schedulePreview.matchedName||'(not set — add it above)')}</strong>${schedulePreview.noNamesInFile?' — no names found in this file, so it was treated as your own schedule; uncheck anything that is not yours.':''} ${matched} row(s) matched you, ${other} row(s) for other people are excluded, ${unc} uncertain row(s) are unchecked — check one to include it. Rows with a missing date — or a missing facility with no grid code — block approval until fixed or unchecked; grid-code rows save without a facility and stay unpriced. Imported shifts arrive confirmed — they are on a real schedule.</p>${schedulePreviewNeedsFacility(schedulePreview)?`<div class="form-grid"><div class="field"><label for="schedFacilityAll">Which facility is this schedule for?</label><input id="schedFacilityAll" class="schedFacilityAll" list="facilityNamesSched" value="${escapeHTML(schedulePreview.facilityAll||'')}" placeholder="e.g. RGH"><datalist id="facilityNamesSched">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(schedulePreview,'sched')}${importRatesPromptHTML(schedulePreview,'sched')}${importPaySchedHTML(schedulePreview,'sched')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${schedulePreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Name on row</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="schedInclude" data-row="${i}" ${r.include?'checked':''} ${r.match==='other'?'disabled':''}></td><td><input type="date" class="schedEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.code||r.type||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${escapeHTML(r.matchedName||r.name||'—')}</td><td>${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="schedule-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="schedule-discard">Discard preview</button></div>`;
+  return `<p><strong>Parsed from:</strong> ${escapeHTML(schedulePreview.fileName)} · ${rows.length} row(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Matched name: <strong>${escapeHTML(schedulePreview.matchedName||'(not set — add it above)')}</strong>${schedulePreview.noNamesInFile?' — no names found in this file, so it was treated as your own schedule; uncheck anything that is not yours.':''} ${matched} row(s) matched you, ${other} row(s) for other people are excluded, ${unc} uncertain row(s) are unchecked — check one to include it. Rows with a missing date — or a missing facility with no grid code — block approval until fixed or unchecked; grid-code rows save without a facility and stay unpriced. Imported shifts arrive confirmed — they are on a real schedule.</p>${scheduleNameAmbiguityHTML(schedulePreview)}${schedulePreviewNeedsFacility(schedulePreview)?`<div class="form-grid"><div class="field"><label for="schedFacilityAll">Which facility is this schedule for?</label><input id="schedFacilityAll" class="schedFacilityAll" list="facilityNamesSched" value="${escapeHTML(schedulePreview.facilityAll||'')}" placeholder="e.g. RGH"><datalist id="facilityNamesSched">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(schedulePreview,'sched')}${importRatesPromptHTML(schedulePreview,'sched')}${importPaySchedHTML(schedulePreview,'sched')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${schedulePreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Name on row</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="schedInclude" data-row="${i}" ${r.include?'checked':''} ${r.match==='other'?'disabled':''}></td><td><input type="date" class="schedEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.code||r.type||'')}"></td><td><input class="schedEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${escapeHTML(r.matchedName||r.name||'—')}</td><td>${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="schedule-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="schedule-discard">Discard preview</button></div>`;
 }
 async function importSchedule(e){
   e.preventDefault(); scheduleImportError=''; scheduleAiStatus='';
@@ -5326,6 +5536,7 @@ function applyAiToSchedulePreview(data,fileName){
     return {date,facility,type,code,pay:String(sh.pay||''),name:rowName,matchedName:rowName,match,include:match==='matched'&&sh.includeDefault!==false,duplicate,flags,source:'schedule-import-ai',incomplete:!String(sh.pay||'').trim()};
   });
   schedulePreview={fileName,source:'schedule-import-ai',matchedName:name,rows,noNamesInFile:!anyNamed,ai:true};
+  finalizeScheduleNameMatching(schedulePreview);
   return rows.length>0;
 }
 // The honest zero-result message for a photo read (Nov 6, 2026): a
@@ -6022,7 +6233,8 @@ if(action==='facility-reread-rates')return rereadFacilityRatesTable();
 if(action==='facility-contract-ai')return readContractWithAI('facility');
 if(action==='paystub-approve')return approvePaystub();
 if(action==='paystub-card-toggle'){paystubCardOpenFac=paystubCardOpenFac===entry?'':entry;return render()}
-if(action==='paystub-discard'){paystubPreview=null;paystubError='';paystubStatus='';paystubCardFacId='';return render()}
+if(action==='paystub-discard'){paystubPreview=null;paystubError='';paystubStatus='';paystubCardFacId='';paystubImportCtx=null;return render()}
+if(action==='name-amb-confirm'){if(schedulePreview&&schedulePreview.nameAmb){const picks=Array.from(document.querySelectorAll('.nameAmbPick')).filter(x=>x.checked).map(x=>x.dataset.key);if(!picks.length){alert('Tick at least one label that is you — or discard this preview.');return}const amb=schedulePreview.nameAmb;amb.picks=picks;db.settings=db.settings||{};db.settings.namePicks=db.settings.namePicks||{};db.settings.namePicks[amb.memKey]={cands:amb.candidates.map(c=>c.key).sort(),picks:picks.slice()};applyNameAmbiguity(schedulePreview);persist()}return render()}
 
 if(action==='contract-ai')return readContractWithAI('contract');
 if(action==='contract-ocr')return importContractWithOCR();
@@ -6818,13 +7030,28 @@ async function readPaystubOnDevice(note){
   finally{paystubBusy=false}
 }
 async function importPaystub(e){
-  e.preventDefault();paystubCardFacId='';
+  e.preventDefault();paystubCardFacId='';paystubImportCtx=null;
   return runPaystubRead($('f_paystubFile')?Array.from($('f_paystubFile').files||[]):[],$('f_paystubText')?$('f_paystubText').value:'');
 }
 async function importPaystubCard(e,facId){
-  e.preventDefault();paystubCardFacId=facId||'';paystubCardOpenFac=facId||'';
+  e.preventDefault();paystubCardFacId=facId||'';paystubCardOpenFac=facId||'';paystubImportCtx=null;
   const fileEl=$('f_paystubCardFile_'+facId),textEl=$('f_paystubCardText_'+facId);
   return runPaystubRead(fileEl?Array.from(fileEl.files||[]):[],textEl?textEl.value:'');
+}
+// Third front door, same pipeline (Nov 10, 2026): a stub uploaded
+// inside an import preview's pay-schedule section. The binding is
+// the section's own agency/facility (importPaySchedCtx — the draft
+// values the user sees in the fields), captured BEFORE the read so
+// the preview can state it; approving the stub stamps the import
+// preview (paySchedStubSaved) so the section shows the schedule as
+// on file and the import's own approve completes normally.
+async function importPaystubImport(e,kind){
+  e.preventDefault();
+  const p=kind==='cal'?calPreview:kind==='contract'?contractPreview:kind==='faccontract'?facilityContractPreview:schedulePreview;
+  const ctx=p?importPaySchedCtx(p,kind):null;
+  paystubCardFacId='';paystubImportCtx={kind,agency:ctx?ctx.agency:'',facility:ctx?ctx.facility:''};
+  const fileEl=$('f_paystubImpFile_'+kind),textEl=$('f_paystubImpText_'+kind);
+  return runPaystubRead(fileEl?Array.from(fileEl.files||[]):[],textEl?String(textEl.value||''):'');
 }
 // One read pipeline behind both front doors (Nov 10, 2026): the
 // general panel and a facility's card each gather their files/text
@@ -6895,8 +7122,12 @@ function approvePaystub(){
   const i=(db.payStubs||[]).findIndex(x=>x.id===rec.id);
   if(i>=0)db.payStubs[i]={...db.payStubs[i],...rec};
   else db.payStubs.push(rec);
+  // A stub approved from inside an import preview stamps that
+  // preview: its pay-schedule section switches to the on-file line
+  // (never asks twice) and its apply path saves nothing more.
+  if(p.importKind){const ip=p.importKind==='cal'?calPreview:p.importKind==='contract'?contractPreview:p.importKind==='faccontract'?facilityContractPreview:schedulePreview;if(ip)ip.paySchedStubSaved={agency:rec.agency,frequency:rec.frequency}}
   const next=paystubNextPayDate(rec);
-  paystubPreview=null;paystubError='';paystubStatus='';paystubCardFacId='';paystubCardOpenFac='';editId=null;persist();cloudSaveKind('payStubs',rec.id);render();
+  paystubPreview=null;paystubError='';paystubStatus='';paystubCardFacId='';paystubCardOpenFac='';paystubImportCtx=null;editId=null;persist();cloudSaveKind('payStubs',rec.id);render();
   alert(`Pay schedule saved for ${agency} — ${PAY_FREQUENCY_LABELS[frequency]}${next?`, next expected payday ${fmt(next)}`:''}. Each paycheck is calculated from your shifts in its pay period${(gross||net)?` — and this stub's own check (${fmt(payDate)}) counts as the actual ${currency(num(gross||net))} from the stub`:''}. Paychecks for ${agency} now show on the Dashboard and calendar, labelled estimate or actual.`);
 }
 
