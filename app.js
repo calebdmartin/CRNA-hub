@@ -3670,9 +3670,41 @@ function parseWeekendDaysText(text){
 // it the weekend figure; a statement that only mentions weekends
 // yields only the weekend figure.
 function describeCallAmounts(text,n){
-  const rx=new RegExp('call\\s*'+n+'\\b[^.;\\n]{0,140}','i');
-  const m=String(text||'').match(rx);if(!m)return null;
-  const seg=m[0],low=seg.toLowerCase(),weIdx=low.indexOf('weekend');
+  const src=String(text||'');
+  const m=new RegExp('call\\s*'+n+'\\b','i').exec(src);if(!m)return null;
+  // The statement window (Nov 11, 2026, v125): from the call
+  // mention to the end of its line, the next call mention, or
+  // 200 chars — and a '.' inside the window ends the statement
+  // only when what follows is a genuinely new sentence. The
+  // old window ([^.;\n]{0,140}) stopped at ANY '.', which
+  // amputated "Holz-call 1=24hr call. Weekday=$4,800 weekend
+  // $4,200" at "call" — the amounts live in the clause AFTER
+  // the period, so Call 1 read as nothing on every surface
+  // without a code list (the contract import preview), while
+  // the facility card survived on its code blocks (Caleb's
+  // live screenshot: the read-back accounted for his 2nd call
+  // and day shifts but not the 24hr call rates he had priced
+  // in plain sight). A '.' followed by a day-scope word
+  // ("…call. Weekday=$4,800"), an amount ("…call. $4,200 on
+  // weekends") or a digit with no space (a decimal, "$4.80")
+  // CONTINUES the statement; a '.' followed by anything else
+  // ("…call. The stipend is $500") ends it, so a neighbouring
+  // sentence's money is never swept in. A ';' still ends the
+  // statement outright, as before.
+  let end=Math.min(src.length,m.index+200);
+  const nl=src.indexOf('\n',m.index);if(nl>=0&&nl<end)end=nl;
+  const nx=new RegExp('call\\s*\\d','ig');nx.lastIndex=m.index+m[0].length;
+  const nm=nx.exec(src);if(nm&&nm.index<end)end=nm.index;
+  let segEnd=end;
+  for(let i=m.index;i<end;i++){
+    if(src[i]===';'){segEnd=i;break}
+    if(src[i]==='.'&&i+1<end){
+      if(/\d/.test(src[i+1]))continue;
+      const after=src.slice(i+1,end).replace(/^[\s=:\-]*/,'');
+      if(after&&!/^(?:weekends?|weekdays?|weeknights?|wknds?|wkdys?|wknights?|\$)/i.test(after)){segEnd=i;break}
+    }
+  }
+  const seg=src.slice(m.index,segEnd),low=seg.toLowerCase(),weIdx=low.indexOf('weekend');
   const amountsIn=s=>[...s.matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>Number(x[1].replace(/,/g,''))).filter(v=>isFinite(v)&&v>0);
   // A trailing second figure with NO day qualifier ("Call 2 is
   // $3,000, $2,000 on weekends" puts the weekend figure FIRST in
@@ -3684,7 +3716,27 @@ function describeCallAmounts(text,n){
   const before=amountsIn(seg.slice(0,weIdx)),after=amountsIn(seg.slice(weIdx));
   const out={};
   if(before.length>1){out.wd=before[0];out.we=before[before.length-1]}
-  else if(before.length)out.wd=before[0];
+  else if(before.length){
+    // A SINGLE amount sitting immediately BEFORE the weekend
+    // keyword, with no scope word of its own before it, belongs
+    // to that keyword (Nov 11, 2026, v125): "$4,200 on weekends"
+    // is the weekend figure — this function's own header has
+    // always promised "a statement that only mentions weekends
+    // yields only the weekend figure", but the before/after
+    // split filed the amount as the weekday rate. An amount a
+    // weekday word already claimed ("weekday=$3,000 weekend
+    // $2,000") keeps its scope: a scope keyword anywhere before
+    // the amount, or anything but "on"-style glue between the
+    // amount and the keyword, leaves the weekday reading.
+    const head=seg.slice(0,weIdx);
+    const amts=[...head.matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)];
+    const last=amts[amts.length-1];
+    const claimedByWeekend=!!last&&
+      !/\b(?:weekdays?|weeknights?|wkdys?|wknights?)\b/i.test(head.slice(0,last.index))&&
+      /^[\s=:\-,]*(?:on|at)?[\s=:\-,]*$/i.test(head.slice(last.index+last[0].length));
+    if(claimedByWeekend&&!after.length)out.we=before[0];
+    else out.wd=before[0];
+  }
   if(after.length&&out.we==null)out.we=after[0];
   if(!before.length&&!after.length)return null;
   if(!before.length&&after.length>1){out.wd=after[0];out.we=after[after.length-1]}
