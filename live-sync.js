@@ -608,6 +608,7 @@ async function liveSyncNow(provider, silent) {
     liveSyncBusy = '';
     render();
     if (!silent) {
+      let pendingSugg = [];
       let msg = 'Synced ' + liveSyncLabel(provider) + ': ' + applied.created + ' created, ' + applied.updated + ' updated, ' + applied.deleted + ' deleted, ' + applied.flagged + ' flagged for your confirmation (see Pending deletions below).';
       if (applied.conflicts && applied.conflicts.length) msg += ' Looks like you\u2019re double-booking yourself: ' + applied.conflicts.length + ' synced shift(s) were NOT added because those days already have a shift (' + applied.conflicts.map((c) => c.text).join('; ') + '). Add one by hand from the calendar if you really have both.';
       if (data.imported && typeof data.imported === 'object') {
@@ -643,14 +644,34 @@ async function liveSyncNow(provider, silent) {
             msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
           }
           if (imp.unpriced) msg += ' ' + imp.unpriced + ' imported shift(s) have no pay rule yet — set the rate on the Facilities tab and the next sync prices them.';
-          if (applied.suggestions && applied.suggestions.length) msg += ' We noticed shifts at ' + applied.suggestions.join(', ') + ' in your calendar. Add it as a facility? Sync your calendar, upload a contract, or manually enter the facility\'s hourly rate — see the Facilities tab.';
+          // Held hospitals are NOT lumped into this sentence any
+          // more (Nov 11, 2026, v121): they ride along as their own
+          // per-hospital list in the result sheet below.
+          if (applied.suggestions && applied.suggestions.length) {
+            pendingSugg = applied.suggestions.map((n) => {
+              const rec = (db.facilitySuggestions || []).find((x) => normFacilityName(x.name) === normFacilityName(n));
+              return rec && !rec.dismissed ? { id: rec.id, name: rec.name, count: Number(rec.count || 0) } : null;
+            }).filter(Boolean);
+          }
         }
       }
       if ((!data.imported || typeof data.imported !== 'object') && liveSyncSourcePending(provider)) {
         msg += ' No work calendar is picked yet, so only the app’s own calendar was synced — pick the calendar your shifts live in on the ' + liveSyncLabel(provider) + ' card to pull them in.';
       }
-      alert(msg);
+      // Post-sync handoff (v121): a user-present sync that held
+      // shifts for hospitals with no facility yet ends in the
+      // result SHEET — counts up top, each hospital on its own
+      // line, and "Set up facilities" as the primary action.
+      // Silent (background/boot) syncs never reach this branch:
+      // they keep the Dashboard notice pattern and never navigate.
+      if (pendingSugg.length && typeof showSyncResultDialog === 'function') {
+        showSyncResultDialog(provider, msg, pendingSugg);
+      } else {
+        if (pendingSugg.length) msg += ' Hospitals waiting for their rates: ' + pendingSugg.map((s) => s.name + ' — ' + (s.count ? s.count + ' shift(s) waiting' : 'shifts waiting')).join('; ') + '. Set them up on the Facilities tab.';
+        alert(msg);
+      }
     }
+    return applied;
   } catch (e) {
     liveSyncBusy = '';
     liveSyncError = e.message;
@@ -684,6 +705,42 @@ function liveSyncSchedulePush() {
   liveSyncPushTimer = setTimeout(() => {
     liveSyncConnectedProviders().forEach((p) => liveSyncNow(p, true));
   }, 3000);
+}
+// Close the loop after a suggestion-born facility save (Nov 11,
+// 2026, v121): the user just gave a noticed hospital its rates —
+// re-run that provider's sync SILENTLY so the shifts the sync was
+// holding import and price on their own, then leave the plain
+// result ("Holzer added — N shifts imported") on the Facilities
+// tab, with the next still-waiting suggestion expanded. Called
+// from the facility form save, the contract approve, and the
+// pay-words confirm when (and only when) the save cleared a
+// suggestion. A failure leaves the facility saved and the shifts
+// held for the next ordinary sync — nothing is lost.
+async function liveSyncRescanAfterFacilitySave(provider, facilityName) {
+  if (!provider || typeof cloudSession === 'undefined' || !cloudSession) return null;
+  const fac = typeof facilityByNameOrAlias === 'function' ? facilityByNameOrAlias(facilityName) : null;
+  const keys = new Set();
+  const addKey = (v) => {
+    const k = typeof facilityNameKey === 'function' ? facilityNameKey(v) : String(v || '').trim().toLowerCase();
+    if (k) keys.add(k);
+  };
+  addKey(facilityName);
+  if (fac) {
+    addKey(fac.name);
+    if (typeof facilityAliases === 'function') facilityAliases(fac).forEach(addKey);
+  }
+  const keyOf = (v) => typeof facilityNameKey === 'function' ? facilityNameKey(v) : String(v || '').trim().toLowerCase();
+  const countFor = () => (db.shifts || []).filter((s) => keys.has(keyOf(s.facility))).length;
+  const before = countFor();
+  try { await liveSyncNow(provider, true); } catch (e) { /* the result panel reports what actually landed */ }
+  const imported = Math.max(0, countFor() - before);
+  try {
+    facilityRescanResult = { name: facilityName, imported, provider, at: new Date().toISOString() };
+    const act = typeof activeFacilitySuggestions === 'function' ? activeFacilitySuggestions() : [];
+    expandedSuggestionId = act.length ? act[0].id : null;
+  } catch (e) {}
+  render();
+  return imported;
 }
 // Delete the SOURCE event of an imported shift from the user's own
 // work calendar — the ONE exception to the "work calendar is never
@@ -1262,6 +1319,7 @@ function liveSyncResetDeviceState() {
 if (typeof window !== 'undefined') {
   window.liveSyncInit = liveSyncInit;
   window.liveSyncSchedulePush = liveSyncSchedulePush;
+  window.liveSyncRescanAfterFacilitySave = liveSyncRescanAfterFacilitySave;
   window.liveSyncRecordTombstone = liveSyncRecordTombstone;
   window.liveSyncDeleteSourceEvent = liveSyncDeleteSourceEvent;
   window.liveSyncShiftSyncLabel = liveSyncShiftSyncLabel;
