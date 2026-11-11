@@ -4751,6 +4751,10 @@ function describeSummaryText(facName,parsed,fac){
   if(statedDays)bits.push('Weekend means '+weekendDayListLabel(statedDays)+'.');
   else if(describeWeekendMatters(parsed,fac))bits.push('You didn\'t say which days count as the weekend — I\'ll use '+weekendDayListLabel(facilityWeekendDays(fac||{weekendDays:null}))+' unless you tell me otherwise.');
   if(parsed.unanswered&&parsed.unanswered.length)bits.push('I still don\'t know about: '+parsed.unanswered.map(c=>'“'+c+'”').join(', ')+'.');
+  // AI-primary reads (v133): a figure the AI claimed but could
+  // not trace to the user's own words is named here, never
+  // silently used and never silently dropped either.
+  if(parsed.aiRejected&&parsed.aiRejected.length)bits.push('I left out '+parsed.aiRejected.join(' and ')+' — I couldn\'t find '+(parsed.aiRejected.length===1?'that':'those')+' in your words, so I didn\'t use '+(parsed.aiRejected.length===1?'it':'them')+'.');
   return bits.join(' ');
 }
 function shortCallName(code,n){const m=String(code||'').match(new RegExp('call\\s*'+n,'i'));return m?'Call '+n:null}
@@ -4917,6 +4921,236 @@ function applyDescribedRules(fac,parsed){
   fac.ratesPromptSkipped=false;fac.updatedAt=new Date().toISOString();
   return repriceUnpricedShiftsForFacility(fac);
 }
+// --- AI-primary words read (Nov 11, 2026, v133) ---
+// Caleb's directive: "Make all of the ai readers identical to
+// yours. It's still having trouble reading simple things." The
+// diagnosis (harness-proven on v132): the deterministic parser
+// stayed the only reader that could build code definitions —
+// the AI "rule" read returns ONE rule for ONE shift type and
+// has no channel for definitions at all — so when the subject
+// machinery failed, nothing could rescue it. Live case: "1st
+// call weekday=$4,800. 1st call weekend $4,200." — the scope
+// word fused into the subject, describeCallAmounts(t,1)
+// returned null, the preview's code universe was empty, and
+// the read-back asked what "1st call weekday" pays while a
+// person reads it trivially. Now the LLM read (extract-contract
+// mode "rules") runs FIRST over the whole text and is
+// authoritative; the deterministic parse is the cross-check and
+// the fallback. Trust comes from validation, not from the
+// model's confidence:
+//  (a) TRACEABILITY — every figure the AI returns must carry a
+//      quote that is a verbatim substring of the user's text
+//      AND contains the figure in a written form. Untraceable
+//      values are rejected, named in the read-back, never saved.
+//  (b) COVERAGE — every code-like subject the text names must
+//      end up resolved or named in "still don't know" (the
+//      v128 confusion budget, enforced over the merged result).
+//  (c) UNION OF COMPETENCE — a code the AI leaves unresolved
+//      falls back to the deterministic resolution when that side
+//      resolved it; a field the AI leaves blank on a code it did
+//      resolve fills from the deterministic def. Where both
+//      priced a code, the AI's read stands (it is primary).
+// Pricing itself stays 100% deterministic — this only changes
+// who READS the words.
+function describeQuoteNorm(s){return String(s||'').toLowerCase().replace(/[’‘]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim()}
+function describeQuoteNumbers(quote){
+  const out=[];
+  for(const m of String(quote||'').matchAll(/\d[\d,]*\.?\d*/g)){const n=Number(m[0].replace(/,/g,''));if(isFinite(n))out.push(n)}
+  return out;
+}
+// One AI {value, quote} pair against the user's text. Returns
+// the number when the quote is a real substring of the text and
+// the figure appears among the quote's own numbers; otherwise
+// records the rejection (when a plausible figure was claimed)
+// and returns null.
+function describeTakeQuoted(text,textNorm,qv,label,rejected){
+  if(!qv||typeof qv!=='object')return null;
+  const v=rateOrNull(qv.value);
+  if(v==null)return null;
+  const qn=describeQuoteNorm(qv.quote||'');
+  if(qn.length>=3&&textNorm.includes(qn)&&describeQuoteNumbers(qv.quote).some(n=>Math.abs(n-v)<0.001))return v;
+  rejected.push(moneyShort(v)+' for '+label);
+  return null;
+}
+async function describeReadWithAI(text,ctx,local){
+  const fac=ctx.fac||null;
+  const uniMap=new Map();
+  const addUni=c=>{if(!c||!String(c.code||'').trim())return;const k=codeIdentityKey(c.code);if(k&&!uniMap.has(k))uniMap.set(k,{code:String(c.code),ctype:c.ctype||'',hours:c.hours||''})};
+  for(const c of (ctx.codes||[]))addUni(c);
+  if(fac)for(const c of facilityDescribeCodes(fac))addUni(c);
+  const uniList=[...uniMap.values()];
+  const card={rates:{},defs:[]};
+  if(fac){
+    for(const k of FACILITY_RATE_KEYS){const v=rateOrNull(fac[k]);if(v!=null)card.rates[k]=v}
+    const fdefs=facilityCodeDefs(fac);
+    for(const code of Object.keys(fdefs))card.defs.push({code,label:fdefs[code].label||'',type:fdefs[code].canonicalType||''});
+  }
+  const data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'rules',ruleText:text,ruleCodes:uniList.map(c=>({code:c.code,ctype:c.ctype,hours:c.hours})),ruleCard:card,facilityName:ctx.facName||(fac?fac.name:'')});
+  if(!data||!data.read)return null;
+  const read=data.read;
+  const textNorm=describeQuoteNorm(text);
+  const rejected=[];
+  const rates={};
+  const hr=describeTakeQuoted(text,textNorm,read.hourly_rate,'the hourly rate',rejected);if(hr!=null)rates.hourlyRate=hr;
+  const ph8=describeTakeQuoted(text,textNorm,read.paid_hours_8,'the 8-hour paid hours',rejected);if(ph8!=null)rates.paidHours8=ph8;
+  const h1=describeTakeQuoted(text,textNorm,read.first_call_hourly_rate,'the 1st-call hourly rate',rejected);if(h1!=null)rates.hourlyCall1st=h1;
+  const cb=describeTakeQuoted(text,textNorm,read.call_bonus,'the call bonus',rejected);if(cb!=null)rates.callBonus=cb;
+  const byLen=[];
+  for(const e of (Array.isArray(read.paid_hours_by_length)?read.paid_hours_by_length:[])){
+    const len=rateOrNull(e&&e.length);if(len==null)continue;
+    const v=describeTakeQuoted(text,textNorm,e.value,'the paid hours for '+len+'-hour shifts',rejected);
+    if(v!=null)byLen.push({len,paid:v});
+  }
+  // Resolve an AI code name to the universe spelling when it is
+  // the same code (one identity, v131); otherwise the user's own
+  // name stands — a fresh facility learns its codes from words.
+  const resolveKey=name=>{
+    const raw=String(name||'').trim();if(!raw)return '';
+    const sk=codeStripKey(raw,fac||{name:ctx.facName||'',aliases:''});
+    if(sk)for(const u of uniList)if(codeStripKey(u.code,fac||{name:ctx.facName||'',aliases:''})===sk)return u.code;
+    const ik=codeIdentityKey(raw);
+    for(const u of uniList)if(codeIdentityKey(u.code)===ik)return u.code;
+    return raw;
+  };
+  const isGenericDayName=(name,ct)=>{
+    if(!ct||/call/i.test(ct))return false;
+    const gn=x=>describeQuoteNorm(x).replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+    return ['day shift','day shifts',gn(ct),gn(ct).replace(' day',' shift')].includes(gn(name));
+  };
+  const defs={};
+  for(const e of (Array.isArray(read.codes)?read.codes:[])){
+    if(!e||!String(e.code||'').trim())continue;
+    const key=resolveKey(e.code);if(!key)continue;
+    const ct=canonicalTypeOf(e.label||'')||e.type||canonicalTypeOf(e.code)||'';
+    const label=String(e.label||'').trim()||ct||key;
+    let hours=e.hours!=null&&rateOrNull(e.hours)!=null?String(rateOrNull(e.hours)):'';
+    if(!hours){const hm=String(ct||'').match(/(\d+)-hour/);if(hm)hours=hm[1]}
+    const def={label,hours,canonicalType:ct,paidHours:null};
+    if(e.unpaid){
+      // The denial itself must be traceable too: the entry's own
+      // quote must be the user's words and must carry the denial.
+      const qn=describeQuoteNorm(e.quote||'');
+      if(qn&&textNorm.includes(qn)&&/(?:no\s+pay|day\s+off|unpaid|not\s+paid)/i.test(e.quote||'')){
+        def.unpaid=true;defs[key]=def;continue;
+      }
+      rejected.push('a no-pay reading for “'+key+'”');
+      continue;
+    }
+    const wd=describeTakeQuoted(text,textNorm,e.weekday_pay,'“'+key+'”',rejected);
+    const we=describeTakeQuoted(text,textNorm,e.weekend_pay,'“'+key+'”',rejected);
+    const ph=describeTakeQuoted(text,textNorm,e.paid_hours,'“'+key+'”',rejected);
+    if(ct==='24-hour call'){if(wd!=null)rates.rate24=wd;if(we!=null)rates.weekendRate24=we}
+    else if(ct==='Second call'){if(wd!=null)rates.rateSecond=wd;if(we!=null)rates.weekendRateSecond=we}
+    else if(wd!=null||we!=null){
+      if(isGenericDayName(e.code,ct)&&we==null&&ph==null){
+        // A generic day statement ("an 8-hour shift pays $2,125")
+        // lands its flat on the facility rate AND keeps a def
+        // under the user's own name, so the read-back names the
+        // day rule alongside the call rules instead of dropping
+        // it from the summary (the def prices identically).
+        const fk=ct==='8-hour day'?'rate8':ct==='10-hour shift'?'rate10':ct==='12-hour shift'?'rate12':'';
+        if(fk&&wd!=null)rates[fk]=wd;
+      }
+      if(wd!=null)def.weekdayPay=wd;
+      if(we!=null)def.weekendPay=we;
+    }
+    if(ph!=null){def.paidHours=ph;def.paidHoursOwn=true}
+    else{
+      const dh=rateOrNull(def.hours);
+      const tgt=dh!=null?byLen.find(x=>x.len===dh):null;
+      if(tgt){def.paidHours=tgt.paid;def.paidHoursOwn=true}
+    }
+    if(def.weekdayPay!=null||def.weekendPay!=null||def.paidHours!=null||ct)defs[key]=def;
+    else if(label&&label!==key)defs[key]=def;
+  }
+  let weekendDays=null,weekendStated=false;
+  if(read.weekend&&read.weekend.stated&&Array.isArray(read.weekend.days)&&read.weekend.days.length){
+    const qn=describeQuoteNorm(read.weekend.quote||'');
+    const nums=read.weekend.days.map(d=>WEEKDAY_NAMES.indexOf(d)).filter(n=>n>=0);
+    if(qn&&textNorm.includes(qn)&&nums.length&&(/weekend/i.test(read.weekend.quote||'')||read.weekend.days.some(d=>qn.includes(String(d).toLowerCase())))){
+      weekendDays=[...new Set(nums)].sort((a,b)=>a-b);weekendStated=true;
+    }
+  }
+  const aiUnknown=[];
+  for(const u of (Array.isArray(read.unknown)?read.unknown:[])){
+    const nm=String((u&&u.name)||'').trim();
+    if(nm&&textNorm.includes(describeQuoteNorm(nm)))aiUnknown.push(nm);
+  }
+  if(!Object.keys(rates).length&&!Object.keys(defs).length&&!weekendDays)return null;
+  // Cross-check union with the deterministic parse: AI rates win,
+  // local rates fill gaps; the standing misread screen runs over
+  // the merged set exactly as it did over the old merge.
+  const mergedRates={...local.rates};
+  for(const k of Object.keys(rates))mergedRates[k]=rates[k];
+  describeSanitizeRates(mergedRates,text,null,ctx.codes||[]);
+  // Re-key a call def the AI named in its own words ("1st call")
+  // onto the universe/local spelling ("HOLZ - Call 1") when the
+  // other side carries exactly that call type — one code, one
+  // definition, whatever either reader called it.
+  const mergedDefs={};
+  const localKeys=Object.keys(local.defs||{});
+  for(const k of Object.keys(defs)){
+    let key=k;const ct=defs[k].canonicalType;
+    if((ct==='24-hour call'||ct==='Second call')&&!localKeys.includes(k)&&!uniList.some(u=>u.code===k)){
+      const sameType=localKeys.filter(lk=>(local.defs[lk]||{}).canonicalType===ct);
+      const uniSame=uniList.filter(u=>(u.ctype||canonicalTypeOf(u.code))===ct);
+      if(sameType.length===1)key=sameType[0];
+      else if(uniSame.length===1&&!sameType.length)key=uniSame[0].code;
+    }
+    mergedDefs[key]=defs[k];
+  }
+  for(const k of localKeys){
+    const ld=local.defs[k];
+    const mk=Object.keys(mergedDefs).find(m=>codeIdentityKey(m)===codeIdentityKey(k)||codeStripKey(m,fac||{})===codeStripKey(k,fac||{}));
+    if(!mk){mergedDefs[k]=ld;continue}
+    const ad=mergedDefs[mk];
+    if(ad.unpaid)continue;
+    if(ld.unpaid&&ad.weekdayPay==null&&ad.weekendPay==null){
+      const nu={...ad,unpaid:true};delete nu.weekdayPay;delete nu.weekendPay;delete nu.paidHours;
+      mergedDefs[mk]=nu;continue;
+    }
+    const filled={...ad};
+    if(filled.paidHours==null&&ld.paidHours!=null){filled.paidHours=ld.paidHours;if(ld.paidHoursOwn)filled.paidHoursOwn=true}
+    if(filled.weekdayPay==null&&ld.weekdayPay!=null)filled.weekdayPay=ld.weekdayPay;
+    if(filled.weekendPay==null&&ld.weekendPay!=null)filled.weekendPay=ld.weekendPay;
+    if(!filled.hours&&ld.hours)filled.hours=ld.hours;
+    if(!filled.canonicalType&&ld.canonicalType)filled.canonicalType=ld.canonicalType;
+    mergedDefs[mk]=filled;
+  }
+  // Coverage: every named subject is resolved or asked about.
+  // A candidate is covered when it IS a resolved def (any
+  // spelling), when stripping its scope words ("1st call
+  // weekday" -> "1st call") reaches a resolved def or a call
+  // type a def carries, or when it is a length-targeted
+  // paid-hours phrase whose figure a def now carries.
+  const defAlias=new Set();
+  for(const k of Object.keys(mergedDefs)){
+    defAlias.add(codeIdentityKey(k));
+    const d=mergedDefs[k];
+    if(d.canonicalType==='24-hour call'){defAlias.add('call 1');defAlias.add('1st call');defAlias.add('first call');defAlias.add('24 hour call')}
+    if(d.canonicalType==='Second call'){defAlias.add('call 2');defAlias.add('2nd call');defAlias.add('second call')}
+    if(d.label)defAlias.add(codeIdentityKey(d.label));
+  }
+  const subjectCovered=name=>{
+    const ik=codeIdentityKey(name);
+    if(!ik)return true;
+    if(defAlias.has(ik))return true;
+    const stripped=codeIdentityKey(String(name||'').replace(/\b(?:weekdays?|weekends?|weeknights?)\b/gi,' '));
+    if(stripped&&defAlias.has(stripped))return true;
+    if(/\bhours?\s+paid\s+for\b/i.test(name)){
+      const lm=String(name).match(/(\d+(?:\.\d+)?)\s*hours?\s+paid\s+for\s+(\d+(?:\.\d+)?)/i);
+      if(lm)return Object.values(mergedDefs).some(d=>rateOrNull(d.paidHours)===Number(lm[1])&&rateOrNull(d.hours)===Number(lm[2]));
+      return Object.values(mergedDefs).some(d=>d.paidHours!=null);
+    }
+    return false;
+  };
+  const candSet=new Set([...(local.unanswered||[]),...aiUnknown]);
+  const unanswered=[...candSet].filter(n=>!subjectCovered(n));
+  let question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
+  const aiQ=read.clarifying_question?String(read.clarifying_question).trim():'';
+  if(aiQ&&unanswered.length)question=describeFollowUpQuestion(question,aiQ);
+  return {rates:mergedRates,defs:mergedDefs,weekendDays:weekendStated?weekendDays:local.weekendDays,weekendStated:weekendStated||!!local.weekendStated,unanswered,question,aiRejected:rejected,aiRead:true};
+}
 async function submitDescribe(key){
   const st=describeState(key);if(!st||st.busy)return;
   const ctx=st.ctx||{};
@@ -4924,11 +5158,23 @@ async function submitDescribe(key){
   if(!text){st.error='Type the pay rules first — nothing was sent.';render();return}
   st.busy=true;st.error='';render();
   try{
-    const parsed=describeParseLocal(text,ctx.fac||null,ctx.codes||[]);
-    // The AI rule read (the Nov 6 box's engine) merges over the
-    // deterministic parse when the user is signed in: fields the AI
-    // states win; fields it does not state keep the local read.
+    let parsed=describeParseLocal(text,ctx.fac||null,ctx.codes||[]);
+    // AI-PRIMARY (Nov 11, 2026, v133): when signed in, the LLM
+    // multi-rule read leads and the deterministic parse above
+    // serves as its cross-check (see describeReadWithAI). Any
+    // failure — endpoint down, no key, an unusable read — falls
+    // through to the standing deterministic path below, exactly
+    // as it behaved before this round.
+    let aiPrimary=null;
     if(typeof SUPABASE_CONFIGURED!=='undefined'&&SUPABASE_CONFIGURED&&typeof cloudSession!=='undefined'&&cloudSession){
+      try{aiPrimary=await describeReadWithAI(text,ctx,parsed)}catch(aiErr){aiPrimary=null}
+    }
+    if(aiPrimary)parsed=aiPrimary;
+    // FALLBACK ONLY (pre-v133 path, kept verbatim): the old
+    // single-rule AI read merges over the deterministic parse.
+    // Runs only when the AI-primary read above produced nothing
+    // — the deterministic behaviour of v128–v132, unchanged.
+    if(!aiPrimary&&typeof SUPABASE_CONFIGURED!=='undefined'&&SUPABASE_CONFIGURED&&typeof cloudSession!=='undefined'&&cloudSession){
       try{
         const data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'rule',ruleText:text,ruleHistory:[]});
         if(data&&data.rule){

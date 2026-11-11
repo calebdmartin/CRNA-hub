@@ -567,6 +567,149 @@ export function normalizeAiRule(raw: unknown): AiRule {
   return out;
 }
 
+// --- Multi-rule words read (Nov 11, 2026, v133, mode: "rules") ---
+// The old "rule" mode above reads ONE pay rule for ONE shift type —
+// a schema that structurally cannot represent the words box, where
+// a user states several rules in one paragraph. This read covers
+// the WHOLE text: every rule, every code, each value carrying the
+// exact substring of the user's text it came from (its "quote").
+// The client validates each quote against the text before trusting
+// the value (traceability), checks that every code the text names
+// is resolved or listed unknown (coverage), and only then lets the
+// read lead. Values stay null where the text does not state them —
+// the model transcribes; it never computes and never invents.
+export interface AiQuotedValue {
+  value: number;
+  quote: string;
+}
+
+export interface AiRulesCode {
+  code: string;
+  label: string | null;
+  type: string | null;
+  hours: number | null;
+  paid_hours: AiQuotedValue | null;
+  weekday_pay: AiQuotedValue | null;
+  weekend_pay: AiQuotedValue | null;
+  unpaid: boolean;
+  quote: string | null;
+}
+
+export interface AiRulesRead {
+  hourly_rate: AiQuotedValue | null;
+  paid_hours_8: AiQuotedValue | null;
+  paid_hours_by_length: { length: number; value: AiQuotedValue }[];
+  first_call_hourly_rate: AiQuotedValue | null;
+  call_bonus: AiQuotedValue | null;
+  weekend: { days: string[]; stated: boolean; quote: string | null };
+  codes: AiRulesCode[];
+  unknown: { name: string; quote: string | null }[];
+  clarifying_question: string | null;
+}
+
+const WEEKDAY_NAMES: Record<string, string> = {
+  sunday: "Sunday", sun: "Sunday",
+  monday: "Monday", mon: "Monday",
+  tuesday: "Tuesday", tue: "Tuesday", tues: "Tuesday",
+  wednesday: "Wednesday", wed: "Wednesday",
+  thursday: "Thursday", thu: "Thursday", thur: "Thursday", thurs: "Thursday",
+  friday: "Friday", fri: "Friday",
+  saturday: "Saturday", sat: "Saturday",
+};
+
+function coerceQuotedValue(v: unknown): AiQuotedValue | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const n = coerceAiNumber(o["value"]);
+  const q = coerceAiText(o["quote"]);
+  if (n == null || !q) return null;
+  return { value: n, quote: q.slice(0, 240) };
+}
+
+function coerceQuoteHours(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 && n <= 24 ? n : null;
+}
+
+export function normalizeAiRulesRead(raw: unknown): AiRulesRead {
+  const out: AiRulesRead = {
+    hourly_rate: null,
+    paid_hours_8: null,
+    paid_hours_by_length: [],
+    first_call_hourly_rate: null,
+    call_bonus: null,
+    weekend: { days: [], stated: false, quote: null },
+    codes: [],
+    unknown: [],
+    clarifying_question: null,
+  };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  out.hourly_rate = coerceQuotedValue(obj["hourly_rate"]);
+  out.paid_hours_8 = coerceQuotedValue(obj["paid_hours_8"]);
+  out.first_call_hourly_rate = coerceQuotedValue(obj["first_call_hourly_rate"]);
+  out.call_bonus = coerceQuotedValue(obj["call_bonus"]);
+  const phl = obj["paid_hours_by_length"];
+  if (Array.isArray(phl)) {
+    for (const item of phl.slice(0, 8)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const o = item as Record<string, unknown>;
+      const len = coerceQuoteHours(o["length"]);
+      const val = coerceQuotedValue(o["value"]);
+      if (len != null && val) out.paid_hours_by_length.push({ length: len, value: val });
+    }
+  }
+  const wk = obj["weekend"];
+  if (wk && typeof wk === "object" && !Array.isArray(wk)) {
+    const w = wk as Record<string, unknown>;
+    const days: string[] = [];
+    if (Array.isArray(w["days"])) {
+      for (const d of w["days"]) {
+        const name = typeof d === "string" ? WEEKDAY_NAMES[d.trim().toLowerCase()] : undefined;
+        if (name && !days.includes(name)) days.push(name);
+      }
+    }
+    out.weekend = {
+      days,
+      stated: w["stated"] === true && days.length > 0,
+      quote: coerceAiText(w["quote"])?.slice(0, 240) ?? null,
+    };
+    if (!out.weekend.stated) out.weekend.days = [];
+  }
+  const codes = obj["codes"];
+  if (Array.isArray(codes)) {
+    for (const item of codes.slice(0, 30)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const o = item as Record<string, unknown>;
+      const code = coerceAiText(o["code"]);
+      if (!code) continue;
+      out.codes.push({
+        code: code.slice(0, 80),
+        label: coerceAiText(o["label"])?.slice(0, 80) ?? null,
+        type: coerceRuleShiftType(o["type"]),
+        hours: coerceQuoteHours(o["hours"]),
+        paid_hours: coerceQuotedValue(o["paid_hours"]),
+        weekday_pay: coerceQuotedValue(o["weekday_pay"]),
+        weekend_pay: coerceQuotedValue(o["weekend_pay"]),
+        unpaid: o["unpaid"] === true,
+        quote: coerceAiText(o["quote"])?.slice(0, 240) ?? null,
+      });
+    }
+  }
+  const unk = obj["unknown"];
+  if (Array.isArray(unk)) {
+    for (const item of unk.slice(0, 12)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const o = item as Record<string, unknown>;
+      const name = coerceAiText(o["name"]);
+      if (!name) continue;
+      out.unknown.push({ name: name.slice(0, 80), quote: coerceAiText(o["quote"])?.slice(0, 240) ?? null });
+    }
+  }
+  out.clarifying_question = coerceAiText(obj["clarifying_question"]);
+  return out;
+}
+
 // --- Grid band extraction (Nov 7, 2026) ---
 // Caleb's objection killed the old advice: cropping a grid photo by
 // hand throws away the date header the reader needs, so the USER

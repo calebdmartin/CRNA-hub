@@ -209,3 +209,54 @@ Deno.test("normalizeAiPortalCheck: license page coerces type and dates; junk is 
   assertEquals(empty.period_start, null);
   assertEquals(normalizeAiPortalCheck(null).status, null);
 });
+
+// --- Multi-rule words read (Nov 11, 2026, v133, mode: "rules") ---
+
+import { normalizeAiRulesRead } from "./normalize.ts";
+
+Deno.test("normalizeAiRulesRead: a full multi-rule read coerces into shape", () => {
+  const out = normalizeAiRulesRead({
+    hourly_rate: { value: 250, quote: "Day shifts pay $250/hr" },
+    paid_hours_8: { value: "8.5", quote: "I'm paid for 8.5 hours" },
+    paid_hours_by_length: [{ length: 10, value: { value: 10.5, quote: "10.5 hours paid for 10 hour shifts" } }],
+    weekend: { days: ["sat", "Sunday"], stated: true, quote: "Weekends only include Saturday and Sunday" },
+    codes: [
+      { code: "HOLZ - Call 1", label: "24hr call", type: "1st call", hours: 24, weekday_pay: { value: 4800, quote: "1st call weekday=$4,800" }, weekend_pay: { value: 4200, quote: "1st call weekend $4,200" }, unpaid: false, quote: "Holz-call 1=24hr call. Weekday=$4,800 weekend $4,200" },
+      { code: "HOLZ - PCDO", label: "post call day off", type: null, hours: null, unpaid: true, quote: "Holz PCDO=post call day off=no pay" },
+    ],
+    unknown: [{ name: "XYZ9", quote: "Holz XYZ9=9hr shifts" }],
+    clarifying_question: null,
+  });
+  assertEquals(out.hourly_rate, { value: 250, quote: "Day shifts pay $250/hr" });
+  assertEquals(out.paid_hours_8, { value: 8.5, quote: "I'm paid for 8.5 hours" });
+  assertEquals(out.paid_hours_by_length.length, 1);
+  assertEquals(out.paid_hours_by_length[0].length, 10);
+  assertEquals(out.weekend, { days: ["Saturday", "Sunday"], stated: true, quote: "Weekends only include Saturday and Sunday" });
+  assertEquals(out.codes.length, 2);
+  assertEquals(out.codes[0].type, "24-hour call");
+  assertEquals(out.codes[0].weekday_pay, { value: 4800, quote: "1st call weekday=$4,800" });
+  assertEquals(out.codes[1].unpaid, true);
+  assertEquals(out.unknown, [{ name: "XYZ9", quote: "Holz XYZ9=9hr shifts" }]);
+});
+
+Deno.test("normalizeAiRulesRead: junk and partial reads degrade to nulls, never inventions", () => {
+  const empty = normalizeAiRulesRead(null);
+  assertEquals(empty.codes, []);
+  assertEquals(empty.hourly_rate, null);
+  assertEquals(empty.weekend.stated, false);
+  const out = normalizeAiRulesRead({
+    hourly_rate: { value: -5, quote: "x" },
+    paid_hours_8: { value: 8.5 },
+    weekend: { days: ["Funday"], stated: true, quote: "weekend is Funday" },
+    codes: [{ code: "  ", weekday_pay: { value: 100, quote: "q" } }, { code: "A1", weekday_pay: { value: "abc", quote: "q" }, hours: 99 }],
+    unknown: [{ name: "" }, "junk"],
+  });
+  assertEquals(out.hourly_rate, null);
+  assertEquals(out.paid_hours_8, null);
+  assertEquals(out.weekend, { days: [], stated: false, quote: "weekend is Funday" });
+  assertEquals(out.codes.length, 1);
+  assertEquals(out.codes[0].code, "A1");
+  assertEquals(out.codes[0].weekday_pay, null);
+  assertEquals(out.codes[0].hours, null);
+  assertEquals(out.unknown, []);
+});

@@ -66,6 +66,7 @@ import {
   normalizeAiGridLocate,
   normalizeAiBandRead,
   normalizeAiRule,
+  normalizeAiRulesRead,
   extractAiContent,
   parseAiResponseText,
 } from "./normalize.ts";
@@ -242,6 +243,44 @@ function rulePrompt(): string {
   );
 }
 
+// Multi-rule words read (Nov 11, 2026, v133, mode: "rules"): the
+// pay-words box holds SEVERAL rules in one block of plain text, so
+// this read covers the whole description — the old "rule" mode's
+// one-shift-type schema could not represent it, and the app's
+// deterministic parser stayed the only reader that could build
+// code definitions at all (its subject-matching failures then had
+// no rescue: live, "1st call weekday=$4,800" read back as unknown
+// while a person reads it trivially). The model reads like a
+// person, and every value carries the exact substring it came
+// from so the app can verify the read against the user's own
+// words before trusting it.
+function rulesPrompt(codesText: string, cardText: string): string {
+  return (
+    "A CRNA describes how ONE facility pays, in their own words, in one block of text. The text usually contains SEVERAL pay rules — read ALL of it, in whatever order or style it is written, including fragments and abbreviations. " +
+    "Return ONLY a JSON object with these keys: " +
+    "hourly_rate, paid_hours_8, paid_hours_by_length, first_call_hourly_rate, call_bonus, weekend, codes, unknown, clarifying_question. " +
+    "hourly_rate, paid_hours_8, first_call_hourly_rate and call_bonus are each either null or {value, quote}: value is the number, quote is the EXACT substring of the user's text the number came from, copied character for character. " +
+    "hourly_rate is the base hourly pay for day shifts. paid_hours_8 is how many hours an 8-hour day shift is PAID for when the text says so (e.g. 'paid for 8.5 hours'). " +
+    "paid_hours_by_length is an array of {length, value:{value, quote}} for statements that tie paid hours to a shift LENGTH instead of a code (e.g. '10.5 hours paid for 10 hour shifts' -> length 10, value 10.5 with its quote). " +
+    "first_call_hourly_rate is an HOURLY rate for 1st call hours when the text states one (not a flat total). call_bonus is an overnight-call bonus amount added on top of day pay when the text states one. " +
+    "weekend is {days, stated, quote}: days is the list of day names the user says count as the weekend (e.g. ['Saturday','Sunday']), stated is true ONLY when the text actually says which days count as the weekend, quote is the exact substring saying so (null when not stated). " +
+    "codes is an array with ONE entry per distinct shift kind or code the text talks about: {code, label, type, hours, paid_hours, weekday_pay, weekend_pay, unpaid, quote}. " +
+    "code: if the statement is about one of the known codes listed below, use that code's spelling EXACTLY; otherwise use the name exactly as the user wrote it. " +
+    "label: what the user says the code is, in their words (e.g. 'post call day off', '10hour day shift'); null when they give none. " +
+    "type: one of '24-hour call', 'Second call', '8-hour day', '10-hour shift', '12-hour shift', or null when it is none of those. '1st call', 'Call 1' and 'first call' are the SAME thing (type '24-hour call'); '2nd call', 'Call 2' and 'second call' are the same (type 'Second call'). " +
+    "hours: the shift length in hours when the text states or plainly implies it (a '10hour day shift' is 10), else null. " +
+    "paid_hours: {value, quote} when THIS code is paid for a different number of hours than its length, else null. " +
+    "weekday_pay and weekend_pay: {value, quote} — the per-shift amount for that code on weekdays / on weekends. A word like 'weekday' or 'weekend' written next to a code belongs to that code's amounts as their SCOPE — it is never part of the code's name. When the text gives ONE amount for a code with no day split, put it in weekday_pay and leave weekend_pay null. " +
+    "unpaid: true only when the text says this code pays nothing ('no pay', 'post call day off', 'unpaid'). " +
+    "quote (on each code): the exact substring of the text the whole entry came from. " +
+    "unknown is an array of {name, quote}: every code-like name the text mentions but does NOT give enough information to price — never drop one silently, and never invent pay for it. " +
+    "clarifying_question: ONE short question only when something that changes pay is genuinely ambiguous, else null. " +
+    "CRITICAL RULES: every number must be copied from the user's text — never compute a total, never carry a number from one rule into another, never use the existing rate card's numbers (it is context only, and may be wrong). If the text does not state a value, use null. " +
+    (codesText ? "Known codes at this facility (use these spellings when the text is about them): " + codesText + ". " : "This facility has no known codes yet — use the user's own names. ") +
+    (cardText ? "The facility's existing rate card, for context only: " + cardText + "." : "")
+  );
+}
+
 // Portal-check mode prompt: the record page for one credentialing
 // portal. Only what the page states — the client treats the result as
 // a preview report, never as a verified pull, and saves nothing
@@ -306,7 +345,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
-    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rule" ? "rule" : body.mode === "portal" ? "portal" : "contract";
+    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rules" ? "rules" : body.mode === "rule" ? "rule" : body.mode === "portal" ? "portal" : "contract";
     const portalSource = typeof body.portalSource === "string" &&
       ["nbcrna", "aana", "licenses"].includes(body.portalSource)
       ? body.portalSource
@@ -321,6 +360,28 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // conversation so far. No images are accepted or required.
     let ruleText = "";
     let ruleHistory: { role: string; text: string }[] = [];
+    let rulesCodesText = "";
+    let rulesCardText = "";
+    if (mode === "rules") {
+      ruleText = typeof body.ruleText === "string" ? body.ruleText.trim().slice(0, 4000) : "";
+      if (!ruleText) return err("missing_rule_text", 400);
+      if (Array.isArray(body.ruleCodes)) {
+        const names = body.ruleCodes.slice(0, 40).map((c) => {
+          if (!c || typeof c !== "object") return "";
+          const o = c as Record<string, unknown>;
+          const code = typeof o.code === "string" ? o.code.trim().slice(0, 80) : "";
+          const ctype = typeof o.ctype === "string" ? o.ctype.trim().slice(0, 40) : "";
+          const hours = typeof o.hours === "number" || typeof o.hours === "string" ? String(o.hours).slice(0, 6) : "";
+          return code ? (code + (ctype ? " (" + ctype + (hours ? ", " + hours + "h" : "") + ")" : "")) : "";
+        }).filter(Boolean);
+        if (names.length) rulesCodesText = names.join("; ");
+      }
+      if (body.ruleCard && typeof body.ruleCard === "object" && !Array.isArray(body.ruleCard)) {
+        try { rulesCardText = JSON.stringify(body.ruleCard).slice(0, 1500); } catch { rulesCardText = ""; }
+      }
+      const facName = typeof body.facilityName === "string" ? body.facilityName.trim().slice(0, 80) : "";
+      if (facName) rulesCardText = ("Facility: " + facName + ". " + rulesCardText).trim();
+    }
     if (mode === "rule") {
       ruleText = typeof body.ruleText === "string" ? body.ruleText.trim().slice(0, 2000) : "";
       if (!ruleText) return err("missing_rule_text", 400);
@@ -333,7 +394,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }));
       }
     }
-    const parsed = mode === "rule" ? { images: [] as string[] } : imagesFromBody(body);
+    const parsed = mode === "rule" || mode === "rules" ? { images: [] as string[] } : imagesFromBody(body);
     if ("error" in parsed) return err(parsed.error, parsed.status);
 
     // The key lives only in the function's own environment. It is read
@@ -355,7 +416,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? (body.locate === true ? gridLocatePrompt() : body.band === true ? gridBandPrompt(scheduleName) : schedulePrompt(scheduleName)) : mode === "paystub" ? paystubPrompt() : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
+        text: mode === "schedule" ? (body.locate === true ? gridLocatePrompt() : body.band === true ? gridBandPrompt(scheduleName) : schedulePrompt(scheduleName)) : mode === "paystub" ? paystubPrompt() : mode === "rules" ? rulesPrompt(rulesCodesText, rulesCardText) + "\n\nThe user's description: " + ruleText : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -377,7 +438,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           model: mode === "schedule" ? (body.locate === true || body.band === true ? GRID_BAND_MODEL : SCHEDULE_MODEL) : MODEL,
           messages: [{ role: "user", content }],
           response_format: { type: "json_object" },
-          max_tokens: 2000,
+          max_tokens: mode === "rules" ? 4000 : 2000,
           // Transcription, not creation (Nov 6, 2026 reliability
           // pass): until now NO temperature was sent, so the API's
           // default (1.0) applied — and the same grid photo returned
@@ -483,6 +544,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         raw_text: typeof rawText === "string" ? rawText : "",
         model: MODEL,
       });
+    }
+    if (mode === "rules") {
+      const read = normalizeAiRulesRead(raw);
+      return json({ ok: true, mode: "rules", read, model: MODEL });
     }
     if (mode === "rule") {
       const rule = normalizeAiRule(raw);
