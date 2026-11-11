@@ -187,6 +187,6 @@ t('flow: single-photo grids try the band read before the full-photo double read'
 t('flow: band failure falls back — tryGridBandRead swallows errors to null',
   appSrc.includes('async function tryGridBandRead') && appSrc.includes('}catch(e){ return null }'));
 t('service worker cache bumped to v73',
-  fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v111'));
+  fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v112'));
 
 console.log(failures ? failures + ' FAILURES' : 'ALL PASS');

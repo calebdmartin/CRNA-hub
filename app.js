@@ -680,6 +680,37 @@ function repairShiftPaysForFacility(f){
       if(v!=null&&phNums.has(v)&&(hrF==null||v<hrF)){f[k]='';f.updatedAt=new Date().toISOString()}
     }
   }
+  // Residue paid-hours heal (Nov 10, 2026, v112): the same
+  // misread also lived one level down — the buggy words parse
+  // stamped the facility's paidHours8 onto NON-8-hour day
+  // codes' DEFINITIONS as per-code paidHours, and no pass ever
+  // looked at a definition's paidHours, so clarifiedRowPricing
+  // priced the code at hourly x the 8-hour figure ($2,125 on
+  // a 10-hour day) on every open, forever. The signature is
+  // the same exact one, one level down: a words-created
+  // (viaWords — the import approve saves through the same
+  // applyDescribedRules) non-8-hour day definition whose
+  // paidHours EQUALS the facility's paidHours8 and carries no
+  // own-statement marker (paidHoursOwn — set when the code's
+  // OWN statement stated the figure). Retracting exactly that
+  // lets the shifts below reprice through the generic path in
+  // this same pass. A code whose own words stated paid hours
+  // keeps them even when they happen to equal the facility
+  // figure (the marker is the difference); field-captured
+  // definitions are never words-created and are untouched;
+  // 8-hour definitions are the figure's rightful home and are
+  // untouched. Runs before the shift loop so the retraction
+  // prices in the same pass.
+  {
+    const fph=rateOrNull(f.paidHours8);
+    if(fph!=null)for(const d of Object.values(facilityCodeDefs(f)||{})){
+      if(!d||d.viaWords!==true||d.paidHoursOwn)continue;
+      const dph=rateOrNull(d.paidHours);if(dph==null||dph!==fph)continue;
+      const ct=String(d.canonicalType||'').trim()||canonicalTypeOf(d.label||'');
+      if(!ct||!/hour/.test(ct)||/call/i.test(ct)||/8-hour/.test(ct))continue;
+      delete d.paidHours;f.updatedAt=new Date().toISOString();
+    }
+  }
   for(const x of (db.shifts||[])){
     if(!x||!x.facility)continue;
     const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;
@@ -3345,7 +3376,36 @@ function describeParseLocal(text,fac,codes){
       // code at the 8-hour product ($250 x 8.5 = $2,125 on a
       // 10-hour day that states no paid hours of its own).
       const blkPh=blk?rateOrNull(blk.paidHours):null;
-      const newDef={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(blkPh!=null?blkPh:(ct==='8-hour day'?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):(existing?rateOrNull(existing.paidHours):null))):null};
+      // Inheriting the SAVED definition's paid hours for a
+      // non-8-hour code (Nov 10, 2026, v112): the saved figure
+      // is this code's own answer only when it is not the
+      // residue signature — a words-created definition whose
+      // paidHours EQUALS the facility's paidHours8, with no
+      // own-statement marker, is the v110 misread itself (the
+      // 8-hour figure stamped onto a code that never stated
+      // it), and inheriting it re-supplied the residue on
+      // every re-parse: the read-back showed it, and the save
+      // retraction (which fires only when the parse states no
+      // paid hours) never fired. A figure the code's own
+      // statement stated (paidHoursOwn) or one that differs
+      // from the facility figure is the code's own and is
+      // inherited as before; field-captured definitions are
+      // never words-created, so they inherit as before too.
+      const exPh=existing?rateOrNull(existing.paidHours):null;
+      const exResidue=!!(existing&&existing.viaWords&&!existing.paidHoursOwn&&eff.paidHours8!=null&&exPh!=null&&exPh===eff.paidHours8);
+      const inheritPh=exPh!=null&&!exResidue?exPh:null;
+      const newDef={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(blkPh!=null?blkPh:(ct==='8-hour day'?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):inheritPh)):null};
+      // Paid hours stated in THIS code's own statement are the
+      // code's own (marked, so no heal can mistake them for
+      // the facility figure's residue); an inherited own
+      // figure keeps its marker.
+      if(blkPh!=null)newDef.paidHoursOwn=true;
+      else if(newDef.paidHours!=null&&existing&&existing.paidHoursOwn)newDef.paidHoursOwn=true;
+      // A figure inherited from a definition that is NOT
+      // words-created is a field-captured answer for this
+      // code (the clarification fields) — also the code's own,
+      // however the save that preserves it gets stamped.
+      else if(newDef.paidHours!=null&&existing&&!existing.viaWords&&exPh!=null&&newDef.paidHours===exPh)newDef.paidHoursOwn=true;
       // Amounts stated for a code whose type has no facility
       // split fields (a night call, a flat day code) stay ON the
       // definition — they are this code's own clarified pay.
@@ -3440,7 +3500,7 @@ function applyDescribedRules(fac,parsed){
     const ex=fac.codeMap[key]||{};
     const merged={...ex,label:d.label||ex.label||code,hours:d.hours!=null&&String(d.hours)!==''?String(d.hours):(ex.hours||''),rulesConfirmed:true,viaWords:true};
     const ct=d.canonicalType||ex.canonicalType||'';if(ct)merged.canonicalType=ct;
-    if(d.paidHours!=null&&rateOrNull(d.paidHours)!=null)merged.paidHours=String(rateOrNull(d.paidHours));
+    if(d.paidHours!=null&&rateOrNull(d.paidHours)!=null){merged.paidHours=String(rateOrNull(d.paidHours));if(d.paidHoursOwn)merged.paidHoursOwn=true;else delete merged.paidHoursOwn}
     // A words-created definition whose newest confirmed words
     // state NO paid hours for the code keeps none (Nov 10, 2026,
     // v111): the buggy parse stamped the 8-hour figure onto a
@@ -3451,7 +3511,20 @@ function applyDescribedRules(fac,parsed){
     // definitions (the only ones a words parse can have poisoned);
     // field-captured definitions are untouched, and a code whose
     // own statement names paid hours always restates them above.
-    else if(ex.viaWords)delete merged.paidHours;
+    // (v112: the parse no longer re-inherits the residue into
+    // d.paidHours — see describeParseLocal — so this branch is
+    // what the live re-confirm actually reaches; the own-
+    // statement marker goes with the figure it marked.)
+    else if(ex.viaWords){delete merged.paidHours;delete merged.paidHoursOwn}
+    // A figure preserved from a definition that was NOT
+    // words-created is field-captured — the code's own answer.
+    // Mark it so, because the merge stamps viaWords on the
+    // definition as a whole (its label/meaning were just
+    // confirmed in words) and the residue heal keys on the
+    // FIGURE's provenance, not the definition's (Nov 10, 2026,
+    // v112 — without this, the repair pass inside this very
+    // save retracted a preserved field figure).
+    else if(!ex.viaWords&&rateOrNull(ex.paidHours)!=null)merged.paidHoursOwn=true;
     if(d.weekdayPay!=null&&rateOrNull(d.weekdayPay)!=null)merged.weekdayPay=String(rateOrNull(d.weekdayPay));
     if(d.weekendPay!=null&&rateOrNull(d.weekendPay)!=null)merged.weekendPay=String(rateOrNull(d.weekendPay));
     // The unpaid marker (Nov 10, 2026) persists like any other
@@ -3659,7 +3732,13 @@ function applyImportClarifyDraft(preview,target){
     // answer — approving the prompt confirms what was on screen,
     // so the question never nags. Call codes never carry it.
     const paidHours=dph!=null?dph:(existing&&rateOrNull(existing.paidHours)!=null?rateOrNull(existing.paidHours):(canonical&&!/call/i.test(canonical)?hours:null));
-    fac.codeMap[key]={label,hours:hours!=null?String(hours):'',...(canonical?{canonicalType:canonical}:{}),...(paidHours!=null?{paidHours:String(paidHours)}:{})};
+    // Provenance (Nov 10, 2026, v112): a per-code paid-hours
+    // figure the user TYPED into this clarification field is
+    // field-captured — marked, so words/heal passes that
+    // retract the words parse's residue can tell it apart from
+    // a stamped figure. A figure carried over untouched keeps
+    // whatever provenance it already had.
+    fac.codeMap[key]={label,hours:hours!=null?String(hours):'',...(canonical?{canonicalType:canonical}:{}),...(paidHours!=null?{paidHours:String(paidHours)}:{}),...(dph!=null?{paidHoursFrom:'field'}:(existing&&existing.paidHoursFrom==='field'&&paidHours!=null?{paidHoursFrom:'field'}:{})),...(existing&&existing.paidHoursOwn&&paidHours!=null&&dph==null?{paidHoursOwn:true}:{})};
     if(key!==c.code&&fac.codeMap[c.code])delete fac.codeMap[c.code];
     // The facility-level paid-hours for 8-hour days follows the
     // PAID hours answer when there is one (it used to migrate the
