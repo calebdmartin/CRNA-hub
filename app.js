@@ -1597,6 +1597,55 @@ let paystubCardFacId='',paystubCardOpenFac='';
 // starting a read from any surface clears the other bindings — and
 // a preview renders only on the surface that started it.
 let paystubImportCtx=null;
+// Where a finished stub read lands (Nov 11, 2026, v131): a read
+// started inside an import's pay-schedule section does NOT become
+// a second, stacked preview form under the section's own fields
+// (Caleb's live screenshots: the import form kept its prefill —
+// agency "Holzer", no amounts — while a separate stub form below
+// it held the stub's payer with frequency and period EMPTY, and
+// the import's Save reads only the section's draft, so the stub's
+// values could never reach it). ONE pay schedule = ONE form: the
+// read lands IN the section's form — stub-stated values fill the
+// draft (the payer wins for the agency, the facility stays
+// linked, the frequency arrived derived from the period, the
+// period dates ride along complete), the stub's gross/net appear
+// in that same form as this check's actual, and the import's Save
+// stores exactly ONE stub-backed schedule. Reads started from a
+// facility card or the general panel land in the shared preview
+// exactly as before.
+function landPaystubPreview(pv){
+  if(pv&&pv.importKind&&paystubImportCtx&&paystubImportCtx.kind===pv.importKind){
+    const kind=pv.importKind;
+    const p=kind==='cal'?calPreview:kind==='contract'?contractPreview:kind==='faccontract'?facilityContractPreview:schedulePreview;
+    if(p){
+      const d=p.paySchedDraft=p.paySchedDraft||{};
+      const setD=(k,v)=>{if(v!=null&&String(v).trim()!=='')d[k]=String(v)};
+      setD('agency',pv.agency);setD('facility',pv.facility);setD('frequency',pv.frequency);
+      setD('payDate',pv.payDate);setD('periodStart',pv.periodStart);setD('periodEnd',pv.periodEnd);
+      setD('gross',pv.gross);setD('net',pv.net);
+      p.paySchedStub={source:pv.source||'text-parse',fileName:pv.fileName||'',found:(pv.found||[]).slice(),agencyFromImport:!!pv.agencyFromImport,facilityFromImport:!!pv.facilityFromImport,stubAgency:String(pv.agency||'').trim()};
+      paystubPreview=null;
+      paystubStatus='Read from your pay stub — its values are in the pay-schedule form above. Check them, then approve the import to save this one schedule.';
+      return;
+    }
+  }
+  paystubPreview=pv;
+}
+// The one note under the import section's form after a stub read
+// (v131): where the values came from and how the schedule binds —
+// the same honesty the stub preview form used to carry, now on
+// the section itself.
+function paySchedStubNote(preview){
+  const d=(preview&&preview.paySchedDraft)||{};const stub=(preview&&preview.paySchedStub)||{};
+  const agency=String(d.agency||'').trim(),facility=String(d.facility||'').trim();
+  let bind='';
+  if(stub.agencyFromImport)bind=`This stub didn't name a payer, so the schedule is saved under ${agency||'the agency on this import'} — the agency on this import — and its paychecks come from your ${facility||'these'} shifts.`;
+  else if(agency&&facility&&paystubNameKey(agency)!==paystubNameKey(facility))bind=`This stub names ${agency} as the payer; the schedule is linked to ${facility}, so its paychecks are calculated from your ${facility} shifts.`;
+  else bind=`This pay schedule is for ${facility||agency}.`;
+  const amt=rateOrNull(d.gross)!=null?rateOrNull(d.gross):rateOrNull(d.net);
+  const pd=psValidISO(d.payDate);
+  return `Filled in from your pay stub${stub.fileName?` (${stub.fileName})`:''}. ${bind} Check the values above — saving this import saves this ONE pay schedule${amt!=null&&pd?`, and this check (${fmt(pd)}) counts as the actual ${currency(amt)} from the stub`:''}.`;
+}
 function paystubPreviewHTML(){
   if(paystubError)return `<p class="hint">${escapeHTML(paystubError)}</p>`;
   if(!paystubPreview)return '<p class="muted">No pay stub read yet. Upload a photo or PDF, or paste its text below, then check the preview — nothing is saved until you approve it.</p>';
@@ -3426,6 +3475,38 @@ function codeKeyBracket(m){
   return m;
 }
 function normalizeCodeKey(code){return String(code||'').replace(/\[[^\[\]]*\]/g,codeKeyBracket).replace(/\s+/g,' ').trim()}
+// ONE code identity (Nov 11, 2026, v131): the same code reaches the
+// app spelled many ways — the contract document's "HOLZ - PCDO",
+// the saved facility's "Holz PCDO", the calendar's "Holzer PCDO" —
+// and every surface must treat them as ONE code (the same tolerant
+// identity the shift dedupe uses for facility names: case,
+// punctuation and dash-vs-space variants all fold away). Before
+// this, the contract preview handed the pay-words reader no code
+// universe at all and identity comparisons were exact-string, so
+// a code statement in the user's words ("Holz PCDO=post call day
+// off=no pay") resolved on the facility card but not in the
+// preview, and a def saved under the document spelling could not
+// price a calendar-spelled shift.
+function codeIdentityKey(code){return normalizeCodeKey(String(code||'').toLowerCase()).replace(/[^a-z0-9*]+/g,' ').replace(/\s+/g,' ').trim()}
+// Dedupe key for a code WITHIN one facility's universe: the
+// identity above with a leading facility-prefix token sequence
+// (the facility's name or one of its aliases, e.g. "HOLZ -" /
+// "Holzer") stripped, so "HOLZ - PCDO" and "Holzer PCDO" collapse
+// to the same key while the task part — which is what makes codes
+// distinct — is untouched ("8" never merges with "G Main (8)").
+function codeStripKey(code,fac){
+  const idk=codeIdentityKey(code);if(!idk)return '';
+  const toks=idk.split(' ');
+  const prefixes=[];
+  if(fac){const nm=codeIdentityKey(fac.name);if(nm)prefixes.push(nm.split(' '));for(const a of facilityAliases(fac)){const ak=codeIdentityKey(a);if(ak)prefixes.push(ak.split(' '))}}
+  let i=0;
+  outer:while(i<toks.length-1){
+    let advanced=false;
+    for(const p of prefixes){if(p.length&&i+p.length<=toks.length-1&&p.every((tk,j)=>toks[i+j]===tk)){i+=p.length;advanced=true;continue outer}}
+    if(!advanced)break;
+  }
+  return toks.slice(i).join(' ');
+}
 function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;const defs=facilityCodeDefs(f);if(defs[k])return defs[k];const nk=normalizeCodeKey(k);if(nk){for(const key of Object.keys(defs)){if(normalizeCodeKey(key)===nk)return defs[key]}
   // Last resort (Nov 10, 2026): a trailing name-like bracket group
   // (the feed's assignee annotation, "[Martin]") is not part of a
@@ -3434,7 +3515,28 @@ function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;co
   // missed. Compare once more with that suffix dropped from both
   // sides; a bracket holding digits or symbols still distinguishes.
   const loose=s=>s.replace(/\s*\[[A-Za-z][A-Za-z\s,.'-]*\]$/,'').trim();
-  const lk=loose(nk);if(lk&&lk!==nk){for(const key of Object.keys(defs)){if(loose(normalizeCodeKey(key))===lk)return defs[key]}}}return null}
+  const lk=loose(nk);if(lk&&lk!==nk){for(const key of Object.keys(defs)){if(loose(normalizeCodeKey(key))===lk)return defs[key]}}}
+  // One identity (Nov 11, 2026, v131): the same code spelled the
+  // way another surface spells it — different case, dashes for
+  // spaces, the facility prefix present or absent — is the same
+  // code. The def saved from the contract preview ("HOLZ - PCDO")
+  // must answer a shift the calendar spelled "Holzer PCDO", and a
+  // bare "PCDO" must find it too: identity equality first, then a
+  // UNIQUE token-suffix match (the dropped head is the facility
+  // prefix). An ambiguous suffix matches nothing.
+  const ik=codeIdentityKey(k);
+  if(ik){
+    for(const key of Object.keys(defs)){if(codeIdentityKey(key)===ik)return defs[key]}
+    // The facility's own prefix spellings differ across surfaces
+    // (the document's "HOLZ", the calendar's "Holzer"): compare
+    // with the facility prefix stripped from BOTH sides.
+    const sk=codeStripKey(k,f);
+    if(sk&&sk!==ik){let sFound=null,sCount=0;for(const key of Object.keys(defs)){if(codeStripKey(key,f)===sk){sFound=defs[key];sCount++}}if(sCount===1)return sFound}
+    const qt=ik.split(' ');let found=null,count=0;
+    for(const key of Object.keys(defs)){const dt=codeIdentityKey(key).split(' ');if(dt.length>qt.length&&dt.length-qt.length<=3&&dt.slice(dt.length-qt.length).join(' ')===ik){found=defs[key];count++}}
+    if(count===1)return found;
+  }
+  return null}
 // The canonical shift type a free-text label names, when it names
 // one the facility pay rule prices directly ("Second call",
 // "24-hour call", "8-hour day", ...). Generic patterns only — a
@@ -4262,9 +4364,9 @@ function describeParseLocal(text,fac,codes){
   // on the schedule being imported, so each is asked about).
   const codeList=(codes||[]).slice();
   if(fac){
-    const callerKeys=new Set(codeList.map(c=>normalizeCodeKey(c&&c.code)));
+    const callerKeys=new Set(codeList.map(c=>codeStripKey(c&&c.code,fac)));
     for(const e of facilityDescribeCodes(fac)){
-      const k=normalizeCodeKey(e.code);
+      const k=codeStripKey(e.code,fac);
       if(!k||callerKeys.has(k))continue;
       callerKeys.add(k);codeList.push(e);
     }
@@ -4924,11 +5026,14 @@ function facilityDescribeCodes(fac){
   // verbatim (asterisks and all), deduped against the defined
   // keys by the same tolerant key the def lookup uses.
   if(fac&&fac.id){
-    const seen=new Set(out.map(c=>normalizeCodeKey(c.code)));
+    // One identity (Nov 11, 2026, v131): dedupe on the strip key,
+    // so a def saved as "HOLZ - PCDO" and a shift coded "Holzer
+    // PCDO" are ONE universe entry, not two.
+    const seen=new Set(out.map(c=>codeStripKey(c.code,fac)));
     let shifts=[];try{shifts=db.shifts||[]}catch(e){}
     for(const x of shifts){
       const code=String((x&&x.code)||'').trim();if(!code)continue;
-      const k=normalizeCodeKey(code);if(!k||seen.has(k))continue;
+      const k=codeStripKey(code,fac);if(!k||seen.has(k))continue;
       let owner=null;try{owner=facilityForRecord(x)}catch(e){}
       if(!owner||owner.id!==fac.id)continue;
       seen.add(k);
@@ -5150,7 +5255,7 @@ function paySchedFieldsGridHTML(o){
   const val=(k,fb)=>escapeHTML(d[k]!=null&&String(d[k])!==''?d[k]:(fb||''));
   const F=(field,label,inner)=>`<div class="field"><label for="${o.prefix}_${field}">${label}</label>${inner}</div>`;
   const attrs=(field)=>`class="${o.cls}" ${o.dataFor(field)}`;
-  return `<div class="form-grid">${F('agency','Agency / employer',`<input id="${o.prefix}_agency" ${attrs('agency')} type="text" value="${val('agency',o.agency)}">`)}${F('facility','Facility (if it applies)',`<input id="${o.prefix}_facility" ${attrs('facility')} type="text" value="${val('facility',o.facility)}">`)}${F('frequency','Pay frequency',`<select id="${o.prefix}_frequency" ${attrs('frequency')}><option value="">— choose —</option>${PAY_FREQUENCIES.map(fr=>`<option value="${fr}" ${d.frequency===fr?'selected':''}>${PAY_FREQUENCY_LABELS[fr]}</option>`).join('')}</select>`)}${F('payDate','A pay date you know (one real payday)',`<input id="${o.prefix}_payDate" ${attrs('payDate')} type="date" value="${val('payDate','')}">`)}${F('periodStart','Pay period start (for that payday, if you know it)',`<input id="${o.prefix}_periodStart" ${attrs('periodStart')} type="date" value="${val('periodStart','')}">`)}${F('periodEnd','Pay period end (for that payday, if you know it)',`<input id="${o.prefix}_periodEnd" ${attrs('periodEnd')} type="date" value="${val('periodEnd','')}">`)}</div><p class="muted">${PAYSCHED_PERIOD_HINT}</p>`;
+  return `<div class="form-grid">${F('agency','Agency / employer',`<input id="${o.prefix}_agency" ${attrs('agency')} type="text" value="${val('agency',o.agency)}">`)}${F('facility','Facility (if it applies)',`<input id="${o.prefix}_facility" ${attrs('facility')} type="text" value="${val('facility',o.facility)}">`)}${F('frequency','Pay frequency',`<select id="${o.prefix}_frequency" ${attrs('frequency')}><option value="">— choose —</option>${PAY_FREQUENCIES.map(fr=>`<option value="${fr}" ${d.frequency===fr?'selected':''}>${PAY_FREQUENCY_LABELS[fr]}</option>`).join('')}</select>`)}${F('payDate','A pay date you know (one real payday)',`<input id="${o.prefix}_payDate" ${attrs('payDate')} type="date" value="${val('payDate','')}">`)}${F('periodStart','Pay period start (for that payday, if you know it)',`<input id="${o.prefix}_periodStart" ${attrs('periodStart')} type="date" value="${val('periodStart','')}">`)}${F('periodEnd','Pay period end (for that payday, if you know it)',`<input id="${o.prefix}_periodEnd" ${attrs('periodEnd')} type="date" value="${val('periodEnd','')}">`)}${o.stubAmounts?`${F('gross','Gross on this stub ($)',`<input id="${o.prefix}_gross" ${attrs('gross')} type="number" min="0" step="0.01" value="${val('gross','')}" placeholder="Not stated">`)}${F('net','Net on this stub ($)',`<input id="${o.prefix}_net" ${attrs('net')} type="number" min="0" step="0.01" value="${val('net','')}" placeholder="Not stated">`)}`:''}</div><p class="muted">${PAYSCHED_PERIOD_HINT}</p>`;
 }
 function importPaySchedHTML(preview,kind){
   if(!preview)return '';
@@ -5165,7 +5270,7 @@ function importPaySchedHTML(preview,kind){
   const ctx=importPaySchedTarget(preview,kind);if(!ctx)return '';
   const d=preview.paySchedDraft||{};
   const mine=paystubImportCtx&&paystubImportCtx.kind===kind;
-  return `<div class="item" style="display:block"><p><strong>Want paychecks for these shifts on your calendar?</strong></p>${paySchedIntroHTML(ctx.agency)}${paySchedFieldsGridHTML({prefix:'impPaySched_'+kind,cls:'impPaySched',dataFor:(f)=>`data-kind="${kind}" data-field="${f}"`,draft:d,agency:ctx.agency,facility:ctx.facility})}<p class="muted">— or upload a pay stub and we'll fill this in from it —</p>${paystubUploadFormHTML(`class="paystubImportForm" data-kind="${kind}"`,'f_paystubImpFile_'+kind,'f_paystubImpText_'+kind)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.importKind===kind?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}<div class="toolbar"><button type="button" class="secondary" data-action="import-paysched-skip" data-id="${kind}">Skip — no pay schedule</button></div></div>`;
+  return `<div class="item" style="display:block"><p><strong>Want paychecks for these shifts on your calendar?</strong></p>${paySchedIntroHTML(ctx.agency)}${paySchedFieldsGridHTML({prefix:'impPaySched_'+kind,cls:'impPaySched',dataFor:(f)=>`data-kind="${kind}" data-field="${f}"`,draft:d,agency:ctx.agency,facility:ctx.facility,stubAmounts:!!preview.paySchedStub})}${preview.paySchedStub?`<p class="hint">${escapeHTML(paySchedStubNote(preview))}</p>`:''}<p class="muted">— or upload a pay stub and we'll fill this in from it —</p>${paystubUploadFormHTML(`class="paystubImportForm" data-kind="${kind}"`,'f_paystubImpFile_'+kind,'f_paystubImpText_'+kind)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${mine&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}<div class="toolbar"><button type="button" class="secondary" data-action="import-paysched-skip" data-id="${kind}">Skip — no pay schedule</button></div></div>`;
 }
 function applyImportPaySched(preview,kind){
   // Stores the preview's pay-schedule draft as a normal pay schedule
@@ -5189,8 +5294,16 @@ function applyImportPaySched(preview,kind){
   if(paySchedAgencyKey(agency)===paySchedAgencyKey(ctx.agency)&&paySchedCoveredCtx(ctx))return null;
   const frequency=normalizePayFrequency(d.frequency);const payDate=psValidISO(d.payDate);
   if(!frequency||!payDate)return null;
-  const rec={id:id(),agency,facility:String(d.facility||ctx.facility||'').trim(),frequency,periodStart:psValidISO(d.periodStart),periodEnd:psValidISO(d.periodEnd),payDate,gross:'',net:'',source:'import',fileName:'',updatedAt:new Date().toISOString()};
+  // A stub read in this section (v131) filled the SAME draft: the
+  // record then carries the stub's gross/net as this check's
+  // actual and the stub read's provenance, so exactly ONE
+  // stub-backed schedule saves — the user's edits in the one form
+  // (amounts included) are the values that land.
+  const stub=preview.paySchedStub||null;
+  const amt=v=>{const n=rateOrNull(v);return n==null?'':String(n)};
+  const rec={id:id(),agency,facility:String(d.facility||ctx.facility||'').trim(),frequency,periodStart:psValidISO(d.periodStart),periodEnd:psValidISO(d.periodEnd),payDate,gross:stub?amt(d.gross):'',net:stub?amt(d.net):'',source:stub?(stub.source||'text-parse'):'import',fileName:stub?(stub.fileName||''):'',updatedAt:new Date().toISOString()};
   db.payStubs=db.payStubs||[];db.payStubs.push(rec);
+  if(stub){paystubImportCtx=null;paystubStatus=''}
   try{if(typeof cloudSaveKind==='function')cloudSaveKind('payStubs',rec.id)}catch(_){}
   return rec;
 }
@@ -5380,9 +5493,51 @@ function contractUnattachedAmounts(text,rates){
 // preview entry: its extracted rates at top level (the shape
 // describePrefillText / describeParseLocal / the read-back
 // summary all expect from a facility record).
+// The saved facility a preview entry resolves to, by name or by
+// any of its short names — the same resolution the approve path
+// uses (Nov 11, 2026, v131).
+function facPreviewSaved(f){
+  if(!f)return null;
+  const byName=facilityByNameOrAlias(String(f.name||'').trim());
+  if(byName)return byName;
+  const byAlias=String(f.aliases||'').split(',').map(a=>facilityByNameOrAlias(a.trim())).find(Boolean);
+  return byAlias||null;
+}
+// The code universe for a preview entry's words reader (v131):
+// the codes the CONTRACT names, plus — when the entry resolves
+// to a saved facility — that facility's own codes, deduped on the
+// one strip-key identity so the same code spelled two ways
+// ("HOLZ - PCDO" in the document, "Holzer PCDO" on a shift) is
+// one universe entry. Before v131 the preview passed NO codes
+// and the reader's per-code machinery never ran on this surface.
+function facPreviewCodes(f){
+  const out=[];const seen=new Set();
+  const saved=facPreviewSaved(f);
+  const ctx={name:(f&&f.name)||(saved&&saved.name)||'',aliases:(f&&f.aliases)||''};
+  if(saved)ctx.aliases=[...new Set([...facilityAliases(saved),...String(ctx.aliases).split(',').map(s=>s.trim()).filter(Boolean)])].join(', ');
+  const push=e=>{if(!e||!String(e.code||'').trim())return;const k=codeStripKey(e.code,ctx);if(!k||seen.has(k))return;seen.add(k);out.push(e)};
+  for(const e of (f&&f.codes)||[])push(e);
+  if(saved)for(const e of facilityDescribeCodes(saved))push(e);
+  return out;
+}
 function facPreviewOverlay(f){
+  // The overlay the preview's words reader sees (v131): when the
+  // entry resolves to a saved facility, the saved facility is the
+  // base — its definitions, its weekend rule, its rates — with
+  // the contract's extracted rates laid on top (a blank extracted
+  // rate never wipes a saved one). With no saved facility the
+  // overlay is the entry alone, exactly as before.
+  const saved=facPreviewSaved(f);
   const o={name:(f&&f.name)||'',aliases:(f&&f.aliases)||'',codeMap:{}};
-  for(const k of FACILITY_RATE_KEYS)o[k]=(f&&f.rates&&f.rates[k]!=null)?String(f.rates[k]):'';
+  if(saved){
+    o.id=saved.id;o.codeMap=facilityCodeDefs(saved);
+    if(saved.weekendDays)o.weekendDays=saved.weekendDays.slice();
+    if(saved.weekendDaysSource)o.weekendDaysSource=saved.weekendDaysSource;
+    const al=[...facilityAliases(saved)];for(const a of String((f&&f.aliases)||'').split(',').map(s=>s.trim()).filter(Boolean))if(!al.includes(a))al.push(a);
+    o.aliases=al.join(', ');
+    for(const k of FACILITY_RATE_KEYS){const sv=rateOrNull(saved[k]);if(sv!=null)o[k]=String(sv)}
+  }
+  for(const k of FACILITY_RATE_KEYS)o[k]=(f&&f.rates&&f.rates[k]!=null&&String(f.rates[k])!=='')?String(f.rates[k]):(o[k]!=null?o[k]:'');
   return o;
 }
 function facilityContractPreviewHTML(){
@@ -5409,7 +5564,7 @@ function facilityContractPreviewHTML(){
     <div class="field"><label for="f_facPrev_${i}_aliases">Short names / abbreviations</label><input id="f_facPrev_${i}_aliases" class="facContractEdit" data-i="${i}" data-field="aliases" type="text" value="${escapeHTML(f.aliases||'')}" placeholder="e.g. RGH"></div>
     <div class="field"><label for="f_facPrev_${i}_address">Address</label><input id="f_facPrev_${i}_address" class="facContractEdit" data-i="${i}" data-field="address" type="text" value="${escapeHTML(f.address||'')}" placeholder="Not stated in contract"></div>
     </div>
-    ${describeRulesHTML('imp:facprev:'+i,{facName:String(f.name||'').trim(),fac:facPreviewOverlay(f),codes:[],heading:String(f.name||'').trim()?('Pay rules at '+String(f.name).trim()+' — in your words'):'Pay rules — in your words',prefill:contractRatesProse(f)})}
+    ${describeRulesHTML('imp:facprev:'+i,{facName:String(f.name||'').trim(),fac:facPreviewOverlay(f),codes:facPreviewCodes(f),heading:String(f.name||'').trim()?('Pay rules at '+String(f.name).trim()+' — in your words'):'Pay rules — in your words',prefill:contractRatesProse(f)})}
     ${unLine}${unreadableRatesWarningHTML(f.unreadable||[])}
     ${smallBits.length?`<p class="muted">${smallBits.join(' ')}</p>`:''}</div>`;
   });
@@ -8250,6 +8405,41 @@ function contractExtractAddress(text,facilityName){
   if(lab&&street.test(lab[1]))return lab[1].replace(/\s+/g,' ').trim();
   return '';
 }
+// The codes a contract document itself names (Nov 11, 2026,
+// v131): the shift listing's task names, in the document's own
+// spelling ("HOLZ - G Main (8)", "HOLZ - PCDO"). They ride along
+// on every preview facility entry, because the preview's
+// pay-words reader needs a code UNIVERSE: without one, its
+// per-code machinery — statement blocks, the unpaid classifier,
+// per-code read-back — never runs on this surface, and a code
+// whose only expression is a code statement in the user's words
+// ("Holz PCDO=post call day off=no pay") falls to the unknown
+// list even though the card path resolves it from the saved
+// facility's codeMap. A line counts as a listing line when it
+// carries a date or classifies as a shift; rate prose (a $ on
+// the line) never contributes codes.
+function contractDocumentCodes(text){
+  const out=[];const seen=new Set();
+  for(const rawLine of String(text||'').split(/\r?\n/)){
+    const line=rawLine.trim();
+    if(!line||line.length>160)continue;
+    if(line.includes('$'))continue;
+    if(!contractDateList(line,new Date().getFullYear()).length&&!contractShiftType(line))continue;
+    const m=line.match(/\b([A-Z][A-Z0-9]{1,5})\s+-\s+([A-Za-z][A-Za-z0-9 ()/&.'-]{1,30})/);
+    if(!m)continue;
+    const task=m[2].replace(/\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b.*$/i,'').replace(/\s+\d{1,2}[:/]\d{2}.*$/,'').replace(/[\s\-–—,;:|]+$/,'').trim();
+    if(!task||task.split(/\s+/).length>5)continue;
+    const code=(m[1]+' - '+task).replace(/\s+/g,' ').trim();
+    const k=codeIdentityKey(code);
+    if(!k||seen.has(k))continue;
+    seen.add(k);
+    const ctype=canonicalTypeOf(code);
+    const hm=/^(\d+)-hour/.exec(ctype||'');
+    out.push({code,ctype,hours:hm?hm[1]:''});
+    if(out.length>=30)break;
+  }
+  return out;
+}
 function parseFacilityContract(text,fileName){
   const clean=String(text||'').replace(/^\uFEFF/,'').replace(/--- Page \d+: [^\n]* ---/g,' ');
   const rates=contractExtractRates(clean);
@@ -8296,6 +8486,10 @@ function parseFacilityContract(text,fileName){
   // for, never silently dropped.
   const unattached=contractUnattachedAmounts(clean,rates);
   for(const f of facilities)f.unattached=unattached.slice();
+  // The codes the document names ride along the same way (v131):
+  // the preview's words reader gets its universe from them.
+  const docCodes=contractDocumentCodes(clean);
+  for(const f of facilities)f.codes=docCodes.map(c=>({...c}));
   return {contract,facilities,shiftCount:(parsed.rows||[]).length,isPhoto:false};
 }
 function icsAddDaysStr(d,n){const t=new Date(d+'T12:00:00Z');t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10)}
@@ -8646,7 +8840,7 @@ function applyAiToPaystubPreview(data,fileName){
   if(rateOrNull(parsed.net)!=null)parsed.found.push('Net pay');
   if(!parsed.frequency&&parsed.periodStart&&parsed.periodEnd)parsed.frequency=paystubFrequencyFromPeriod(parsed.periodStart,parsed.periodEnd);
   if(!parsed.agency&&!parsed.payDate&&!parsed.gross&&!parsed.net)return false;
-  paystubPreview=paystubPreviewFromParsed(parsed,fileName,'AI reading',true);
+  landPaystubPreview(paystubPreviewFromParsed(parsed,fileName,'AI reading',true));
   return true;
 }
 async function readPaystubWithAI(presetFiles){
@@ -8685,8 +8879,9 @@ async function readPaystubOnDevice(note){
     if(!text.trim()){paystubError='We couldn’t read any text from those photos. Try clearer, well-lit photos, paste the stub text, or add the schedule manually. Nothing was saved.';paystubStatus='';render();return}
     const parsed=parsePaystubText(text);
     if(!parsed.agency&&!parsed.payDate&&!parsed.gross&&!parsed.net){paystubError='We read the photos on this device but found no employer, pay date, or pay amount. Paste the stub text, or add the schedule manually. Nothing was saved.';paystubStatus='';render();return}
-    paystubPreview=paystubPreviewFromParsed(parsed,images.map(f=>f.name).join(', '),'Read on this device',false);
-    paystubPreview.source='device-ocr';
+    const pvDev=paystubPreviewFromParsed(parsed,images.map(f=>f.name).join(', '),'Read on this device',false);
+    pvDev.source='device-ocr';
+    landPaystubPreview(pvDev);
     paystubStatus=note||'Read on this device — check it carefully.';paystubError='';render();
   }catch(err){paystubError='On-device reading failed: '+err.message+' Nothing was saved.';paystubStatus='';paystubPreview=null;render()}
   finally{paystubBusy=false}
@@ -8738,7 +8933,7 @@ async function runPaystubRead(files,pastedText){
     if(!text.trim()){paystubError='Nothing to read: choose a pay stub photo or PDF, or paste the stub text first. Nothing was saved.';render();return}
     const parsed=parsePaystubText(text);
     if(!parsed.agency&&!parsed.payDate&&!parsed.gross&&!parsed.net){paystubError='No pay-stub fields were found in this text (no employer, pay date, or pay amount). Check the text, or upload a photo and use AI reading. Nothing was saved.';render();return}
-    paystubPreview=paystubPreviewFromParsed(parsed,fileName,'Pasted text / text-layer PDF — deterministic parsing, no AI model read this document',false);
+    landPaystubPreview(paystubPreviewFromParsed(parsed,fileName,'Pasted text / text-layer PDF — deterministic parsing, no AI model read this document',false));
     render();
   }catch(err){paystubError='Could not read this file: '+err.message+' Nothing was saved.';paystubPreview=null;render()}
 }

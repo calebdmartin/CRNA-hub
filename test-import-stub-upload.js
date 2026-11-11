@@ -8,13 +8,12 @@
 // as the facility card and the general panel (one renderer —
 // paystubUploadFormHTML — same labels, same layout, same button),
 // running the SAME pipeline (runPaystubRead →
-// paystubPreviewFromParsed → approvePaystub), bound to the import:
-// the stub's named payer wins for the agency, the schedule links to
-// the import's facility, and a stub naming no payer defaults to the
-// section's agency — stated in the preview. Approving the stub
-// stamps the preview (paySchedStubSaved): the section shows the
-// schedule as on file, applyImportPaySched never double-saves, and
-// the import's approve completes normally.
+// paystubPreviewFromParsed), bound to the import: the stub's named
+// payer wins for the agency, the schedule links to the import's
+// facility, and a stub naming no payer defaults to the section's
+// agency — stated in the section. (v131: the read lands in the
+// section's own form — see the update note below — and the
+// import's approve saves the one schedule from it.)
 //
 // Convergence pinned here too (Caleb's rule the same day: "anywhere
 // we have redundancies they should all look and feel the same"):
@@ -23,6 +22,22 @@
 // pay-schedule fields block renders one shared grid — identical
 // label sequence and helper copy in the import section and on the
 // facility card.
+//
+// v131 UPDATE (Nov 11, 2026, disclosed behavior change): the flow
+// this file originally pinned — read → separate stub preview →
+// approvePaystub → paySchedStubSaved stamp — stacked TWO data
+// forms in the import preview (Caleb's live screenshots: the
+// section's own fields kept their prefill while a second form
+// below held the stub's payer with frequency and period empty,
+// and the import's Save never read that form). The import-context
+// flow is now: the read lands IN the section's one form (draft
+// filled from the stub, gross/net as this check's actual, binding
+// stated in the section's note), and the import's approve saves
+// exactly ONE stub-backed schedule from that draft. The pins
+// below assert that flow; the END-STATE pins (one schedule,
+// Nov 10 actual $12,757.50, Nov 24 $27,075, headline $39,832.50)
+// are unchanged. The full v131 pin set lives in
+// test-v131-preview-surfaces.js.
 // Run: node test-import-stub-upload.js
 const fs = require('fs');
 const path = require('path');
@@ -125,25 +140,20 @@ function labelSeq(html) { return [...html.matchAll(/<label for="[^"]*">([^<]+)<\
   t('conv: the period helper line now appears on BOTH surfaces', importHTML.includes('The period dates anchor') && cardSchedHTML.includes('The period dates anchor'));
   t('conv: one shared intro sentence on both surfaces', importHTML.includes('Tell us how HOLZ pays you') && cardSchedHTML.includes('Tell us how CAMC pays you') && !cardSchedHTML.includes('These shifts have no pay schedule yet'));
 
-  // ---------- (a) Caleb's flow: Premier stub from the QGenda section ----------
+  // ---------- (a) Caleb's flow: Premier stub from the QGenda section (v131: one form) ----------
   seedQgenda();
   const secA = run(`importPaySchedHTML(schedulePreview,'sched')`);
   t('(a) section renders with fields AND the stub upload', secA.includes('Want paychecks for these shifts on your calendar?') && secA.includes('paystubImportForm') && secA.includes('Skip — no pay schedule'));
   await readStubFromSection('sched', PREMIER_TEXT);
-  const pvA = run(`({kind:paystubPreview&&paystubPreview.importKind,agency:paystubPreview&&paystubPreview.agency,facility:paystubPreview&&paystubPreview.facility,facFrom:!!(paystubPreview&&paystubPreview.facilityFromImport),agencyFrom:!!(paystubPreview&&paystubPreview.agencyFromImport)})`);
-  t('(a) preview bound to the import; stub payer wins, facility from the import', pvA.kind === 'sched' && pvA.agency === 'Premier Anesthesia Group, PC' && pvA.facility === 'HOLZ' && pvA.facFrom === true && pvA.agencyFrom === false, JSON.stringify(pvA));
-  const pvHTMLA = run(`paystubPreviewHTML()`);
-  t('(a) preview states the binding plainly', pvHTMLA.includes('Uploaded with this import') && pvHTMLA.includes('Premier Anesthesia Group, PC as the payer') && pvHTMLA.includes('linked to HOLZ'), pvHTMLA.slice(0, 300));
-  t('(a) the general panel points at the import preview instead of duplicating it', run(`paystubPanelPreviewHTML()`).includes('waiting in the import preview'));
-  t('(a) while the preview waits, the section still shows the fields (nothing saved yet)', run(`importPaySchedHTML(schedulePreview,'sched')`).includes('impPaySched_sched_agency'));
-  alerts.length = 0;
-  run(`approvePaystub()`);
-  t('(a) stub approval stamps the import preview', run(`!!schedulePreview.paySchedStubSaved`) === true && run(`schedulePreview.paySchedStubSaved.agency`) === 'Premier Anesthesia Group, PC');
-  t('(a) exactly one schedule saved, linked to HOLZ', run(`db.payStubs.length`) === 1 && run(`db.payStubs[0].agency`) === 'Premier Anesthesia Group, PC' && run(`db.payStubs[0].facility`) === 'HOLZ');
+  t('(a) v131: NO separate stub preview — the read landed in the section\'s one form', run(`paystubPreview`) === null);
+  const draftA = run(`schedulePreview.paySchedDraft`);
+  t('(a) the form itself holds the stub: payer wins, facility linked, frequency + FULL period + amounts',
+    !!draftA && draftA.agency === 'Premier Anesthesia Group, PC' && draftA.facility === 'HOLZ' && draftA.frequency === 'biweekly' && draftA.payDate === '2026-11-10' && draftA.periodStart === '2026-10-19' && draftA.periodEnd === '2026-11-01' && String(draftA.gross) === '12757.5', JSON.stringify(draftA));
   const secA2 = run(`importPaySchedHTML(schedulePreview,'sched')`);
-  t('(a) section now shows the schedule as ON FILE (no second ask)', secA2.includes('Pay schedule on file for these shifts') && secA2.includes('Premier Anesthesia Group, PC') && !secA2.includes('paystubImportForm'), secA2.slice(0, 200));
+  t('(a) the section renders exactly ONE form and states the binding in its note', !secA2.includes('f_payPrev_') && secA2.includes('Premier Anesthesia Group, PC as the payer') && secA2.includes('linked to HOLZ') && secA2.includes('Gross on this stub'), secA2.slice(0, 200));
   run(`approveScheduleImport()`);
-  t('(a) import approve completes; still exactly ONE schedule (no double-save)', run(`db.payStubs.length`) === 1 && run(`db.shifts.length`) === 17);
+  t('(a) import approve completes; exactly ONE stub-backed schedule saved (no double-save)',
+    run(`db.payStubs.length`) === 1 && run(`db.shifts.length`) === 17 && run(`db.payStubs[0].agency`) === 'Premier Anesthesia Group, PC' && run(`db.payStubs[0].facility`) === 'HOLZ' && run(`db.payStubs[0].source`) === 'text-parse' && run(`db.payStubs[0].gross`) === '12757.5', JSON.stringify(run(`db.payStubs.map(s => ({ a: s.agency, src: s.source }))`)));
   const occA = occNov();
   t('(a) Nov 10 is the stub actual only — $12,757.50', occA.find(o => o.date === '2026-11-10').total === 12757.5 && occA.find(o => o.date === '2026-11-10').isActual === true);
   t('(a) Nov 24 estimate is $27,075 (8.5-paid-hour card)', occA.find(o => o.date === '2026-11-24').total === 27075, JSON.stringify(occA));
@@ -156,26 +166,30 @@ function labelSeq(html) { return [...html.matchAll(/<label for="[^"]*">([^<]+)<\
   const secB = run(`importPaySchedHTML(schedulePreview,'sched')`);
   t('(b) schedule-upload preview renders the same section with the upload', secB.includes('Want paychecks for these shifts on your calendar?') && secB.includes('paystubImportForm'));
   await readStubFromSection('sched', PREMIER_TEXT);
-  run(`approvePaystub()`);
-  t('(b) stub binds to this import too (facility HOLZ)', run(`db.payStubs.length`) === 1 && run(`db.payStubs[0].facility`) === 'HOLZ');
+  t('(b) v131: the read landed in this import\'s form too (no separate preview)', run(`paystubPreview`) === null && run(`schedulePreview.paySchedDraft.agency`) === 'Premier Anesthesia Group, PC');
   run(`approveScheduleImport()`);
-  t('(b) import completes with one schedule; period prices (2125+3000+4200=9325 across Nov 2–8)', run(`db.payStubs.length`) === 1 && run(`db.shifts.length`) === 3 && occNov().find(o => o.date === '2026-11-24') !== undefined);
+  t('(b) import completes with one stub-backed schedule (facility HOLZ); period prices (2125+3000+4200=9325 across Nov 2–8)',
+    run(`db.payStubs.length`) === 1 && run(`db.payStubs[0].facility`) === 'HOLZ' && run(`db.shifts.length`) === 3 && occNov().find(o => o.date === '2026-11-24').total === 9325, JSON.stringify(occNov()));
 
   // ---------- (e) no-payer stub: agency defaults to the section's ----------
   seedQgenda();
   await readStubFromSection('sched', NOPAYER_TEXT);
-  const pvE = run(`({agency:paystubPreview&&paystubPreview.agency,agencyFrom:!!(paystubPreview&&paystubPreview.agencyFromImport)})`);
-  t('(e) no payer named: agency defaults to the section agency', pvE.agency === 'HOLZ' && pvE.agencyFrom === true, JSON.stringify(pvE));
-  const pvHTMLE = run(`paystubPreviewHTML()`);
-  t('(e) preview says so', pvHTMLE.includes('Uploaded with this import') && pvHTMLE.includes("didn't name a payer") && pvHTMLE.includes('saved under HOLZ'), pvHTMLE.slice(0, 300));
+  t('(e) no payer named: the form\'s agency defaults to the section agency', run(`schedulePreview.paySchedDraft.agency`) === 'HOLZ' && run(`!!schedulePreview.paySchedStub`) === true && run(`schedulePreview.paySchedStub.agencyFromImport`) === true, JSON.stringify(run(`schedulePreview.paySchedDraft`)));
+  const secE = run(`importPaySchedHTML(schedulePreview,'sched')`);
+  t('(e) the section note says so', secE.includes('name a payer') && secE.includes('saved under HOLZ'), secE.slice(secE.indexOf('pay stub'), secE.indexOf('pay stub') + 300));
 
-  // ---------- Abandoned preview: manual fields still work ----------
+  // ---------- Edited after a stub read: the form's values win ----------
+  // v131: there is no separate preview to discard — the read IS
+  // form content, so the "abandon" of the old flow is now simply
+  // editing every field by hand (amounts cleared included). The
+  // saved record takes the edited values; only the provenance
+  // remembers a stub filled the form first.
   seedQgenda();
   await readStubFromSection('sched', PREMIER_TEXT);
-  run(`paystubPreview=null;paystubError='';paystubStatus='';paystubImportCtx=null;`); // the discard action's state reset
-  run(`schedulePreview.paySchedDraft={agency:'Holzer',facility:'Holzer',frequency:'biweekly',payDate:'2026-11-10',periodStart:'2026-10-19',periodEnd:'2026-11-01'};`);
+  run(`schedulePreview.paySchedDraft={agency:'Holzer',facility:'Holzer',frequency:'biweekly',payDate:'2026-11-10',periodStart:'2026-10-19',periodEnd:'2026-11-01',gross:'',net:''};`);
   run(`approveScheduleImport()`);
-  t('abandon: manual fields save exactly one import schedule, no stub record', run(`db.payStubs.length`) === 1 && run(`db.payStubs[0].source`) === 'import' && run(`db.payStubs[0].agency`) === 'Holzer', JSON.stringify(run(`db.payStubs.map(s=>({a:s.agency,src:s.source}))`)));
+  t('edited: the form\'s values save exactly one schedule — edited agency, amounts cleared (no stub actual)',
+    run(`db.payStubs.length`) === 1 && run(`db.payStubs[0].agency`) === 'Holzer' && run(`db.payStubs[0].gross`) === '' && !occNov().some(o => o.date === '2026-11-10' && o.isActual) && occNov().find(o => o.date === '2026-11-24').total === 27075, JSON.stringify(run(`db.payStubs.map(s=>({a:s.agency,g:s.gross}))`)));
 
   console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 })();
