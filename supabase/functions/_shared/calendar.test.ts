@@ -850,3 +850,226 @@ Deno.test("v120: a sync with zero local shifts fetches with a full-pull connecti
   assertEquals(inc.fullPull, false);
   assertEquals(inc.conn.sync_token, "tok-2");
 });
+
+// ---------------------------------------------------------------------------
+// v130: multi-day source events (Caleb, Nov 11, 2026 — "Some weeks I
+// made one event for the entire week rather than individual days").
+// Before this round the repro at the top of the round's notes showed:
+// parseIcsEvent -> ONE event dated Monday, DTEND read nowhere, the
+// import loop created exactly 1 shift and Tue–Fri never arrived.
+// These tests pin the fix at the same layer the loop runs.
+// ---------------------------------------------------------------------------
+
+import {
+  coveredSpanDays,
+  expandSourceEventSpan,
+  icsValuePiece,
+  spanBlockLastDay,
+  spanKindForShiftType,
+  spanLastCoveredDay,
+  type ProviderEvent,
+} from "./calendar.ts";
+import { parseIcsEvent } from "./caldav.ts";
+
+function spanEvent(partial: Partial<ProviderEvent>): ProviderEvent {
+  return {
+    providerEventId: "ev-1",
+    date: "2026-11-02",
+    facility: "",
+    type: "Shift",
+    pay: "",
+    note: "",
+    shiftId: null,
+    updatedAt: null,
+    cancelled: false,
+    rawUpdatedAt: null,
+    summary: "",
+    ...partial,
+  };
+}
+
+const camcRules = normalizeFacilityRules([
+  { name: "CAMC", aliases: [], hourlyRate: 250 },
+]);
+const holzRules = normalizeFacilityRules([
+  {
+    name: "Holzer",
+    aliases: ["HOLZ"],
+    hourlyRate: 250,
+    paidHours8: 8.5,
+    rate24: 4800,
+    weekendRate24: 4200,
+    rateSecond: 3000,
+    weekendRateSecond: 2000,
+  },
+]);
+
+Deno.test("v130: span end semantics — all-day exclusive, midnight rule, timed end", () => {
+  // All-day: DTEND is exclusive (Mon + end Sat covers Mon–Fri).
+  assertEquals(spanLastCoveredDay({ date: "2026-11-07" }), "2026-11-06");
+  // Timed end at exactly midnight does not claim that day.
+  assertEquals(spanLastCoveredDay({ dateTime: "2026-11-03T00:00:00Z" }), "2026-11-02");
+  // Any other timed end covers its date (3p next day covers Tue).
+  assertEquals(spanLastCoveredDay({ dateTime: "2026-11-03T15:00:00Z" }), "2026-11-03");
+  // ICS raw values adapt to the same pieces.
+  assertEquals(spanLastCoveredDay(icsValuePiece("20261107")), "2026-11-06");
+  assertEquals(spanLastCoveredDay(icsValuePiece("20261103T150000Z")), "2026-11-03");
+  assertEquals(spanLastCoveredDay(icsValuePiece("")), "");
+  assertEquals(coveredSpanDays("2026-11-02", "2026-11-06"), [
+    "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06",
+  ]);
+  // A span over the cap is not a shift block: no covered days.
+  assertEquals(coveredSpanDays("2026-11-02", "2027-02-01"), []);
+  assertEquals(spanKindForShiftType("10-hour shift"), "day");
+  assertEquals(spanKindForShiftType("24-hour call"), "call");
+  assertEquals(spanKindForShiftType("Shift"), "other");
+});
+
+Deno.test("v130: Mon–Fri CAMC week block expands to 5 shifts at $2,500 = $12,500", () => {
+  const ics = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:weekblock-1@caleb", "SUMMARY:CAMC 10",
+    "DTSTART;VALUE=DATE:20261102", "DTEND;VALUE=DATE:20261107",
+    "LAST-MODIFIED:20261101T120000Z", "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const ev = parseIcsEvent(ics, "href");
+  assert(ev, "event parses");
+  assertEquals(ev!.endDate, "2026-11-06");
+  assertEquals(ev!.endDateAllDay, true);
+  const ex = expandSourceEventSpan(ev!, camcRules);
+  assertEquals(ex.blocks, 1);
+  assertEquals(ex.extraDays, 4);
+  // Deterministic per-day identity: first day keeps the source id,
+  // later days derive from it — a re-sync re-derives the same ids.
+  assertEquals(ex.events.map((e) => e.providerEventId), [
+    "weekblock-1@caleb",
+    "weekblock-1@caleb#2026-11-03",
+    "weekblock-1@caleb#2026-11-04",
+    "weekblock-1@caleb#2026-11-05",
+    "weekblock-1@caleb#2026-11-06",
+  ]);
+  // The import loop's own parse per derived event prices each day.
+  let total = 0;
+  for (const dayEv of ex.events) {
+    const p = parseWorkShiftEvent(dayEv.summary ?? "", dayEv.location ?? "", dayEv.date, camcRules);
+    assert(p, "each day parses");
+    assertEquals(p!.type, "10-hour shift");
+    total += Number(p!.pay);
+  }
+  assertEquals(total, 12500);
+  // Expansion is a pure function of the source event: expanding the
+  // same event again yields the identical event list (re-sync adds 0).
+  const again = expandSourceEventSpan(ev!, camcRules);
+  assertEquals(
+    again.events.map((e) => `${e.providerEventId}|${e.date}`),
+    ex.events.map((e) => `${e.providerEventId}|${e.date}`),
+  );
+});
+
+Deno.test("v130: block test — an overnight shift is not a block; 48h+ timed is", () => {
+  const piece = icsValuePiece;
+  // Night float 7p -> 7a (12h): one shift, no block.
+  assertEquals(spanBlockLastDay(piece("20261114T190000Z"), piece("20261115T070000Z")), "");
+  // 24-hour call 3p -> 3p (24h): one shift, no block.
+  assertEquals(spanBlockLastDay(piece("20261102T150000Z"), piece("20261103T150000Z")), "");
+  // Mon 7a -> Wed 3p (56h): a block covering Mon–Wed.
+  assertEquals(spanBlockLastDay(piece("20261102T070000Z"), piece("20261104T150000Z")), "2026-11-04");
+  // Midnight-to-midnight, exactly 48h: a block covering Mon–Tue.
+  assertEquals(spanBlockLastDay(piece("20261102T000000Z"), piece("20261104T000000Z")), "2026-11-03");
+  // All-day Mon with DTEND Sat: a block covering Mon–Fri.
+  assertEquals(spanBlockLastDay(piece("20261102"), piece("20261107")), "2026-11-06");
+  // Single all-day event (DTEND next day): no block.
+  assertEquals(spanBlockLastDay(piece("20261102"), piece("20261103")), "");
+});
+
+Deno.test("v130: a HOLZ 24/1st call 3p→3p is one ordinary shift — no endDate, no marker", () => {
+  const ics = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:call-1@caleb", "SUMMARY:Holzer 24/1st call",
+    "DTSTART:20261102T150000Z", "DTEND:20261103T150000Z",
+    "LAST-MODIFIED:20261101T120000Z", "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const ev = parseIcsEvent(ics, "href");
+  assert(ev, "event parses");
+  // 24h is one shift crossing midnight, not a block: the fetcher
+  // reports no span end at all.
+  assertEquals(ev!.endDate, undefined);
+  const ex = expandSourceEventSpan(ev!, holzRules);
+  assertEquals(ex.events.length, 1);
+  assertEquals(ex.blocks, 0);
+  assertEquals(ex.keptCallBlocks, 0);
+  const p = parseWorkShiftEvent("Holzer 24/1st call", "", "2026-11-02", holzRules);
+  assertEquals(p!.pay, "4800");
+});
+
+Deno.test("v130: a multi-day call block stays single; per-day calls are never invented", () => {
+  // Fri–Sun 2nd-call block (all-day Fri, DTEND Mon): one assignment.
+  const ex = expandSourceEventSpan(spanEvent({
+    providerEventId: "call-block",
+    date: "2026-11-06",
+    summary: "Holzer 2nd call",
+    endDate: "2026-11-08",
+    endDateAllDay: true,
+  }), holzRules);
+  assertEquals(ex.events.length, 1);
+  assertEquals(ex.keptCallBlocks, 1);
+  assertEquals(ex.events[0].date, "2026-11-06");
+});
+
+Deno.test("v130: all-day unclassified block at a known facility expands (PCDO shape)", () => {
+  // "HOLZ - PCDO" parses to the generic bucket server-side; the days
+  // still expand because the event is all-day at a known facility —
+  // each day is then classified/priced by the same per-day machinery
+  // as a single-day import (PCDO settles $0 on the client).
+  const ex = expandSourceEventSpan(spanEvent({
+    providerEventId: "pcdo-block",
+    date: "2026-11-02",
+    summary: "HOLZ - PCDO",
+    endDate: "2026-11-04",
+    endDateAllDay: true,
+  }), holzRules);
+  assertEquals(ex.blocks, 1);
+  assertEquals(ex.events.map((e) => e.date), ["2026-11-02", "2026-11-03", "2026-11-04"]);
+  // The same title as a TIMED span is ambiguous: kept single, marked.
+  const timed = expandSourceEventSpan(spanEvent({
+    providerEventId: "pcdo-timed",
+    date: "2026-11-02",
+    summary: "HOLZ - PCDO",
+    endDate: "2026-11-04",
+  }), holzRules);
+  assertEquals(timed.events.length, 1);
+  assertEquals(timed.ambiguousBlocks, 1);
+  assertEquals(timed.events[0].spanAmbiguous, true);
+});
+
+Deno.test("v130: single-day and non-shift events pass through untouched", () => {
+  const single = expandSourceEventSpan(spanEvent({ summary: "CAMC 10" }), camcRules);
+  assertEquals(single.events.length, 1);
+  assertEquals(single.blocks, 0);
+  const personal = expandSourceEventSpan(spanEvent({
+    summary: "Dentist appointment",
+    endDate: "2026-11-05",
+    endDateAllDay: true,
+  }), camcRules);
+  assertEquals(personal.events.length, 1);
+  assertEquals(personal.blocks, 0);
+  const cancelled = expandSourceEventSpan(spanEvent({
+    summary: "CAMC 10",
+    endDate: "2026-11-06",
+    endDateAllDay: true,
+    cancelled: true,
+  }), camcRules);
+  assertEquals(cancelled.events.length, 1);
+  assertEquals(cancelled.blocks, 0);
+});
+
+Deno.test("v130: a held (unknown-facility) day block still expands per day for suggestions", () => {
+  const ex = expandSourceEventSpan(spanEvent({
+    providerEventId: "held-1",
+    summary: "CAMC 10",
+    endDate: "2026-11-06",
+    endDateAllDay: true,
+  }), []); // no rules at all — CAMC not yet a facility
+  assertEquals(ex.blocks, 1);
+  assertEquals(ex.events.length, 5);
+});

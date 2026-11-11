@@ -624,7 +624,7 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 6);
+  assertEquals(QGENDA_PARSER_VERSION, 7);
 });
 
 Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
@@ -803,4 +803,102 @@ Deno.test("qgendaShiftName: priority, cleaning, and no mangling of shift words",
     qgendaShiftName({ summary: "Shift", description: "", categories: [], facility: "Holzer" }),
     "",
   );
+});
+
+// ---------------------------------------------------------------------------
+// v130: multi-day feed events. QGenda CAN emit spans (a rotation block
+// is one VEVENT with DTSTART/DTEND days apart). Before this round only
+// the start date became a row. Day blocks now expand per day with
+// per-day pricing; calls stay single and are flagged, as are raw-named
+// rows the server cannot classify.
+// ---------------------------------------------------------------------------
+
+Deno.test("v130: a Mon–Fri G Main (8) block expands to 5 rows at $2,125", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:span-1@qgenda.com",
+    "DTSTART;VALUE=DATE:20261102", "DTEND;VALUE=DATE:20261107",
+    "SUMMARY:HOLZ - G Main (8) [Caleb Martin]",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts, eventCount } = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(eventCount, 1); // one SOURCE event...
+  assertEquals(shifts.map((s) => s.date), [
+    "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06",
+  ]); // ...five day rows
+  assertEquals(shifts.map((s) => s.pay), ["2125", "2125", "2125", "2125", "2125"]);
+  assertEquals(shifts[0].spanFrom, "2026-11-02");
+  assertEquals(shifts[0].spanTo, "2026-11-06");
+  assertEquals(shifts[0].spanKept, undefined);
+  // Deterministic per-day uids: first day keeps the source uid.
+  assertEquals(shifts[0].uid, "span-1@qgenda.com");
+  assertEquals(shifts[2].uid, "span-1@qgenda.com#2026-11-04");
+  // Re-parsing the same feed derives the identical rows (no growth).
+  const again = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(
+    again.shifts.map((s) => `${s.uid}|${s.date}|${s.pay}`),
+    shifts.map((s) => `${s.uid}|${s.date}|${s.pay}`),
+  );
+});
+
+Deno.test("v130: a block crossing a weekend keeps Sat/Sun as days too", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:span-2@qgenda.com",
+    "DTSTART;VALUE=DATE:20261106", "DTEND;VALUE=DATE:20261111",
+    "SUMMARY:HOLZ - G Main (8) [Caleb Martin]",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts } = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(shifts.map((s) => s.date), [
+    "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10",
+  ]);
+});
+
+Deno.test("v130: a 24h call crossing midnight stays exactly one row", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:span-3@qgenda.com",
+    "DTSTART:20261102T150000Z", "DTEND:20261103T150000Z",
+    "SUMMARY:HOLZ - Call 1 [Caleb Martin]",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts } = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(shifts.length, 1);
+  assertEquals(shifts[0].date, "2026-11-02");
+  assertEquals(shifts[0].type, "24-hour call");
+  assertEquals(shifts[0].pay, "4800");
+  // 24h crossing midnight is one ordinary shift, not a block: the row
+  // carries no span fields at all.
+  assertEquals(shifts[0].spanFrom, undefined);
+  assertEquals(shifts[0].spanKept, undefined);
+});
+
+Deno.test("v130: a multi-day call block stays single and is flagged spanKept=call", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:span-4@qgenda.com",
+    "DTSTART;VALUE=DATE:20261106", "DTEND;VALUE=DATE:20261109",
+    "SUMMARY:HOLZ - Call 2 [Caleb Martin]",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts } = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(shifts.length, 1);
+  assertEquals(shifts[0].spanKept, "call");
+  assertEquals(shifts[0].spanFrom, "2026-11-06");
+  assertEquals(shifts[0].spanTo, "2026-11-08");
+});
+
+Deno.test("v130: a raw-named multi-day row stays single, flagged ambiguous — never dropped", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:span-5@qgenda.com",
+    "DTSTART;VALUE=DATE:20261102", "DTEND;VALUE=DATE:20261105",
+    "SUMMARY:STM - Backup",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts } = parseQgendaICS(feed, HOLZER, { name: "Caleb Martin" });
+  assertEquals(shifts.length, 1);
+  assertEquals(shifts[0].spanKept, "ambiguous");
+  assertEquals(shifts[0].code, "STM - Backup");
 });

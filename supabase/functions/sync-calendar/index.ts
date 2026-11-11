@@ -225,6 +225,7 @@ import {
   chunkArray,
   decideImportEvent,
   effectiveConnForSync,
+  expandSourceEventSpan,
   FacilitySuggestion,
   findFallbackLocalShift,
   groupFacilitySuggestions,
@@ -252,6 +253,7 @@ import {
   shiftDescription,
   shiftSyncStateFor,
   shiftTitle,
+  spanBlockLastDay,
   writeSyncLog,
 } from "../_shared/calendar.ts";
 import {
@@ -303,6 +305,20 @@ function eventDateOf(start: { date?: string; dateTime?: string }): string {
   if (start.date) return start.date;
   if (start.dateTime) return start.dateTime.slice(0, 10);
   return "";
+}
+
+// Multi-day span end (v130): the ProviderEvent end fields for an event
+// that is a genuine multi-day BLOCK (spanBlockLastDay — an overnight
+// shift is not a block). Empty for single-day events, so nothing about
+// their handling changes.
+function eventSpanEnd(
+  start: { date?: string; dateTime?: string },
+  end: { date?: string; dateTime?: string },
+): { endDate?: string; endDateAllDay?: boolean } {
+  const startDate = eventDateOf(start);
+  const last = spanBlockLastDay(start, end ?? {});
+  if (!last || !startDate) return {};
+  return { endDate: last, endDateAllDay: end?.date ? true : undefined };
 }
 
 // --- Provider fetch / write ------------------------------------------------
@@ -736,6 +752,7 @@ async function fetchGoogleSourceEvents(
         rawUpdatedAt: ev.updated ?? null,
         summary: String(ev.summary ?? ""),
         location: typeof ev.location === "string" ? ev.location : undefined,
+        ...eventSpanEnd(ev.start ?? {}, ev.end ?? {}),
       });
     }
     pageToken = data.nextPageToken ?? null;
@@ -776,6 +793,16 @@ async function fetchOutlookSourceEvents(
         rawUpdatedAt: ev.lastModifiedDateTime ?? null,
         summary: String(ev.subject ?? ""),
         location: ev.location?.displayName ? String(ev.location.displayName) : undefined,
+        ...eventSpanEnd(
+          {
+            dateTime: ev.start?.dateTime,
+            date: ev.isAllDay ? (ev.start?.dateTime ?? "").slice(0, 10) : undefined,
+          },
+          {
+            dateTime: ev.end?.dateTime,
+            date: ev.isAllDay ? (ev.end?.dateTime ?? "").slice(0, 10) : undefined,
+          },
+        ),
       });
     }
     url = data["@odata.nextLink"] ? String(data["@odata.nextLink"]) : null;
@@ -970,6 +997,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     suggestions: FacilitySuggestion[];
     skippedSuggested: number;
     newFacilities: string[];
+    // Multi-day spans (v130): week blocks split into one shift per
+    // covered day. expandedBlocks counts the source events split;
+    // expandedExtraDays the day-shifts beyond each block's first day
+    // (created counts day-shifts, seen counts source events — the
+    // difference is these). keptCallBlocks: multi-day call events kept
+    // as one shift on their start date; ambiguousBlocks: unclassified
+    // multi-day spans kept on their start date, flagged in the note.
+    expandedBlocks: number;
+    expandedExtraDays: number;
+    keptCallBlocks: number;
+    ambiguousBlocks: number;
     // Per-source tallies (v120): what each picked calendar
     // contributed — seen/parsed/created/updated/duplicates — or the
     // fetch error. The client states these plainly after every sync,
@@ -1268,6 +1306,10 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       unpriced: 0,
       suggestions: [],
       skippedSuggested: 0,
+      expandedBlocks: 0,
+      expandedExtraDays: 0,
+      keptCallBlocks: 0,
+      ambiguousBlocks: 0,
       newFacilities: [],
       perSource: [],
     };
@@ -1392,7 +1434,23 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       // later re-scans them on the next sync instead of excluding
       // them forever.
       const suggestedEvents: { facility: string; date: string; title: string; location: string }[] = [];
-      for (const ev of sourceEvents) {
+      // Multi-day expansion (v130): a week block becomes one event per
+      // covered day BEFORE the loop, so every decision below — import
+      // map pairing, dedupe, the cross-source identity heal — applies
+      // per day unchanged. Expansion is deterministic from the source
+      // event's identity (expandSourceEventSpan), so a re-sync derives
+      // the same per-day events and adds zero. `seen` keeps counting
+      // SOURCE events; `created` counts day-shifts.
+      const loopEvents: ProviderEvent[] = [];
+      for (const sev of sourceEvents) {
+        const ex = expandSourceEventSpan(sev, facilityRules);
+        imported.expandedBlocks += ex.blocks;
+        imported.expandedExtraDays += ex.extraDays;
+        imported.keptCallBlocks += ex.keptCallBlocks;
+        imported.ambiguousBlocks += ex.ambiguousBlocks;
+        loopEvents.push(...ex.events);
+      }
+      for (const ev of loopEvents) {
         if (!ev.date || ev.cancelled) {
           imported.skipped++;
           imported.skippedNotShift++;
@@ -1459,6 +1517,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         }
         if (!parsed) continue; // Unreachable: decideImportEvent
         // returns skip-not-shift for every unparsed event, above.
+        // The note a created shift carries: a shift derived from a
+        // multi-day block says so (which block, and for a kept call /
+        // unclassified span, that it stayed on its first day) — an
+        // expansion never lands silently (v130).
+        const importNote = ev.spanStartDate && ev.spanEndDate
+          ? (ev.spanKeptCall
+            ? `Imported from ${imported.sourceCalendarName} — a multi-day call (${ev.spanStartDate} to ${ev.spanEndDate}), kept as one shift on its first day`
+            : ev.spanAmbiguous
+            ? `Imported from ${imported.sourceCalendarName} — a multi-day event (${ev.spanStartDate} to ${ev.spanEndDate}), imported on its first day only`
+            : `Imported from ${imported.sourceCalendarName} — one day of a block (${ev.spanStartDate} to ${ev.spanEndDate}), one shift per day`)
+          : `Imported from ${imported.sourceCalendarName}`;
         if (decision === "already-here" && local) {
           // Already imported: only a genuinely newer source edit flows
           // back (newest edit wins, same rule as the dedicated sync) —
@@ -1477,8 +1546,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
                 facility: parsed.facility,
                 type: parsed.type,
                 pay,
-                note: local.note ||
-                  `Imported from ${imported.sourceCalendarName}`,
+                note: local.note || importNote,
                 source: "apple-import",
                 updatedAt: sourceUpdated || localUpdated || null,
               },
@@ -1499,8 +1567,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
                 facility: parsed.facility,
                 type: parsed.type,
                 pay,
-                note: local.note ||
-                  `Imported from ${imported.sourceCalendarName}`,
+                note: local.note || importNote,
                 source: "apple-import",
                 updatedAt: sourceUpdated,
               },
@@ -1571,7 +1638,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
               facility: parsed.facility,
               type: parsed.type,
               pay,
-              note: `Imported from ${imported.sourceCalendarName}`,
+              note: importNote,
               source: "apple-import",
               // Past import arrives confirmed (Bug 1, Nov 6, 2026);
               // the browser re-derives the same rule from local date.
@@ -1614,8 +1681,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
                   facility: parsed.facility,
                   type: parsed.type,
                   pay,
-                  note: dupe.note ||
-                    `Imported from ${imported.sourceCalendarName}`,
+                  note: dupe.note || importNote,
                   source: "apple-import",
                   updatedAt: ev.updatedAt,
                 },
@@ -1655,7 +1721,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             facility: parsed.facility,
             type: parsed.type,
             pay,
-            note: `Imported from ${imported.sourceCalendarName}`,
+            note: importNote,
             source: "apple-import",
             // Past import arrives confirmed (Bug 1, Nov 6, 2026);
             // the browser re-derives the same rule from local date.

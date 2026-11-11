@@ -138,7 +138,7 @@ const dec1Banner = (html) => bannerFor(html, 'Dec 1:');
 
 (async () => {
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-  t('service worker cache is v117', swSrc.includes('crna-hub-shell-v129'));
+  t('service worker cache is v117', swSrc.includes('crna-hub-shell-v130'));
 
   // ================= A: baseline pins + banner anatomy =================
   {

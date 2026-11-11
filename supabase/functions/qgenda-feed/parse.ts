@@ -11,16 +11,25 @@
 // characters). It is never logged and never returned in full.
 
 import {
+  coveredSpanDays,
+  icsValuePiece,
   importStatusForDate,
   parseWorkShiftEvent,
   priceShiftWithFacility,
+  spanBlockLastDay,
+  spanKindForShiftType,
   type FacilityPayRule,
 } from "../_shared/calendar.ts";
 
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v6, Nov 10, 2026: the
+// Bump whenever the parse semantics change (v7, Nov 11, 2026:
+// multi-day feed events — a block whose kind is a day shift expands
+// to one row per covered day (per-day pricing, derived uids); call
+// blocks stay a single row and raw-named multi-day rows stay single
+// too, both flagged via spanKept so the preview shows what was NOT
+// split; v6, Nov 10, 2026: the
 // neutrality pass — the location rescue no longer names or prices a
 // facility the user never saved (a hard-coded "Holzer" location
 // match priced from built-in rates); only a saved facility rule can
@@ -41,7 +50,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 6;
+export const QGENDA_PARSER_VERSION = 7;
 
 export interface QgendaShift {
   date: string;
@@ -67,6 +76,17 @@ export interface QgendaShift {
   // rounded to the nearest quarter hour. Null for all-day /
   // date-only events (and for implausible durations).
   hours: number | null;
+  // Multi-day spans (v130): set when the source event covered more
+  // than one calendar day. Day-kind rows are expanded BEFORE return —
+  // one row per covered day, each carrying the block's spanFrom/spanTo
+  // so the preview can label it. A row that stayed single DESPITE the
+  // span carries spanKept: "call" (a call is one assignment, never
+  // split per day) or "ambiguous" (its name resolves to no canonical
+  // kind the server can price — the preview flags it rather than the
+  // feed silently dropping its later days).
+  spanFrom?: string;
+  spanTo?: string;
+  spanKept?: "call" | "ambiguous";
 }
 
 export function isQgendaFeedUrl(url: string): boolean {
@@ -659,6 +679,52 @@ export function isQgendaHousekeepingSummary(summary: string): boolean {
 // Unknown facilities come back
 // with facilityKnown false and pay blank — the client reports them
 // as ask-first suggestions, never as priced shifts.
+// Multi-day expansion (v130) — the QGenda surface of the shared rule
+// in _shared/calendar.ts: a row whose source event covered several
+// days and whose canonical type is a DAY kind becomes one row per
+// covered day — same code, same facility, pay re-priced per day from
+// the facility's rule (so a weekend variant applies on the weekend
+// days) — with per-day uids derived from the source uid exactly like
+// the calendar import's per-day event ids, so re-fetching the same
+// feed re-derives the same rows and adds nothing. CALL rows stay
+// single (spanKept "call": a call is one assignment). Rows whose type
+// is a raw name the server cannot classify stay single too (spanKept
+// "ambiguous") — the preview flags them rather than the feed guessing
+// per-day kinds it cannot price.
+export function expandQgendaSpanRows(
+  rows: QgendaShift[],
+  facilities: FacilityPayRule[],
+): QgendaShift[] {
+  const out: QgendaShift[] = [];
+  for (const row of rows) {
+    const days = row.spanFrom && row.spanTo
+      ? coveredSpanDays(row.spanFrom, row.spanTo)
+      : [];
+    if (days.length <= 1) {
+      out.push(row);
+      continue;
+    }
+    const kind = spanKindForShiftType(row.type);
+    if (kind !== "day") {
+      out.push({ ...row, spanKept: kind === "call" ? "call" : "ambiguous" });
+      continue;
+    }
+    const rule = row.facilityKnown
+      ? facilities.find((r) => r.name === row.facility)
+      : undefined;
+    days.forEach((day, i) => {
+      out.push({
+        ...row,
+        date: day,
+        uid: i === 0 ? row.uid : `${row.uid}#${day}`,
+        pay: rule ? priceShiftWithFacility(row.type, rule, day) : row.pay,
+        status: importStatusForDate(day),
+      });
+    });
+  }
+  return out;
+}
+
 export function parseQgendaICS(
   icsText: string,
   facilities: FacilityPayRule[],
@@ -690,6 +756,21 @@ export function parseQgendaICS(
       droppedNoDate++;
       continue;
     }
+    // Multi-day span (v130): the days this event covers as a BLOCK
+    // (spanBlockLastDay — an overnight shift like a 7p→7a night float
+    // is one shift, not a block). QGenda rotation blocks CAN be single
+    // multi-day events; before this round only the start date ever
+    // became a row and the rest of the block silently never arrived.
+    // Rows built below carry the span; expandQgendaSpanRows applies
+    // the shared rule (day kinds expand per day, calls stay single)
+    // before return.
+    const spanDays = coveredSpanDays(
+      date,
+      spanBlockLastDay(icsValuePiece(dtStartRaw), icsValuePiece(dtEndRaw)),
+    );
+    const spanFields = spanDays.length > 1
+      ? { spanFrom: spanDays[0], spanTo: spanDays[spanDays.length - 1] }
+      : {};
     const summary = get("SUMMARY").replace(/\n/g, " ");
     // Housekeeping markers are feed bookkeeping, not assignments:
     // filtered here, before any parse path can row them, and
@@ -749,6 +830,7 @@ export function parseQgendaICS(
         uid,
         code: gCode,
         hours: gHours,
+        ...spanFields,
       });
       if (!rule) unknown.set(split.code, (unknown.get(split.code) ?? 0) + 1);
       continue;
@@ -809,6 +891,7 @@ export function parseQgendaICS(
         uid,
         code: uCode,
         hours: uDesc?.hours ?? hours,
+        ...spanFields,
       });
       if (uPrefix) {
         unknown.set(uPrefix, (unknown.get(uPrefix) ?? 0) + 1);
@@ -985,13 +1068,14 @@ export function parseQgendaICS(
       uid,
       code: pCode,
       hours,
+      ...spanFields,
     });
     if (!facilityKnown) {
       unknown.set(facility, (unknown.get(facility) ?? 0) + 1);
     }
   }
   return {
-    shifts,
+    shifts: expandQgendaSpanRows(shifts, facilities),
     unknownFacilities: [...unknown.keys()],
     eventCount: blocks.length,
     droppedHousekeeping,

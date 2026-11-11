@@ -324,6 +324,37 @@ export interface ProviderEvent {
   // source so imported shifts stay visibly distinct from user-entered
   // ones and from shifts synced from the dedicated calendar.
   source?: string;
+  // Multi-day source events (Nov 11, 2026, v130): the LAST calendar day
+  // the event covers (inclusive), when the provider reported an end
+  // past the start day — see spanLastCoveredDay for the end semantics.
+  // Fetchers set it; expandSourceEventSpan turns a covered span into
+  // per-day events for the work-calendar import. The dedicated-calendar
+  // pairing never reads it (one provider event stays one shift there).
+  endDate?: string;
+  // True when the reported end was a date-only (all-day) value. An
+  // all-day block is day-granular by construction, which is what lets
+  // expandSourceEventSpan split even an unclassified all-day block
+  // per day (each day is then classified and priced by the same
+  // per-day machinery as a single-day import — a PCDO day prices $0
+  // as settled, a plain day by the rate card).
+  endDateAllDay?: boolean;
+  // Set by expandSourceEventSpan on every event derived from one
+  // multi-day block: the block's first/last covered days. The import
+  // loop uses them for the created shift's note, so an expansion never
+  // lands silently.
+  spanStartDate?: string;
+  spanEndDate?: string;
+  // A multi-day CALL block is never split per day — a call is one
+  // assignment however many midnights it crosses (a 24-hour call that
+  // crosses midnight is still one shift; a multi-day call block is
+  // entered as one assignment, not one call per day). The event stays
+  // a single shift on its start date and carries this marker so the
+  // loop can say so in the note instead of guessing per-day calls.
+  spanKeptCall?: boolean;
+  // A multi-day event whose kind could not be classified (a TIMED
+  // event the parser buckets as a generic shift): imported on its
+  // start date only, marked, never guessed into per-day shifts.
+  spanAmbiguous?: boolean;
 }
 
 export function shiftTitle(s: LocalShift): string {
@@ -530,6 +561,246 @@ export function priceShiftWithFacility(type: string, rule: FacilityPayRule, date
     return "";
   }
   return "";
+}
+
+// ---------------------------------------------------------------------------
+// Multi-day source events (Nov 11, 2026, v130)
+//
+// Caleb's report: "It didn't pull all of my shifts from my calendar
+// over from CAMC. Some weeks I made one event for the entire week
+// rather than individual days." Before this round every fetcher kept
+// only an event's START date, so a Mon–Fri week block imported as
+// exactly one Monday shift and Tue–Fri never arrived — silently.
+//
+// The rule, implemented once here and used by every source (Apple /
+// Google / Outlook through sync-calendar, and the QGenda feed):
+//   - A multi-day event whose code resolves to a DAY-shift kind
+//     expands into ONE EVENT PER COVERED CALENDAR DAY. Each derived
+//     event flows through the unchanged import machinery, so pricing
+//     (weekend variants per the facility's own weekend definition),
+//     dedupe identity and the double-booking guard all apply per day,
+//     exactly as if the user had entered one event per day.
+//   - A CALL-kind event is NEVER expanded: a call is one assignment
+//     however many midnights it crosses. A 24-hour call 3p→3p stays
+//     one shift on its start date ($4,800, not two days of anything);
+//     a multi-day call block stays one shift too, marked spanKeptCall
+//     so the import note says so. Splitting a call block into per-day
+//     calls would invent assignments (and pay) the user never made.
+//   - An UNCLASSIFIED multi-day event expands only when it is
+//     ALL-DAY: all-day events are day-granular by construction, and
+//     each derived day is then classified/priced by the same per-day
+//     machinery that handles a single-day import (at a known facility
+//     an unpaid/PCDO day prices $0 as settled there; at an unknown
+//     one the days are held as per-day facility suggestions, exactly
+//     as a single held day would be). A TIMED unclassified span stays
+//     a single start-date event, marked spanAmbiguous — surfaced,
+//     never guessed.
+//   - End semantics: an all-day end date is EXCLUSIVE (Mon + end Sat
+//     covers Mon–Fri); a dateTime end at exactly midnight does not
+//     claim that final day; any other dateTime end covers its date.
+//     And a span only counts as a BLOCK at all when it covers more
+//     than one shift's worth of time (spanBlockLastDay): all-day >= 2
+//     covered days, timed >= 48 hours — one shift crossing midnight
+//     (a night float, a 24-hour call) is never a block.
+//   - Deterministic identity: the first covered day keeps the source
+//     event's own providerEventId (its pre-v130 pairing stays valid);
+//     later days derive `${id}#${date}`. Re-running the same sync
+//     re-derives the same ids and adds zero.
+//   - A span longer than MAX_SPAN_DAYS is not a shift block (it is a
+//     placement/leave/rotation marker): no expansion at all.
+// ---------------------------------------------------------------------------
+
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function addDaysISO(date: string, n: number): string {
+  if (!ISO_DAY_RE.test(date)) return date;
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+export function daysBetweenISO(a: string, b: string): number {
+  if (!ISO_DAY_RE.test(a) || !ISO_DAY_RE.test(b)) return 0;
+  const ms = Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`);
+  return Math.round(ms / 86400000);
+}
+
+// The last calendar day an event covers, from the provider's end as a
+// {date} (all-day) or {dateTime} piece — the shapes Google and Outlook
+// return, and the shape ICS values are adapted into via icsValuePiece.
+// Returns "" when no usable end exists (a single-day event).
+export function spanLastCoveredDay(
+  end: { date?: string; dateTime?: string },
+): string {
+  if (end.date && ISO_DAY_RE.test(end.date)) return addDaysISO(end.date, -1);
+  const dt = String(end.dateTime || "");
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(dt);
+  if (!m) return "";
+  if (m[2] === "00" && m[3] === "00" && (m[4] === undefined || m[4] === "00")) {
+    return addDaysISO(m[1], -1);
+  }
+  return m[1];
+}
+
+// An ICS raw value ("20261107" or "20261107T150000Z", params already
+// stripped) as the {date}/{dateTime} piece spanLastCoveredDay reads.
+export function icsValuePiece(
+  raw: string,
+): { date?: string; dateTime?: string } {
+  const t = String(raw || "").trim();
+  const d = /^(\d{4})(\d{2})(\d{2})$/.exec(t);
+  if (d) return { date: `${d[1]}-${d[2]}-${d[3]}` };
+  const dt = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?/.exec(t);
+  if (dt) {
+    return {
+      dateTime: `${dt[1]}-${dt[2]}-${dt[3]}T${dt[4]}:${dt[5]}:${dt[6] || "00"}`,
+    };
+  }
+  return {};
+}
+
+// A span is a BLOCK — several days entered as one event — only when
+// it covers more than one shift's worth of time:
+//   - all-day (date-only end): at least 2 covered days (each covered
+//     day is fully covered by construction);
+//   - timed end: at least 48 hours start-to-end. One shift crossing
+//     midnight — a 12-hour night float 7p→7a, a 24-hour call 3p→3p —
+//     is NOT a block and stays one ordinary event, unmarked; a Mon
+//     7a → Wed 3p entry (56h) IS a block.
+// Returns the block's last covered day, or "" when the event is not
+// a block (fetchers then set no endDate and nothing downstream can
+// mistake the event for a span).
+export const MIN_BLOCK_MS = 48 * 3600 * 1000;
+
+function pieceDay(p: { date?: string; dateTime?: string }): string {
+  if (p.date && ISO_DAY_RE.test(p.date)) return p.date;
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(p.dateTime || ""));
+  return m ? m[1] : "";
+}
+
+function pieceMs(p: { date?: string; dateTime?: string }): number {
+  const ms = Date.parse(String(p.dateTime || ""));
+  if (!Number.isNaN(ms)) return ms;
+  const d = pieceDay(p);
+  return d ? Date.parse(`${d}T00:00:00Z`) : NaN;
+}
+
+export function spanBlockLastDay(
+  start: { date?: string; dateTime?: string },
+  end: { date?: string; dateTime?: string },
+): string {
+  const startDay = pieceDay(start);
+  if (!startDay) return "";
+  const last = spanLastCoveredDay(end);
+  if (!last || last <= startDay) return "";
+  if (end.date) return last; // all-day: >= 2 covered days
+  const dur = pieceMs(end) - pieceMs(start);
+  if (!Number.isNaN(dur)) return dur >= MIN_BLOCK_MS ? last : "";
+  // Mixed shapes with no comparable times: require a fully covered
+  // intervening day.
+  return daysBetweenISO(startDay, last) >= 2 ? last : "";
+}
+
+export type SpanKind = "day" | "call" | "other";
+
+// Which kind a canonical shift type is, for the multi-day rule.
+export function spanKindForShiftType(type: string): SpanKind {
+  if (
+    type === "8-hour day" || type === "10-hour shift" ||
+    type === "12-hour shift"
+  ) return "day";
+  if (
+    type === "24-hour call" || type === "Second call" ||
+    type === "Call (unclassified)"
+  ) return "call";
+  return "other";
+}
+
+export const MAX_SPAN_DAYS = 62;
+
+// Every calendar day a span covers, first to last inclusive; [] when
+// the span is empty, inverted, or longer than MAX_SPAN_DAYS.
+export function coveredSpanDays(startDate: string, lastDay: string): string[] {
+  if (!ISO_DAY_RE.test(startDate) || !ISO_DAY_RE.test(lastDay)) return [];
+  const n = daysBetweenISO(startDate, lastDay);
+  if (n < 0 || n + 1 > MAX_SPAN_DAYS) return [];
+  const out: string[] = [];
+  for (let i = 0; i <= n; i++) out.push(addDaysISO(startDate, i));
+  return out;
+}
+
+export interface SpanExpansion {
+  events: ProviderEvent[];
+  // Source events split into per-day events.
+  blocks: number;
+  // Derived day-events beyond each block's first day.
+  extraDays: number;
+  // Multi-day call blocks kept as one start-date shift.
+  keptCallBlocks: number;
+  // Multi-day spans kept single because their kind is unclassified.
+  ambiguousBlocks: number;
+}
+
+// Expand one fetched source event per the multi-day rule above.
+// `facilities` is the user's normalized rule list (the same list the
+// import loop parses with). Events that are not work shifts at all
+// (parseWorkShiftEvent returns null) pass through untouched — the
+// loop's existing skip counting stays per source event for them.
+export function expandSourceEventSpan(
+  ev: ProviderEvent,
+  facilities: FacilityPayRule[] = [],
+): SpanExpansion {
+  const none: SpanExpansion = {
+    events: [ev],
+    blocks: 0,
+    extraDays: 0,
+    keptCallBlocks: 0,
+    ambiguousBlocks: 0,
+  };
+  if (ev.cancelled || !ev.date) return none;
+  const days = coveredSpanDays(ev.date || "", ev.endDate || "");
+  if (days.length <= 1) return none;
+  const parsed = parseWorkShiftEvent(
+    ev.summary ?? "",
+    ev.location ?? "",
+    ev.date,
+    facilities,
+  );
+  if (!parsed) return none;
+  const kind = spanKindForShiftType(parsed.type);
+  const span = { spanStartDate: days[0], spanEndDate: days[days.length - 1] };
+  if (kind === "call") {
+    return {
+      events: [{ ...ev, ...span, spanKeptCall: true }],
+      blocks: 0,
+      extraDays: 0,
+      keptCallBlocks: 1,
+      ambiguousBlocks: 0,
+    };
+  }
+  const expandable = kind === "day" || ev.endDateAllDay === true;
+  if (!expandable) {
+    return {
+      events: [{ ...ev, ...span, spanAmbiguous: true }],
+      blocks: 0,
+      extraDays: 0,
+      keptCallBlocks: 0,
+      ambiguousBlocks: 1,
+    };
+  }
+  const events = days.map((day, i) => ({
+    ...ev,
+    date: day,
+    providerEventId: i === 0 ? ev.providerEventId : `${ev.providerEventId}#${day}`,
+    ...span,
+  }));
+  return {
+    events,
+    blocks: 1,
+    extraDays: days.length - 1,
+    keptCallBlocks: 0,
+    ambiguousBlocks: 0,
+  };
 }
 
 function escapeRegExp(s: string): string {

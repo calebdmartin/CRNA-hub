@@ -13,6 +13,7 @@
 // PROPFIND of etags with a GET only for changed items.
 
 import {
+  icsValuePiece,
   LocalShift,
   ProviderEvent,
   nextDay,
@@ -20,6 +21,7 @@ import {
   parseTitle,
   shiftDescription,
   shiftTitle,
+  spanBlockLastDay,
 } from "./calendar.ts";
 
 const CALDAV_HOST = "https://caldav.icloud.com";
@@ -282,6 +284,17 @@ export function parseIcsEvent(ics: string, _fallbackHref: string): ProviderEvent
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const { facility, type } = parseTitle(icsUnescape(props.SUMMARY ?? ""));
   const parsed = parseDescription(icsUnescape(props.DESCRIPTION ?? ""));
+  // Multi-day span (v130): DTEND was read nowhere before this round, so
+  // a week-long block imported as its first day only. Carry the last
+  // covered day of a genuine BLOCK (spanBlockLastDay — an overnight
+  // shift is not a block) + whether the end was date-only, for the
+  // import's per-day expansion; the dedicated-calendar pairing
+  // ignores both.
+  const endRaw = props.DTEND ?? "";
+  const endPiece = icsValuePiece(endRaw);
+  const lastCovered = spanBlockLastDay(icsValuePiece(start), endPiece);
+  const endDate = lastCovered && lastCovered !== date ? lastCovered : undefined;
+  const endDateAllDay = endDate && endPiece.date ? true : undefined;
   const shiftId = props.UID.endsWith("@crna-hub")
     ? props.UID.slice(0, -"@crna-hub".length)
     : parsed.shiftId;
@@ -308,6 +321,8 @@ export function parseIcsEvent(ics: string, _fallbackHref: string): ProviderEvent
     // Raw location: the import parser also matches facilities here —
     // an event titled "8" with location "CAMC" is a CAMC shift.
     location: icsUnescape(props.LOCATION ?? "") || undefined,
+    endDate,
+    endDateAllDay,
   };
 }
 

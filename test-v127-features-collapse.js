@@ -164,7 +164,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   }
 
   // ---------- 7: service worker ----------
-  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v129'));
+  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v130'));
 
   console.log(`\nv127 features collapse: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

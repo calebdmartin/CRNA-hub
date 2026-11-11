@@ -6599,7 +6599,7 @@ function calPreviewNeedsFacility(){
   return !!(calPreview&&(calPreview.rows||[]).some(r=>r.include&&!scheduleRowFacilityResolved(r)));
 }
 function calPreviewHTML(){if(!calPreview)return '<p class="muted">No calendar file parsed yet. Choose an .ics file above, then parse it — nothing is saved until you approve the preview.</p>';const rows=calPreview.rows,dup=rows.filter(r=>r.duplicate).length,need=rows.filter(r=>r.flags.length).length;return `<p><strong>Parsed from:</strong> ${escapeHTML(calPreview.fileName)} · Source: ${escapeHTML(calPreview.sourceLabel)} · ${rows.length} event(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Duplicates are events already in the app with the same date, facility, and shift type. Uncheck any row to leave it out. Rows with a missing date or facility block approval until fixed or unchecked.</p>${calPreviewNeedsFacility()?`<div class="form-grid"><div class="field"><label for="calFacilityAll">Which facility is this schedule for?</label><input id="calFacilityAll" class="calFacilityAll" list="facilityNamesCal" value="${escapeHTML(calPreview.facilityAll||'')}" placeholder="e.g. RGH"><datalist id="facilityNamesCal">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(calPreview,'cal')}${importRatesPromptHTML(calPreview,'cal')}${importPaySchedHTML(calPreview,'cal')}${importConflictsHTML(calPreview,'cal')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${calPreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="calInclude" data-row="${i}" ${r.include?'checked':''}></td><td><input type="date" class="calEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.code||r.type||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${r.duplicate?'<span class="pill warn">duplicate — will merge</span> ':''}${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="cal-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="cal-discard">Discard preview</button></div>`}
-async function importCalendar(e){e.preventDefault();calImportError='';const f=$('f_calFile').files[0];const sourceLabel=$('f_calSource').value||'Calendar file';if(!f){calImportError='Choose an .ics calendar file first (Google, Apple, or Outlook can all export one).';return render()}let text='';try{text=await f.text()}catch(err){calImportError='Could not read that file: '+err.message;return render()}if(!/^BEGIN:VCALENDAR/i.test(text.trim())){calImportError='That file is not a calendar (.ics) file. Export your calendar as .ics from Google, Apple, or Outlook and try again. Nothing was saved.';calPreview=null;return render()}const parsed=parseICS(text,f.name);const sourceCode=CAL_SOURCES[sourceLabel]||'calendar-file';const grossByBlock=text.split(/BEGIN:VEVENT/i).slice(1).map(b=>{const m=b.match(/Expected gross:\s*\$?([\d\\,]+(?:\.\d+)?)/i);return m?m[1].replace(/[\\,]/g,''):''});const rows=parsed.rows.map((r,ri)=>{if(grossByBlock[ri])r={...r,pay:grossByBlock[ri]};const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,r));const flags=[...r.flags];if(duplicate)flags.push('already in CRNA Hub — will merge, not double');return {...r,source:sourceCode,sourceLabel,status:importStatusForDate(r.date),include:true,duplicate,incomplete:!String(r.pay||'').trim(),note:'Imported from '+sourceLabel+' (.ics): '+f.name}});calPreview={fileName:f.name,sourceLabel,sourceCode,rows};if(!rows.length){calImportError='No events found in that calendar file. Nothing was saved.';calPreview=null}render()}
+async function importCalendar(e){e.preventDefault();calImportError='';const f=$('f_calFile').files[0];const sourceLabel=$('f_calSource').value||'Calendar file';if(!f){calImportError='Choose an .ics calendar file first (Google, Apple, or Outlook can all export one).';return render()}let text='';try{text=await f.text()}catch(err){calImportError='Could not read that file: '+err.message;return render()}if(!/^BEGIN:VCALENDAR/i.test(text.trim())){calImportError='That file is not a calendar (.ics) file. Export your calendar as .ics from Google, Apple, or Outlook and try again. Nothing was saved.';calPreview=null;return render()}const parsed=parseICS(text,f.name);const sourceCode=CAL_SOURCES[sourceLabel]||'calendar-file';const grossByBlock=text.split(/BEGIN:VEVENT/i).slice(1).map(b=>{const m=b.match(/Expected gross:\s*\$?([\d\\,]+(?:\.\d+)?)/i);return m?m[1].replace(/[\\,]/g,''):''});const rows=parsed.rows.map((r,ri)=>{const gb=grossByBlock[r.blockIndex!=null?r.blockIndex:ri];if(gb)r={...r,pay:gb};const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,r));const flags=[...r.flags];if(duplicate)flags.push('already in CRNA Hub — will merge, not double');return {...r,source:sourceCode,sourceLabel,status:importStatusForDate(r.date),include:true,duplicate,incomplete:!String(r.pay||'').trim(),note:'Imported from '+sourceLabel+' (.ics): '+f.name}});calPreview={fileName:f.name,sourceLabel,sourceCode,rows};if(!rows.length){calImportError='No events found in that calendar file. Nothing was saved.';calPreview=null}render()}
 function approveCalendarImport(){if(!calPreview)return;let rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac){const fillTarget=facilityByNameOrAlias(fillFac);const pendingFill=rows.filter(r=>!scheduleRowFacilityResolved(r));for(const r of pendingFill){const prevFac=String(r.facility||'').trim();r.facility=fillFac;if(fillTarget&&prevFac&&prevFac.length<=12&&/^[A-Za-z0-9][A-Za-z0-9.&']*$/.test(prevFac))addFacilityAlias(fillTarget,prevFac)}}rows=combineDayCallRows(rows);let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportDescribed(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}const builtCal=[];for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0){pay=String(pp);payUnit='facility'}}builtCal.push({row:r,rec:{id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note}})}
 const calGate=importGateCheck(calPreview,builtCal.map(b=>b.rec));if(calGate.stopped){render();gateStopAlert();return}
 const calAddSet=new Set([...calGate.clean,...calGate.dups,...(calGate.addAnyway||[]).map(c=>c.rec)]);const calLeftOut=(calGate.skippedConflicts||[]).length;
@@ -7636,6 +7636,10 @@ async function fetchQgendaFeed(opts){
       const date=String(sh.date||''),facility=String(sh.facility||'').trim(),type=String(sh.type||'Other');
       const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,{date,facility,type,code:String(sh.code||'').trim()}));
       const flags=[]; if(duplicate)flags.push('already in CRNA Hub — will merge, not double'); if(!sh.facilityKnown)flags.push('new facility — will be suggested, not created');
+      // Multi-day blocks (v130): the feed expands day blocks into one
+      // row per day server-side; label each such row with its block,
+      // and flag the rows that deliberately stayed single.
+      if(sh.spanFrom&&sh.spanTo&&sh.spanFrom!==sh.spanTo){if(sh.spanKept==='call')flags.push('multi-day call ('+sh.spanFrom+' to '+sh.spanTo+') — one shift on its first day; a call is a single assignment');else if(sh.spanKept)flags.push('multi-day event ('+sh.spanFrom+' to '+sh.spanTo+') — imported on its first day only');else flags.push('one day of a '+sh.spanFrom+' to '+sh.spanTo+' block — split into one shift per day')}
       return {date,facility,type,code:String(sh.code||'').trim(),hours:(typeof sh.hours==='number'&&isFinite(sh.hours))?sh.hours:null,pay:String(sh.pay||''),name:name,matchedName:name,match:'matched',include:true,duplicate,flags,source:'qgenda-feed',incomplete:!String(sh.pay||'').trim()};
     });
     // One assignment per day (December round): a day task and a
@@ -8294,10 +8298,37 @@ function parseFacilityContract(text,fileName){
   for(const f of facilities)f.unattached=unattached.slice();
   return {contract,facilities,shiftCount:(parsed.rows||[]).length,isPhoto:false};
 }
+function icsAddDaysStr(d,n){const t=new Date(d+'T12:00:00Z');t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10)}
+function icsSpanDays(dtStartRaw,dtEndRaw,startDateStr){
+ // Covered calendar days of an ICS event (v130) — the same end
+ // semantics as the server's spanLastCoveredDay: a date-only DTEND is
+ // EXCLUSIVE (Mon + end Sat covers Mon–Fri); a DTEND at exactly
+ // midnight does not claim that final day; any other DTEND covers its
+ // date. And the same BLOCK test as the server's spanBlockLastDay: a
+ // timed event is a block only at 48+ hours — one shift crossing
+ // midnight (a night float, a 24-hour call) is not a block. Returns
+ // [start] for single-day events, non-blocks, and spans over 62 days
+ // (a placement/leave marker, not a shift block).
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr||''))return [];
+ const t=String(dtEndRaw||'').trim();let last='';
+ let m=/^(\d{4})(\d{2})(\d{2})$/.exec(t);
+ if(m)last=icsAddDaysStr(m[1]+'-'+m[2]+'-'+m[3],-1);
+ else{m=/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/.exec(t);if(m){const d=m[1]+'-'+m[2]+'-'+m[3];last=(m[4]==='00'&&m[5]==='00')?icsAddDaysStr(d,-1):d}}
+ if(!last||last<=startDateStr)return [startDateStr];
+ if(!/^\d{8}$/.test(t)){
+   const ms=v=>{const mm=/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?/.exec(String(v||'').trim());return mm?Date.UTC(+mm[1],+mm[2]-1,+mm[3],+mm[4],+mm[5],+(mm[6]||0)):NaN};
+   const dur=ms(dtEndRaw)-ms(dtStartRaw);
+   if(!(dur>=48*3600*1000))return [startDateStr];
+ }
+ const total=Math.round((Date.parse(last+'T12:00:00Z')-Date.parse(startDateStr+'T12:00:00Z'))/86400000)+1;
+ if(total<2||total>62)return [startDateStr];
+ const out=[];for(let i=0;i<total;i++)out.push(icsAddDaysStr(startDateStr,i));
+ return out}
 function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,'');const rates=contractExtractRates(clean);const rows=[];let globalFacility='';
  const blocks=clean.split(/BEGIN:VEVENT/i).slice(1);
- for(const b of blocks){const get=k=>{const m=b.match(new RegExp(k+':(.*)','i'));return m?m[1].trim():''};
+ for(let bi=0;bi<blocks.length;bi++){const b=blocks[bi];const get=k=>{const m=b.match(new RegExp(k+':(.*)','i'));return m?m[1].trim():''};
    const dt=get('DTSTART(?:;[^:]*)?');let dateStr=dt.replace(/^(\d{4})(\d{2})(\d{2}).*$/,'$1-$2-$3');if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)){const p=contractParseSingle(dt);dateStr=p.iso||''}
+   const dtEnd=get('DTEND(?:;[^:]*)?');
    const summary=get('SUMMARY'),location=get('LOCATION'),desc=get('DESCRIPTION').replace(/\\n/g,' ');
    const type=contractShiftType(summary+' '+desc)||'Other';
    const facObj=contractFacilityForLine(location||summary,globalFacility);
@@ -8308,7 +8339,33 @@ function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,
    const savedContract=(db.contracts||[]).find(c=>(c.facility||'').toLowerCase()===facility.toLowerCase());
    const resolved=contractResolvePay({date:dateStr,type},rates,facilityObj,savedContract);flags.push(...resolved.flags);
    if((db.shifts||[]).some(x=>x.date===dateStr&&x.facility===facility&&x.type===type))flags.push('overlapping / duplicate shift already recorded');
-   rows.push({date:dateStr,facility,type,pay:resolved.pay,paySource:resolved.source,flags,include:true,source:'extracted-from-contract',status:importStatusForDate(dateStr)})}
+   // Multi-day events (v130): one event covering several days (a week
+   // block typed as a single calendar event) becomes ONE ROW PER
+   // COVERED DAY when its kind is a day shift — or when it is an
+   // all-day event at a facility the event itself names (each day is
+   // then classified and priced per day at approve time, exactly like
+   // a single-day import; an unpaid/PCDO day settles at $0 there). A CALL event is
+   // never split: it stays one row on its first day, flagged. A timed
+   // event whose kind cannot be classified also stays on its first
+   // day, flagged — never guessed. Every row is listed in the preview
+   // with its flag, so the expansion is approved explicitly, and each
+   // row keeps its source block index (blockIndex) so per-block data
+   // (an "Expected gross" line) still lands on the right block.
+   const spanDays=icsSpanDays(dt,dtEnd,dateStr);
+   const spanKind=(type==='24-hour call'||type==='Second call'||type==='Call (unclassified)')?'call':((type==='8-hour day'||type==='10-hour shift'||type==='12-hour shift')?'day':'');
+   const expandSpan=spanDays.length>1&&(spanKind==='day'||(spanKind===''&&/^\d{8}$/.test(dt.trim())&&!!facObj.fromSaved));
+   const emitDays=expandSpan?spanDays:[dateStr];
+   for(const dayKey of emitDays){
+     const dayFlags=flags.slice();
+     if(spanDays.length>1){
+       if(expandSpan)dayFlags.push('one day of a '+spanDays[0]+' to '+spanDays[spanDays.length-1]+' block — the event covered '+spanDays.length+' days and is split into one shift per day');
+       else if(spanKind==='call')dayFlags.push('multi-day call ('+spanDays[0]+' to '+spanDays[spanDays.length-1]+') — imported as one shift on its first day; a call is a single assignment');
+       else dayFlags.push('this event spans '+spanDays.length+' days ('+spanDays[0]+' to '+spanDays[spanDays.length-1]+') — imported on its first day only');
+     }
+     const dayResolved=dayKey===dateStr?resolved:contractResolvePay({date:dayKey,type},rates,facilityObj,savedContract);
+     if(dayKey!==dateStr){dayResolved.flags.forEach(f=>{if(!dayFlags.includes(f))dayFlags.push(f)});if((db.shifts||[]).some(x=>x.date===dayKey&&x.facility===facility&&x.type===type))dayFlags.push('overlapping / duplicate shift already recorded')}
+     rows.push({date:dayKey,facility,type,pay:dayResolved.pay,paySource:dayResolved.source,flags:dayFlags,include:true,source:'extracted-from-contract',status:importStatusForDate(dayKey),blockIndex:bi});
+   }}
  const ds=rows.map(r=>r.date).filter(Boolean).sort();
  const contract={id:id(),facility:globalFacility||(rows[0]?rows[0].facility:''),effectiveStart:ds[0]||'',effectiveEnd:ds[ds.length-1]||'',rates,source:'extracted-from-contract',sourceFile:fileName||'',method:'deterministic-parse (no AI model)',extractedAt:new Date().toISOString()};
  return {contract,rows}}

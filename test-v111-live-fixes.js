@@ -311,6 +311,6 @@ function checkFixture(label, text) {
     t('E: headline $39,832.50', run(`monthHeadline('2026-11').gross`) === 39832.5, String(run(`monthHeadline('2026-11').gross`)));
   }
 
-  t('sw: cache bumped to v111', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v129'));
+  t('sw: cache bumped to v111', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v130'));
   console.log(fails ? ('FAILURES: ' + fails) : 'ALL PASS');
 })();
