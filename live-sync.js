@@ -387,6 +387,11 @@ function liveSyncFacilitiesPayload() {
     paidHours8: num(f.paidHours8) || null,
     callBonus: num(f.callBonus) || null,
     weekendDays: Array.isArray(f.weekendDays) ? f.weekendDays.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6) : null,
+    // The facility's saved code definitions travel with the sync
+    // (v134): without them the server cannot classify titles whose
+    // codes only a definition can read ("CAMC 8s"), and multi-day
+    // TIMED blocks of those codes cannot expand server-side.
+    codeDefs: typeof facilityCodeDefsPayload === 'function' ? facilityCodeDefsPayload(f) : [],
   }));
 }
 
@@ -533,6 +538,21 @@ function liveSyncApplyChanges(provider, data) {
         data.imported.newFacilities.forEach((n) => { if (n) suggestions.push(n); });
       }
     }
+    // Derived code definitions (v134): codes the server read
+    // straight off their own names ("8s" at an hourly-rate
+    // facility with no saved definition) persist on the facility
+    // as derived definitions — visible, editable, and replaced by
+    // the user's own words. Never overwrites an existing
+    // definition. Older servers send none; nothing changes then.
+    if (Array.isArray(data.imported.derivedCodes) && typeof ensureDerivedCodeDef === 'function') {
+      for (const dc of data.imported.derivedCodes) {
+        if (!dc || !dc.code) continue;
+        const dfac = typeof facilityByNameOrVariant === 'function' ? facilityByNameOrVariant(String(dc.facility || '')) : null;
+        if (dfac && ensureDerivedCodeDef(dfac, String(dc.code), dc.hours)) {
+          try { if (typeof cloudSaveKind === 'function') cloudSaveKind('facilities', dfac.id); } catch (e) {}
+        }
+      }
+    }
   }
   // Pending deletions are recomputed by the server on EVERY sync
   // from current state, so the stored list for this provider is
@@ -603,6 +623,19 @@ async function liveSyncNow(provider, silent) {
     };
     const data = await liveSyncPost('sync-calendar', payload);
     const applied = liveSyncApplyChanges(provider, data);
+    // Suggestion links drained (v134): a hospital this sync (or an
+    // earlier heal) matched to an existing facility under a
+    // different spelling gets its waiting shifts pulled against
+    // that facility now — the v121 post-setup pull, automatic.
+    // The queue empties as it drains, so the nested sync cannot
+    // loop; once the alias is saved the server stops holding
+    // those events at all.
+    if (typeof takePendingSuggestionLinks === 'function') {
+      const links = takePendingSuggestionLinks();
+      for (const link of links) {
+        if (link && link.name) await liveSyncRescanAfterFacilitySave(link.provider || provider, link.name);
+      }
+    }
     await liveSyncFetchStatus();
     await liveSyncFetchLog();
     liveSyncBusy = '';
@@ -651,6 +684,7 @@ async function liveSyncNow(provider, silent) {
           if (imp.expandedBlocks) msg += ' ' + imp.expandedBlocks + ' multi-day block(s) became one shift per day (' + (imp.expandedBlocks + (imp.expandedExtraDays || 0)) + ' day shift(s) in all).';
           if (imp.keptCallBlocks) msg += ' ' + imp.keptCallBlocks + ' multi-day call(s) stayed one shift on their first day, as calls are single assignments.';
           if (imp.ambiguousBlocks) msg += ' ' + imp.ambiguousBlocks + ' multi-day event(s) could not be classified and were imported on their first day only — check them on the calendar.';
+          if (Array.isArray(imp.derivedCodes) && imp.derivedCodes.length) msg += ' Learned ' + imp.derivedCodes.length + ' code(s) straight from their names (' + imp.derivedCodes.map((d) => '“' + d.code + '” = ' + d.hours + '-hour shift').join(', ') + ') — they are saved on the Facilities tab; edit them any time.';
           // Held hospitals are NOT lumped into this sentence any
           // more (Nov 11, 2026, v121): they ride along as their own
           // per-hospital list in the result sheet below.

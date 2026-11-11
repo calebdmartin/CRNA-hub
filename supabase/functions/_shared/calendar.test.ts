@@ -1073,3 +1073,214 @@ Deno.test("v130: a held (unknown-facility) day block still expands per day for s
   assertEquals(ex.blocks, 1);
   assertEquals(ex.events.length, 5);
 });
+
+// ---------------------------------------------------------------------------
+// v134: multi-day TIMED blocks of facility-defined codes + the
+// self-describing-code rule (Caleb, Nov 11, 2026). His live calendar
+// holds NINE timed CAMC blocks (fixture:
+// caleb-camc-calendar-blocks-2026-11-11.md); on v132 code, driving
+// them through the loop's own path produced 4 shifts / $8,000 of the
+// 37 / $77,000 the blocks actually cover — the codes ("8s", "12s")
+// were classifiable only via the facility's CLIENT-side codeMap,
+// which the server never saw, and timed blocks expand only when the
+// server classifies them. These tests pin the fix at the same layer.
+// ---------------------------------------------------------------------------
+
+import {
+  matchFacilityCodeDef,
+  selfDescribingCodeHours,
+} from "./calendar.ts";
+
+const camcDefs = [
+  { code: "8", label: "8-hour shift", hours: 8, canonicalType: "8-hour day" },
+  { code: "10", label: "10-hour shift", hours: 10, canonicalType: "10-hour shift" },
+  { code: "12", label: "12-hour shift", hours: 12, canonicalType: "12-hour shift" },
+  { code: "5**", label: "10-hour shift", hours: 10, canonicalType: "10-hour shift" },
+  { code: "5*", label: "10-hour shift", hours: 10, canonicalType: "10-hour shift" },
+  { code: "7", label: "12-hour shift", hours: 12, canonicalType: "12-hour shift" },
+];
+const camcWithDefs = normalizeFacilityRules([
+  { name: "CAMC", aliases: [], hourlyRate: 250, codeDefs: camcDefs },
+]);
+const camcHourlyOnly = normalizeFacilityRules([
+  { name: "CAMC", aliases: [], hourlyRate: 250 },
+]);
+
+function timedBlockIcs(uid: string, summary: string, start: string, end: string): string {
+  return [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    `UID:${uid}`, `SUMMARY:${summary}`,
+    `DTSTART;TZID=America/New_York:${start}`,
+    `DTEND;TZID=America/New_York:${end}`,
+    "LAST-MODIFIED:20261101T120000Z", "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+}
+
+// Drive one source event through the import loop's own path:
+// parseIcsEvent -> expandSourceEventSpan -> per-day parse.
+function loopShifts(ics: string, rules: ReturnType<typeof normalizeFacilityRules>) {
+  const ev = parseIcsEvent(ics, "href");
+  assert(ev, "event parses");
+  const ex = expandSourceEventSpan(ev!, rules);
+  const out: { date: string; type: string; pay: string; id: string }[] = [];
+  for (const dayEv of ex.events) {
+    const p = parseWorkShiftEvent(dayEv.summary ?? "", dayEv.location ?? "", dayEv.date, rules);
+    if (p) out.push({ date: dayEv.date, type: p.type, pay: p.pay, id: dayEv.providerEventId });
+  }
+  return { ex, out, ev: ev! };
+}
+
+Deno.test("v134: Caleb's nine real CAMC blocks expand to 37 priced day-shifts", () => {
+  const specs: { uid: string; summary: string; start: string; end: string; days: number; perDay: number }[] = [
+    { uid: "blk1@caleb", summary: "Camc 12s ", start: "20260113T150000", end: "20260115T160000", days: 3, perDay: 3000 },
+    { uid: "blk3@caleb", summary: "CAMC 8s", start: "20260414T070000", end: "20260417T080000", days: 4, perDay: 2000 },
+    { uid: "blk4@caleb", summary: "Camc 8", start: "20260518T160000", end: "20260521T170000", days: 4, perDay: 2000 },
+    { uid: "blk5@caleb", summary: "CAMC 8s", start: "20260609T070000", end: "20260612T150000", days: 4, perDay: 2000 },
+    { uid: "blk6@caleb", summary: "CAMC 8s", start: "20260615T073000", end: "20260617T153000", days: 3, perDay: 2000 },
+    { uid: "blk7@caleb", summary: "CAMC 8s", start: "20260720T070000", end: "20260724T080000", days: 5, perDay: 2000 },
+    { uid: "blk8@caleb", summary: "CAMC 8s", start: "20260804T070000", end: "20260807T080000", days: 4, perDay: 2000 },
+    { uid: "blk9@caleb", summary: "CAMC 8s", start: "20260810T070000", end: "20260814T080000", days: 5, perDay: 2000 },
+    { uid: "blk10@caleb", summary: "CAMC 8s", start: "20260831T070000", end: "20260904T080000", days: 5, perDay: 2000 },
+  ];
+  let totalShifts = 0;
+  let totalPay = 0;
+  for (const s of specs) {
+    const { ex, out } = loopShifts(timedBlockIcs(s.uid, s.summary, s.start, s.end), camcWithDefs);
+    assertEquals(ex.blocks, 1, s.uid + " counts as one block");
+    assertEquals(out.length, s.days, s.uid + " day count");
+    for (const sh of out) {
+      assertEquals(Number(sh.pay), s.perDay, s.uid + " " + sh.date + " price");
+      totalPay += Number(sh.pay);
+    }
+    totalShifts += out.length;
+    // Re-expansion is deterministic: a re-sync re-derives the same
+    // per-day ids and adds zero.
+    const again = loopShifts(timedBlockIcs(s.uid, s.summary, s.start, s.end), camcWithDefs);
+    assertEquals(
+      again.out.map((x) => x.id + "|" + x.date),
+      out.map((x) => x.id + "|" + x.date),
+      s.uid + " re-sync identity",
+    );
+  }
+  assertEquals(totalShifts, 37);
+  assertEquals(totalPay, 77000);
+});
+
+Deno.test("v134: the week Caleb flagged — Aug 10–14 lands as five individual days", () => {
+  const { out } = loopShifts(
+    timedBlockIcs("flag@caleb", "CAMC 8s", "20260810T070000", "20260814T080000"),
+    camcWithDefs,
+  );
+  assertEquals(out.map((x) => x.date), [
+    "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14",
+  ]);
+  assertEquals(out.map((x) => x.type), [
+    "8-hour day", "8-hour day", "8-hour day", "8-hour day", "8-hour day",
+  ]);
+});
+
+Deno.test("v134: hourly-only card — pure-duration codes describe themselves", () => {
+  // Single events first (Caleb's exact question, Nov 11, 2026).
+  const p8 = parseWorkShiftEvent("CAMC 8s", "", "2026-08-10", camcHourlyOnly);
+  assertEquals(p8?.type, "8-hour day");
+  assertEquals(p8?.pay, "2000");
+  assertEquals(p8?.derivedCode, { code: "8s", hours: 8 });
+  const p10 = parseWorkShiftEvent("CAMC 10s", "", "2026-08-10", camcHourlyOnly);
+  assertEquals(p10?.pay, "2500");
+  assertEquals(p10?.derivedCode, { code: "10s", hours: 10 });
+  const p12 = parseWorkShiftEvent("CAMC 12s", "", "2026-08-10", camcHourlyOnly);
+  assertEquals(p12?.pay, "3000");
+  assertEquals(p12?.derivedCode, { code: "12s", hours: 12 });
+  // And the Aug 10–14 block expands on the derived reading too.
+  const { out } = loopShifts(
+    timedBlockIcs("self@caleb", "CAMC 8s", "20260810T070000", "20260814T080000"),
+    camcHourlyOnly,
+  );
+  assertEquals(out.length, 5);
+  assertEquals(out.reduce((a, x) => a + Number(x.pay), 0), 10000);
+});
+
+Deno.test("v134: hard guards — asterisk codes and facility codes never self-price", () => {
+  // 5** at CAMC is a 10-hour shift BY DEFINITION, not 5 hours:
+  // with no definition it does not parse at all (client surfaces
+  // it for clarification) — and never as $1,250.
+  assertEquals(parseWorkShiftEvent("CAMC 5**", "", "2026-08-10", camcHourlyOnly), null);
+  assertEquals(parseWorkShiftEvent("CAMC 5*", "", "2026-08-10", camcHourlyOnly), null);
+  // Bare "7" never self-prices (at CAMC it is a defined 12-hour code).
+  assertEquals(parseWorkShiftEvent("CAMC 7", "", "2026-08-10", camcHourlyOnly), null);
+  // Non-duration characters never self-price.
+  assertEquals(parseWorkShiftEvent("CAMC 10hr ENDO", "", "2026-08-10", camcHourlyOnly), null);
+  // With definitions shipped, the same titles price BY DEFINITION.
+  const d5 = parseWorkShiftEvent("CAMC 5**", "", "2026-08-10", camcWithDefs);
+  assertEquals(d5?.type, "10-hour shift");
+  assertEquals(d5?.pay, "2500");
+  assertEquals(d5?.derivedCode, undefined);
+  const d7 = parseWorkShiftEvent("CAMC 7", "", "2026-08-10", camcWithDefs);
+  assertEquals(d7?.pay, "3000");
+  // A saved definition outranks the derived reading even for the
+  // plural form: "7s" folds onto the saved "7" (a 12-hour code),
+  // it does NOT become a derived 7-hour shift.
+  const d7s = parseWorkShiftEvent("CAMC 7s", "", "2026-08-10", camcWithDefs);
+  assertEquals(d7s?.pay, "3000");
+  assertEquals(d7s?.derivedCode, undefined);
+});
+
+Deno.test("v134: selfDescribingCodeHours forms and bounds", () => {
+  assertEquals(selfDescribingCodeHours("8"), 8);
+  assertEquals(selfDescribingCodeHours("8s"), 8);
+  assertEquals(selfDescribingCodeHours("8hr"), 8);
+  assertEquals(selfDescribingCodeHours("8 hr"), 8);
+  assertEquals(selfDescribingCodeHours("8-hour"), 8);
+  assertEquals(selfDescribingCodeHours("8 hours"), 8);
+  assertEquals(selfDescribingCodeHours("12S"), 12);
+  assertEquals(selfDescribingCodeHours("9s"), 9);
+  assertEquals(selfDescribingCodeHours("7s"), 7);
+  assertEquals(selfDescribingCodeHours("7"), null);
+  assertEquals(selfDescribingCodeHours("5**"), null);
+  assertEquals(selfDescribingCodeHours("5*"), null);
+  assertEquals(selfDescribingCodeHours("24"), null);
+  assertEquals(selfDescribingCodeHours("24s"), null);
+  assertEquals(selfDescribingCodeHours("3s"), null);
+  assertEquals(selfDescribingCodeHours("17s"), null);
+  assertEquals(selfDescribingCodeHours("10hr ENDO"), null);
+  assertEquals(selfDescribingCodeHours("call 2"), null);
+  assertEquals(selfDescribingCodeHours(""), null);
+});
+
+Deno.test("v134: matchFacilityCodeDef — plural-tolerant, unique or nothing", () => {
+  const rule = camcWithDefs[0];
+  assertEquals(matchFacilityCodeDef(rule, "8s")?.code, "8");
+  assertEquals(matchFacilityCodeDef(rule, "CAMC 12s")?.code, "12");
+  assertEquals(matchFacilityCodeDef(rule, "5**")?.code, "5**");
+  assertEquals(matchFacilityCodeDef(rule, "nope"), null);
+  // Normalize: the shipped payload coerces defs; junk is dropped.
+  const coerced = normalizeFacilityRules([
+    { name: "X", codeDefs: [{ code: "8", hours: "8" }, { code: "" }, { hours: 3 }, "junk"] },
+  ]);
+  assertEquals(coerced[0].codeDefs?.length, 1);
+  assertEquals(coerced[0].codeDefs?.[0].hours, 8);
+});
+
+Deno.test("v134: defined call blocks stay single; defined day blocks expand", () => {
+  const callRules = normalizeFacilityRules([{
+    name: "CAMC",
+    hourlyRate: 250,
+    codeDefs: [
+      { code: "Call 1", label: "24hr call", canonicalType: "24-hour call", weekdayPay: 4800, weekendPay: 4200 },
+      { code: "PCDO", label: "post call day off", unpaid: true },
+    ],
+  }]);
+  const call = parseWorkShiftEvent("CAMC Call 1", "", "2026-08-10", callRules);
+  assertEquals(call?.type, "24-hour call");
+  assertEquals(call?.pay, "4800"); // 2026-08-10 is a Monday
+  assertEquals(call?.spanKind, "call");
+  const { ex } = loopShifts(
+    timedBlockIcs("call@caleb", "CAMC Call 1", "20260810T070000", "20260812T080000"),
+    callRules,
+  );
+  assertEquals(ex.blocks, 0);
+  assertEquals(ex.events.length, 1);
+  // An unpaid defined code prices exactly $0 as a settled price.
+  const pcdo = parseWorkShiftEvent("CAMC PCDO", "", "2026-08-10", callRules);
+  assertEquals(pcdo?.pay, "0");
+});

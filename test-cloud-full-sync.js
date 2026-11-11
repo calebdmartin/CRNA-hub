@@ -116,7 +116,7 @@ const sess = (tok, uid) => ({ access_token: tok, refresh_token: 'ref', expires_a
 
 (async () => {
   t('precondition: Supabase configured, cache v65',
-    run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v133'));
+    run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v134'));
   t('source: full-sync tables and tombstones are wired',
     appSrc.includes("'/rest/v1/shifts'") && appSrc.includes("'/rest/v1/facilities'") &&
     appSrc.includes("'/rest/v1/mileage_trips'") && appSrc.includes("'/rest/v1/pay_stubs'") &&

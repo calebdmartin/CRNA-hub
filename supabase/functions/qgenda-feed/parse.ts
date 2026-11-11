@@ -87,6 +87,11 @@ export interface QgendaShift {
   spanFrom?: string;
   spanTo?: string;
   spanKept?: "call" | "ambiguous";
+  // The span kind the shared parser's classification carried
+  // (v134): set when the type came from the facility's saved code
+  // definitions or the self-describing rule, whose type strings
+  // cannot always speak for themselves.
+  spanKind?: "day" | "call";
 }
 
 export function isQgendaFeedUrl(url: string): boolean {
@@ -704,7 +709,7 @@ export function expandQgendaSpanRows(
       out.push(row);
       continue;
     }
-    const kind = spanKindForShiftType(row.type);
+    const kind = row.spanKind ?? spanKindForShiftType(row.type);
     if (kind !== "day") {
       out.push({ ...row, spanKept: kind === "call" ? "call" : "ambiguous" });
       continue;
@@ -717,7 +722,11 @@ export function expandQgendaSpanRows(
         ...row,
         date: day,
         uid: i === 0 ? row.uid : `${row.uid}#${day}`,
-        pay: rule ? priceShiftWithFacility(row.type, rule, day) : row.pay,
+        // Per-day re-price from the facility rule (a weekend variant
+        // applies on the weekend days); when the rule's formula has
+        // no price for this type — a definition-priced row (v134) —
+        // the row's own parsed price stands rather than blanking.
+        pay: (rule ? priceShiftWithFacility(row.type, rule, day) : "") || row.pay,
         status: importStatusForDate(day),
       });
     });
@@ -735,11 +744,15 @@ export function parseQgendaICS(
   eventCount: number;
   droppedHousekeeping: number;
   droppedNoDate: number;
+  // Self-describing codes read off their own names in this feed
+  // (v134) — the client persists them as derived definitions.
+  derivedCodes: { facility: string; code: string; hours: number }[];
 } {
   const userName = typeof opts?.name === "string" ? opts.name : "";
   const clean = unfoldIcs(icsText);
   const blocks = clean.split(/BEGIN:VEVENT/i).slice(1);
   const shifts: QgendaShift[] = [];
+  const derivedCodes: { facility: string; code: string; hours: number }[] = [];
   const unknown = new Map<string, number>();
   let droppedHousekeeping = 0;
   let droppedNoDate = 0;
@@ -1058,6 +1071,12 @@ export function parseQgendaICS(
       }
     }
 
+    if (parsed.derivedCode) {
+      const dc = parsed.derivedCode;
+      if (!derivedCodes.some((d) => d.facility === parsed.facility && d.code === dc.code)) {
+        derivedCodes.push({ facility: parsed.facility, code: dc.code, hours: dc.hours });
+      }
+    }
     shifts.push({
       date,
       facility,
@@ -1068,6 +1087,7 @@ export function parseQgendaICS(
       uid,
       code: pCode,
       hours,
+      ...(pType === parsed.type && parsed.spanKind ? { spanKind: parsed.spanKind } : {}),
       ...spanFields,
     });
     if (!facilityKnown) {
@@ -1080,5 +1100,6 @@ export function parseQgendaICS(
     eventCount: blocks.length,
     droppedHousekeeping,
     droppedNoDate,
+    derivedCodes,
   };
 }

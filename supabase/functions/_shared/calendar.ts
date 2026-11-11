@@ -453,6 +453,26 @@ export interface FacilityPayRule {
   // facility's call pricing — the facility's own rule, captured in
   // the user's words, never a global constant. Absent = Sat/Sun.
   weekendDays?: number[] | null;
+  // The facility's saved shift-code definitions (v134), shipped by
+  // the client with every sync. Without them the server could not
+  // classify titles whose codes only a saved definition can read
+  // ("CAMC 8s"), and — because expansion lives server-side (v130) —
+  // multi-day TIMED blocks of those codes stayed single.
+  codeDefs?: FacilityCodeDef[] | null;
+}
+
+// One saved shift-code definition from a facility's rate card
+// (v134). Amounts mirror the client's def shape; every field is
+// optional and validated on the way in (normalizeFacilityRules).
+export interface FacilityCodeDef {
+  code: string;
+  label?: string | null;
+  hours?: number | null;
+  paidHours?: number | null;
+  weekdayPay?: number | null;
+  weekendPay?: number | null;
+  unpaid?: boolean;
+  canonicalType?: string | null;
 }
 
 function ruleNum(v: unknown): number | null {
@@ -462,6 +482,31 @@ function ruleNum(v: unknown): number | null {
     ? Number(v)
     : NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Validate the client's shipped code definitions (v134). A def
+// needs only its code string; amounts ride along when present and
+// finite. Capped so a runaway payload cannot bloat a rule.
+function normalizeCodeDefs(input: unknown): FacilityCodeDef[] | null {
+  if (!Array.isArray(input)) return null;
+  const out: FacilityCodeDef[] = [];
+  for (const raw of input.slice(0, 200)) {
+    if (!raw || typeof raw !== "object") continue;
+    const d = raw as Record<string, unknown>;
+    const code = String(d.code ?? "").trim();
+    if (!code) continue;
+    out.push({
+      code,
+      label: typeof d.label === "string" && d.label.trim() ? d.label.trim() : null,
+      hours: ruleNum(d.hours),
+      paidHours: ruleNum(d.paidHours),
+      weekdayPay: ruleNum(d.weekdayPay),
+      weekendPay: ruleNum(d.weekendPay),
+      unpaid: d.unpaid === true,
+      canonicalType: typeof d.canonicalType === "string" && d.canonicalType.trim() ? d.canonicalType.trim() : null,
+    });
+  }
+  return out.length ? out : null;
 }
 
 // Coerce the browser's facilities payload (one entry per saved facility:
@@ -499,6 +544,7 @@ export function normalizeFacilityRules(input: unknown): FacilityPayRule[] {
       weekendDays: Array.isArray(r.weekendDays)
         ? [...new Set(r.weekendDays.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b)
         : null,
+      codeDefs: normalizeCodeDefs(r.codeDefs),
     });
   }
   return out;
@@ -767,7 +813,12 @@ export function expandSourceEventSpan(
     facilities,
   );
   if (!parsed) return none;
-  const kind = spanKindForShiftType(parsed.type);
+  // A classification that came from the facility's saved code
+  // definitions (or the self-describing rule) carries its own span
+  // kind (v134) — the type string alone cannot always say it (a
+  // definition's label, a non-standard duration). Everything else
+  // classifies from the canonical type, as before.
+  const kind = parsed.spanKind ?? spanKindForShiftType(parsed.type);
   const span = { spanStartDate: days[0], spanEndDate: days[days.length - 1] };
   if (kind === "call") {
     return {
@@ -911,13 +962,142 @@ export function importStatusForDate(date: string, today = ""): "confirmed" | "pr
   return "confirmed";
 }
 
+// --- Code-definition matching + the self-describing-code rule (v134) ---
+//
+// Shared code identity, mirroring the client's codeIdentityKey /
+// codeStripKey / plural tolerance (v128–v131): case and punctuation
+// fold away, a facility's own name/alias prefix is stripped, and a
+// trailing plural 's' on a numeric token folds ("8s" IS the "8"
+// code). One identity everywhere, so a title the client would price
+// from the rate card is a title the server can classify too — which
+// is what lets multi-day TIMED blocks of defined codes expand here.
+function codeIdentityKeyTs(code: string): string {
+  return String(code || "").toLowerCase().replace(/[^a-z0-9*]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function stripFacilityKeyTs(key: string, rule: FacilityPayRule): string {
+  let k = key;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const nm of [rule.name, ...(rule.aliases ?? [])]) {
+      const nk = codeIdentityKeyTs(nm);
+      if (nk && (k === nk || k.startsWith(nk + " "))) {
+        k = k.slice(nk.length).trim();
+        changed = true;
+      }
+    }
+  }
+  return k;
+}
+function pluralFoldKeyTs(key: string): string {
+  const toks = key.split(" ");
+  const last = toks[toks.length - 1] || "";
+  if (/^\d+s$/.test(last)) toks[toks.length - 1] = last.slice(0, -1);
+  return toks.join(" ");
+}
+// The saved definition a title's code resolves to — exact identity
+// or plural-folded, on either side. A tie (two definitions claim
+// the code) resolves to nothing: ambiguity never guesses where
+// money moves.
+export function matchFacilityCodeDef(
+  rule: FacilityPayRule,
+  candidate: string,
+): FacilityCodeDef | null {
+  const defs = rule.codeDefs ?? [];
+  if (!defs.length) return null;
+  const cand = stripFacilityKeyTs(codeIdentityKeyTs(candidate), rule);
+  if (!cand) return null;
+  const candFold = pluralFoldKeyTs(cand);
+  const hits = new Set<FacilityCodeDef>();
+  for (const def of defs) {
+    const dk = stripFacilityKeyTs(codeIdentityKeyTs(def.code), rule);
+    if (!dk) continue;
+    if (dk === cand || pluralFoldKeyTs(dk) === cand || dk === candFold || pluralFoldKeyTs(dk) === candFold) hits.add(def);
+  }
+  return hits.size === 1 ? [...hits][0] : null;
+}
+// The self-describing-code rule (v134, Caleb's ask): a code token
+// that is PURELY a duration — "8", "8s", "8hr", "8 hr", "8-hour",
+// "8 hours" — describes itself: an N-hour day shift at the
+// facility's hourly rate. Bare numbers self-describe only for the
+// classic day lengths 8/10/12 (the historical bare-number rule);
+// suffixed forms accept any plausible shift length 4–16. HARD
+// GUARDS: anything carrying an asterisk or any other character
+// (5*, 5**, "10hr ENDO") NEVER self-prices — those codes' meanings
+// are facility-defined (at CAMC, 5** is a 10-hour shift, not five
+// hours); 24 never self-prices (call territory — call patterns run
+// before this rule ever sees a title). A saved definition always
+// outranks this rule: callers try matchFacilityCodeDef first.
+export function selfDescribingCodeHours(candidate: string): number | null {
+  const c = String(candidate || "").trim().toLowerCase();
+  if (!c || c.includes("*")) return null;
+  const m = c.match(/^(\d{1,2})\s*(s|hr|hrs|hour|hours|-hour|-hours)?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n === 24) return null;
+  if (!m[2]) return n === 8 || n === 10 || n === 12 ? n : null;
+  return n >= 4 && n <= 16 ? n : null;
+}
+export function canonicalDurationType(hours: number): string {
+  return hours === 8 ? "8-hour day" : hours === 10 ? "10-hour shift" : hours === 12 ? "12-hour shift" : `${hours}-hour shift`;
+}
+// Price a shift classified by a saved code definition, mirroring
+// the client's clarifiedRowPricing precedence: unpaid is a final
+// $0; the definition's own weekday/weekend figures win unless the
+// facility carries a flat for that canonical duration; then the
+// facility formula; then the definition's hours at the hourly rate.
+// "" when nothing prices it — never a guessed amount.
+function priceFromCodeDef(def: FacilityCodeDef, rule: FacilityPayRule, type: string, date: string): string {
+  if (def.unpaid) return "0";
+  const flat = /8-hour/.test(type) ? rule.rate8 : /10-hour/.test(type) ? rule.rate10 : /12-hour/.test(type) ? rule.rate12 : null;
+  const wd = def.weekdayPay ?? null;
+  const we = def.weekendPay ?? null;
+  if ((wd != null || we != null) && flat == null) {
+    const weekendSet = rule.weekendDays && rule.weekendDays.length ? rule.weekendDays : [0, 6];
+    const weekend = /^\d{4}-\d{2}-\d{2}$/.test(date) ? weekendSet.includes(new Date(date + "T12:00:00").getDay()) : false;
+    const pick = weekend ? (we ?? wd) : (wd ?? we);
+    if (pick != null) return String(Math.round(pick * 100) / 100);
+  }
+  const viaFacility = priceShiftWithFacility(type, rule, date);
+  if (viaFacility) return viaFacility;
+  const hrs = def.paidHours ?? def.hours ?? null;
+  if (hrs != null && rule.hourlyRate != null) return String(Math.round(rule.hourlyRate * hrs * 100) / 100);
+  return "";
+}
+// The type a saved definition classifies as: its own canonical type
+// when it carries one, else the duration type of its hours, else a
+// call type read off its label, else the label itself (a named day
+// off reads as its name, exactly like the client's rows), else the
+// code as written.
+function typeFromCodeDef(def: FacilityCodeDef, candidate: string): string {
+  const ct = (def.canonicalType || "").trim();
+  if (ct) return ct;
+  if (def.hours != null) return canonicalDurationType(def.hours);
+  const label = (def.label || "").trim();
+  if (/24|first call|1st call/i.test(label)) return "24-hour call";
+  if (/second call|2nd call/i.test(label)) return "Second call";
+  return label || candidate;
+}
+// The span kind a definition classification carries, when it is
+// unambiguous: duration types are day-kind, call types are
+// call-kind. Anything else (a named day off, a label-only def)
+// stays unset, so span handling falls back to the type string —
+// exactly the client's behaviour for those shifts today.
+function spanKindFromCodeDef(def: FacilityCodeDef, type: string): "day" | "call" | undefined {
+  if (/24-hour call|second call/i.test(type)) return "call";
+  if (/^\d+(?:\.\d+)?-hour (day|shift)$/.test(type)) return "day";
+  if (def.unpaid) return undefined;
+  if (/call/i.test(type)) return "call";
+  return undefined;
+}
+
 export function parseWorkShiftEvent(
   title: string,
   location: string,
   date: string,
   facilities: FacilityPayRule[] = [],
   today = "",
-): { facility: string; type: string; pay: string; facilityKnown: boolean; status: "confirmed" | "proposed" } | null {
+): { facility: string; type: string; pay: string; facilityKnown: boolean; status: "confirmed" | "proposed"; spanKind?: "day" | "call"; derivedCode?: { code: string; hours: number } } | null {
   const t = String(title || "").trim();
   const loc = String(location || "").trim();
   if (!t && !loc) return null;
@@ -945,22 +1125,54 @@ export function parseWorkShiftEvent(
     // still reads as the leading 8, never the trailing date. A title
     // that IS just the facility name is an unclassified shift for the
     // user to confirm — never skipped, never priced.
-    let type = shiftTypeFromPattern(t) ?? shiftTypeFromPattern(loc);
-    if (!type) {
-      const rest = t
-        .replace(new RegExp(escapeRegExp(matched).replace(/\s+/g, "\\s+"), "i"), "")
-        .trim()
-        .replace(/^[-–—:;,\s]+|[-–—:;,\s]+$/g, "");
-      type = leadingNumberShiftType(rest);
-      if (!type && titleEqualsToken(t, matched)) type = "Shift";
+    // The facility's own saved definitions read the code FIRST
+    // (v134) — but only a definition whose code IS the title's
+    // whole remainder can claim it, so a defined "8" never swallows
+    // an "8/2nd call" (a different, longer remainder the patterns
+    // own), while a defined "Call 1" beats the generic pattern's
+    // "Call (unclassified)" shrug. Plural-tolerant: "8s" is the
+    // "8" code. This is the read that lets multi-day TIMED blocks
+    // of defined codes classify — and therefore expand — here.
+    const rest = t
+      .replace(new RegExp(escapeRegExp(matched).replace(/\s+/g, "\\s+"), "i"), "")
+      .trim()
+      .replace(/^[-–—:;,\s]+|[-–—:;,\s]+$/g, "");
+    let defPay: string | null = null;
+    let defSpanKind: "day" | "call" | undefined;
+    let derivedCode: { code: string; hours: number } | undefined;
+    let type: string | null = null;
+    const def = rest ? matchFacilityCodeDef(rule, rest) : null;
+    if (def) {
+      type = typeFromCodeDef(def, rest);
+      defPay = priceFromCodeDef(def, rule, type, date);
+      defSpanKind = spanKindFromCodeDef(def, type);
     }
+    if (!type) type = shiftTypeFromPattern(t) ?? shiftTypeFromPattern(loc);
+    if (!type) type = leadingNumberShiftType(rest);
+    // Failing every reader above, a purely-duration code describes
+    // itself at the hourly rate (v134) and is reported back as a
+    // derived definition for the client to persist. It runs AFTER
+    // the bare-number read on purpose: a bare "8" was always
+    // readable and is not a learned code. A saved definition
+    // always outranks this derived reading.
+    if (!type && rule.hourlyRate != null) {
+      const selfH = selfDescribingCodeHours(rest);
+      if (selfH != null) {
+        type = canonicalDurationType(selfH);
+        defSpanKind = "day";
+        derivedCode = { code: rest, hours: selfH };
+      }
+    }
+    if (!type && titleEqualsToken(t, matched)) type = "Shift";
     if (!type) continue; // e.g. "Lunch at CAMC": facility named, not a shift.
     return {
       facility: rule.name,
       type,
-      pay: priceShiftWithFacility(type, rule, date),
+      pay: defPay || priceShiftWithFacility(type, rule, date),
       facilityKnown: true,
       status,
+      ...(defSpanKind ? { spanKind: defSpanKind } : {}),
+      ...(derivedCode ? { derivedCode } : {}),
     };
   }
 

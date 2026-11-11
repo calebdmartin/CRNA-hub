@@ -902,3 +902,53 @@ Deno.test("v130: a raw-named multi-day row stays single, flagged ambiguous — n
   assertEquals(shifts[0].spanKept, "ambiguous");
   assertEquals(shifts[0].code, "STM - Backup");
 });
+
+// ---------------------------------------------------------------------------
+// v134: the feed inherits the shared parser's two new reads — a
+// purely-duration code at an hourly-only facility describes itself
+// (and is reported back as a derived definition), and a multi-day
+// block of a defined code expands per day through the row spanKind.
+// ---------------------------------------------------------------------------
+
+const CAMC_HOURLY = normalizeFacilityRules([
+  { name: "CAMC", aliases: [], hourlyRate: 250 },
+]);
+const CAMC_DEFS = normalizeFacilityRules([
+  {
+    name: "CAMC",
+    aliases: [],
+    hourlyRate: 250,
+    codeDefs: [
+      { code: "8", label: "8-hour shift", hours: 8, canonicalType: "8-hour day" },
+    ],
+  },
+]);
+
+Deno.test("v134: QGenda 'CAMC 8s' prices off its own name and reports a derived code", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:self-1@qgenda.com",
+    "DTSTART:20260810T070000", "DTEND:20260810T150000",
+    "SUMMARY:CAMC 8s",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts, derivedCodes } = parseQgendaICS(feed, CAMC_HOURLY, { name: "Caleb Martin" });
+  assertEquals(shifts.length, 1);
+  assertEquals(shifts[0].pay, "2000");
+  assertEquals(derivedCodes, [{ facility: "CAMC", code: "8s", hours: 8 }]);
+});
+
+Deno.test("v134: QGenda multi-day block of a defined code expands per day", () => {
+  const feed = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
+    "UID:self-2@qgenda.com",
+    "DTSTART:20260810T070000", "DTEND:20260814T080000",
+    "SUMMARY:CAMC 8s",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+  const { shifts } = parseQgendaICS(feed, CAMC_DEFS, { name: "Caleb Martin" });
+  assertEquals(shifts.map((s) => s.date), [
+    "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14",
+  ]);
+  assertEquals(shifts.map((s) => s.pay), ["2000", "2000", "2000", "2000", "2000"]);
+});

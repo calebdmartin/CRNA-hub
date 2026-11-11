@@ -518,6 +518,7 @@ function healShiftsAfterChange(onAbsorb,onFold){
   try{const d=dedupeShiftsInPlace(onAbsorb);if(d&&d.collapsed)changed=true}catch(e){}
   try{const p=healDayCallShiftPairs(onAbsorb);if(p&&p.merged)changed=true}catch(e){}
   try{if(healVariantFacilityRecords(onFold))changed=true}catch(e){}
+  try{if(linkStoredSuggestions())changed=true}catch(e){}
   if(changed)persist();
   return changed;
 }
@@ -3255,8 +3256,48 @@ function addFacilityAlias(f,name){
 // facility arms the one-shot repair when the last import reported
 // legacy skips, so those shifts re-import on the next sync as well.
 function normFacilityName(v){return String(v||'').trim().toLowerCase()}
-function activeFacilitySuggestions(){return (db.facilitySuggestions||[]).filter(x=>x&&!x.dismissed&&!facilityByNameOrAlias(x.name))}
-function dismissedFacilitySuggestions(){return (db.facilitySuggestions||[]).filter(x=>x&&x.dismissed&&!facilityByNameOrAlias(x.name))}
+function activeFacilitySuggestions(){return (db.facilitySuggestions||[]).filter(x=>x&&!x.dismissed&&!facilityByNameOrVariant(x.name))}
+function dismissedFacilitySuggestions(){return (db.facilitySuggestions||[]).filter(x=>x&&x.dismissed&&!facilityByNameOrVariant(x.name))}
+// Waiting-suggestion linking (v134): a suggestion whose name
+// tolerantly matches a facility the user ALREADY has — "Holzer"
+// noticed in the calendar while the contract import created
+// "HOLZ" — is not a new hospital and must never sit as a separate
+// parked card. The suggestion's spelling becomes an alias of the
+// existing facility (so the server matches those titles itself
+// from then on), the suggestion goes away, and a silent re-check
+// of that provider is queued so the waiting shifts import against
+// the existing card, priced from it (the v121 post-setup pull).
+// An ambiguous match (more than one candidate) links nothing —
+// the suggestion stays and the user decides. Drained by
+// live-sync.js after each sync applies.
+let pendingSuggestionLinks=[];
+function queueSuggestionLink(provider,facilityName){
+  const p=String(provider||''),n=String(facilityName||'');
+  if(!n)return;
+  if(!pendingSuggestionLinks.some(x=>x.provider===p&&x.name===n))pendingSuggestionLinks.push({provider:p,name:n});
+}
+function takePendingSuggestionLinks(){const out=pendingSuggestionLinks;pendingSuggestionLinks=[];return out}
+// Link any STORED suggestion that now matches an existing facility
+// (runs at boot heal and at the head of every suggestion merge, so
+// a card created before this linking existed heals itself too).
+// Returns true when it changed anything.
+function linkStoredSuggestions(){
+  let changed=false;
+  for(const x of (db.facilitySuggestions||[])){
+    if(!x||!x.name)continue;
+    if(facilityByNameOrAlias(x.name))continue;
+    const fac=facilityByNameOrVariant(x.name);
+    if(!fac)continue;
+    addFacilityAlias(fac,x.name);
+    queueSuggestionLink(x.provider||'',fac.name);
+    changed=true;
+  }
+  if(changed){
+    db.facilitySuggestions=(db.facilitySuggestions||[]).filter(x=>!facilityByNameOrVariant(x.name));
+    persist();
+  }
+  return changed;
+}
 function facilitySuggestionRange(x){if(!x)return '';if(x.firstDate&&x.lastDate&&x.firstDate!==x.lastDate)return fmt(x.firstDate)+' – '+fmt(x.lastDate);if(x.firstDate)return fmt(x.firstDate);return ''}
 function mergeFacilitySuggestions(provider,suggestions,sourceCalendarName){
   // The server-side parser is the guard (personal events never parse
@@ -3264,10 +3305,18 @@ function mergeFacilitySuggestions(provider,suggestions,sourceCalendarName){
   // stale or hand-made payload can never suggest a lunch or a dentist.
   const personal=/\b(lunch|dinner|breakfast|brunch|meeting|appointment|dentist|doctor|birthday|holiday|vacation|church|school|wedding|party)\b/i;
   db.facilitySuggestions=db.facilitySuggestions||[];
+  linkStoredSuggestions();
   for(const sg of (suggestions||[])){
     const name=String((sg&&sg.name)||'').trim();
     if(!name||name.length>80||personal.test(name))continue;
     if(facilityByNameOrAlias(name)){db.facilitySuggestions=db.facilitySuggestions.filter(x=>normFacilityName(x.name)!==normFacilityName(name));continue}
+    // Tolerant identity (v134): the calendar's spelling of a
+    // hospital the user already has ("Holzer" vs the contract's
+    // "HOLZ") links to that facility instead of parking as a
+    // second, duplicate suggestion — its waiting shifts import
+    // against the existing card on the queued re-check.
+    const variantFac=facilityByNameOrVariant(name);
+    if(variantFac){addFacilityAlias(variantFac,name);queueSuggestionLink(provider,variantFac.name);db.facilitySuggestions=db.facilitySuggestions.filter(x=>normFacilityName(x.name)!==normFacilityName(name));continue}
     const ex=db.facilitySuggestions.find(x=>normFacilityName(x.name)===normFacilityName(name));
     const count=Number((sg&&sg.count)||0)||0,first=String((sg&&sg.firstDate)||''),last=String((sg&&sg.lastDate)||'');
     if(ex){
@@ -3285,7 +3334,7 @@ function mergeFacilitySuggestions(provider,suggestions,sourceCalendarName){
 }
 function clearFacilitySuggestion(name){
   const before=(db.facilitySuggestions||[]).length;
-  db.facilitySuggestions=(db.facilitySuggestions||[]).filter(x=>!facilityByNameOrAlias(x.name)&&normFacilityName(x.name)!==normFacilityName(name));
+  db.facilitySuggestions=(db.facilitySuggestions||[]).filter(x=>!facilityByNameOrVariant(x.name)&&normFacilityName(x.name)!==normFacilityName(name));
   const removed=(db.facilitySuggestions||[]).length!==before;
   if(removed)persist();
   return removed;
@@ -3439,6 +3488,99 @@ function payUnitControlHTML(preview,kind){const u=preview&&preview.payUnit==='ho
 // the same code prices automatically and never re-asks. Skipping is
 // remembered per facility (ratesPromptSkipped) so imports don't nag.
 function facilityCodeDefs(f){const cm=f&&f.codeMap;return (cm&&typeof cm==='object'&&!Array.isArray(cm))?cm:{}}
+// Code definitions as the sync ships them (v134): the server can
+// only classify a title whose code a saved definition reads —
+// "CAMC 8s" — when the definitions travel WITH the sync, and
+// multi-day timed blocks can only expand where the classification
+// lives (server-side, v130). One payload shape for every source.
+function facilityCodeDefsPayload(f){
+  const defs=facilityCodeDefs(f);
+  return Object.keys(defs).map(code=>{
+    const d=defs[code]||{};
+    const out={code};
+    if(d.label)out.label=String(d.label);
+    for(const k of ['hours','paidHours','weekdayPay','weekendPay']){const n=rateOrNull(d[k]);if(n!=null)out[k]=n}
+    if(d.unpaid)out.unpaid=true;
+    if(d.canonicalType)out.canonicalType=String(d.canonicalType);
+    return out;
+  });
+}
+// Plural fold on an identity/strip key (v134): a trailing plural
+// 's' on a numeric token is the same code — "8s" IS "8". Mirrors
+// pluralFoldKeyTs in _shared/calendar.ts.
+function pluralFoldCodeKey(k){
+  const toks=String(k||'').split(' ');
+  const last=toks[toks.length-1]||'';
+  if(/^\d+s$/.test(last))toks[toks.length-1]=last.slice(0,-1);
+  return toks.join(' ');
+}
+// codeDefFor plus the plural fold, on either side (v134): the
+// saved definition for "8" answers a calendar title's "8s".
+function codeDefForLoose(f,code){
+  const direct=codeDefFor(f,code);
+  if(direct)return direct;
+  if(!f||!code)return null;
+  const cand=pluralFoldCodeKey(codeStripKey(code,f));
+  if(!cand)return null;
+  const defs=facilityCodeDefs(f);
+  for(const k of Object.keys(defs)){
+    const dk=pluralFoldCodeKey(codeStripKey(k,f));
+    if(dk&&dk===cand)return defs[k];
+  }
+  return null;
+}
+// The canonical type label for a duration in hours (v134) — one
+// spelling everywhere a duration becomes a type.
+function durationTypeLabel(n){return n===8?'8-hour day':(n===10?'10-hour shift':(n===12?'12-hour shift':n+'-hour shift'))}
+// The self-describing-code rule (v134, Caleb's ask) — client
+// mirror of selfDescribingCodeHours in _shared/calendar.ts. A code
+// token that is PURELY a duration ("8", "8s", "8hr", "8 hr",
+// "8-hour", "8 hours") describes itself: an N-hour day shift at
+// the facility's hourly rate. Bare numbers self-describe only for
+// 8/10/12; suffixed forms for any plausible length 4–16. HARD
+// GUARDS: an asterisk or any other character (5*, 5**, "10hr
+// ENDO") NEVER self-prices — those codes stay facility-defined;
+// 24 never self-prices (call territory). A saved definition
+// always outranks this rule — callers try codeDefForLoose first.
+function selfDescribingCodeHours(code){
+  const c=String(code||'').trim().toLowerCase();
+  if(!c||c.indexOf('*')>=0)return null;
+  const m=c.match(/^(\d{1,2})\s*(s|hr|hrs|hour|hours|-hour|-hours)?$/);
+  if(!m)return null;
+  const n=Number(m[1]);
+  if(!isFinite(n)||n===24)return null;
+  if(!m[2])return (n===8||n===10||n===12)?n:null;
+  return (n>=4&&n<=16)?n:null;
+}
+// Persist a derived definition for a self-describing code (v134):
+// the definition the code wrote for itself — visibly marked
+// derived, editable like any definition, and replaced the moment
+// the user defines the code in their own words (their words win).
+// Never overwrites an existing definition, loose matches included.
+// Returns the facility when a definition was added.
+function ensureDerivedCodeDef(fac,code,hours){
+  if(!fac||!code)return null;
+  const n=Number(hours);
+  if(!isFinite(n)||n<=0)return null;
+  if(codeDefForLoose(fac,code))return null;
+  const ct=durationTypeLabel(n);
+  if(!fac.codeMap||typeof fac.codeMap!=='object'||Array.isArray(fac.codeMap))fac.codeMap={};
+  fac.codeMap[String(code).trim()]={label:ct,hours:String(n),canonicalType:ct,derived:true};
+  return fac;
+}
+// Approve-time persistence for the self-describing rule (v134):
+// a row whose code is purely a duration, at a facility with an
+// hourly rate and no saved definition for it, leaves its derived
+// definition behind on the facility — so the code is a real,
+// visible, editable definition from then on, not a one-off guess.
+function persistDerivedCodeDefForRow(fac,row){
+  if(!fac||!row)return;
+  const code=String(row.code||'').trim();
+  if(!code||rateOrNull(fac.hourlyRate)==null)return;
+  const h=selfDescribingCodeHours(code);
+  if(h==null)return;
+  if(ensureDerivedCodeDef(fac,code,h)){try{if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',fac.id)}catch(_){}}
+}
 // Feed housekeeping (Nov 9, 2026): QGenda feeds carry sync-marker
 // events that are not shifts — "AutoSync from QGenda: 2:11PM", the
 // time being when the feed last synced. The server parser filters
@@ -4915,6 +5057,18 @@ function applyDescribedRules(fac,parsed){
     // the user's newest words govern.
     if(d.unpaid){merged.unpaid=true;merged.canonicalType='';delete merged.weekdayPay;delete merged.weekendPay;delete merged.paidHours}
     else{delete merged.unpaid}
+    // The user's own words replace a derived definition (v134):
+    // a definition the app derived from a code's own name is a
+    // placeholder until the user defines that code — confirming
+    // words for it clears the derived mark, and a derived twin
+    // saved under the plural spelling ("8s" for a defined "8")
+    // goes away entirely. Their definition wins, everywhere.
+    delete merged.derived;
+    for(const otherKey of Object.keys(fac.codeMap)){
+      if(otherKey===key)continue;
+      const od=fac.codeMap[otherKey];
+      if(od&&od.derived&&pluralFoldCodeKey(codeStripKey(otherKey,fac))===pluralFoldCodeKey(codeStripKey(key,fac)))delete fac.codeMap[otherKey];
+    }
     fac.codeMap[key]=merged;
     if(/8-hour/i.test(merged.canonicalType||merged.label||'')){const ph=rateOrNull(merged.paidHours);if(ph!=null)fac.paidHours8=String(ph)}
   }
@@ -5322,9 +5476,16 @@ function describeRulesHTML(key,opts){
   if(isFacPrev&&st.confirmed&&st.collapsed&&p){
     return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Pay rules — in your words')}</strong></p><p class="muted"><strong>Rules set.</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p><div class="toolbar"><button type="button" class="secondary" data-action="describe-edit" data-id="${escapeHTML(key)}">Edit rules</button></div></div>`;
   }
+  // Derived definitions are visible as what they are (v134): a
+  // code the app read straight off its own name ("8s" = an 8-hour
+  // shift) is labeled as learned-from-the-code, never presented
+  // as the user's own words — and the box above is how they
+  // replace it.
+  const derivedDefs=o.fac?Object.entries(facilityCodeDefs(o.fac)).filter(([,d])=>d&&d.derived):[];
+  const derivedNote=derivedDefs.length?`<p class="hint">Learned from the code itself: ${derivedDefs.map(([c,d])=>'“'+escapeHTML(c)+'” = '+escapeHTML(d.label||((d.hours||'')+'-hour shift'))).join(' · ')}. Edit the words above any time — your own definition replaces it.</p>`:'';
   const confirmLabel=isFacPrev?'Use these rules':(key.indexOf('imp:')===0?'Use these rules & approve import':'Use these rules — save & reprice');
   const confirmNote=isFacPrev?'These rules join the preview — “Save facilities” below saves them with the facility.':(key.indexOf('imp:')===0?'Approving saves these rules and imports the shifts above in one go.':'Saving updates the rate card and reprices the shifts these rules cover.');
-  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p><div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
+  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
 }
 // A facility whose priced shifts rest on rules the user never
 // confirmed in the read-back sense: a day code defined by the old
@@ -5508,7 +5669,22 @@ function clarifiedRowPricing(fac,row){
   // but cannot price (no hourly rate / no hours known).
   if(!fac)return null;
   const key=rowCodeKey(row);if(!key)return null;
-  const def=codeDefFor(fac,key);if(!def)return null;
+  const def=codeDefForLoose(fac,key);
+  if(!def){
+    // Self-describing fallback (v134): a purely-duration code with
+    // no saved definition prices off its own name at the facility's
+    // hourly rate — "8s" is an 8-hour shift. Asterisked or otherwise
+    // facility-defined codes (5*, 5**) never self-price: they stay
+    // unpriced here and surface for clarification exactly as before.
+    const selfH=selfDescribingCodeHours(key);
+    const hr=rateOrNull(fac.hourlyRate);
+    if(selfH!=null&&hr!=null){
+      const ct=durationTypeLabel(selfH);
+      const fp=facilityPayFor(fac,ct,row&&row.date);
+      return {pay:(fp==null||fp==='')?(hr*selfH):fp,type:ct,payUnit:'facility'};
+    }
+    return null;
+  }
   const label=String(def.label||'').trim()||key;
   // An unpaid definition is FINAL (Nov 10, 2026): the user stated
   // in their own words that this code pays nothing ("post call
@@ -7111,7 +7287,7 @@ function calPreviewNeedsFacility(){
 }
 function calPreviewHTML(){if(!calPreview)return '<p class="muted">No calendar file parsed yet. Choose an .ics file above, then parse it — nothing is saved until you approve the preview.</p>';const rows=calPreview.rows,dup=rows.filter(r=>r.duplicate).length,need=rows.filter(r=>r.flags.length).length;return `<p><strong>Parsed from:</strong> ${escapeHTML(calPreview.fileName)} · Source: ${escapeHTML(calPreview.sourceLabel)} · ${rows.length} event(s) · ${rows.filter(r=>r.include&&!r.duplicate).length} would be added · ${dup} duplicate(s) will merge into the existing shift — never doubled</p><p class="muted">Duplicates are events already in the app with the same date, facility, and shift type. Uncheck any row to leave it out. Rows with a missing date or facility block approval until fixed or unchecked.</p>${calPreviewNeedsFacility()?`<div class="form-grid"><div class="field"><label for="calFacilityAll">Which facility is this schedule for?</label><input id="calFacilityAll" class="calFacilityAll" list="facilityNamesCal" value="${escapeHTML(calPreview.facilityAll||'')}" placeholder="e.g. RGH"><datalist id="facilityNamesCal">${(db.facilities||[]).map(f=>`<option value="${escapeHTML(f.name)}"></option>`).join('')}</datalist></div></div><p class="muted">Applies to any row whose facility is missing or not one of your saved facilities — each row stays editable below. A name that isn't saved yet is added to your facilities when you approve.</p>`:''}${payUnitControlHTML(calPreview,'cal')}${importRatesPromptHTML(calPreview,'cal')}${importPaySchedHTML(calPreview,'cal')}${importConflictsHTML(calPreview,'cal')}<div class="table-scroll"><table class="contract-table"><thead><tr><th></th><th>Date</th><th>Facility</th><th>Shift type</th><th>Pay ${calPreview.payUnit==='hourly'?'(\$/hr)':'(\$ per shift)'}</th><th>Flags</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" class="calInclude" data-row="${i}" ${r.include?'checked':''}></td><td><input type="date" class="calEdit" data-row="${i}" data-field="date" value="${escapeHTML(r.date||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="facility" value="${escapeHTML(r.facility||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="type" value="${escapeHTML(r.code||r.type||'')}"></td><td><input class="calEdit" data-row="${i}" data-field="pay" value="${escapeHTML(r.pay||'')}"></td><td>${r.duplicate?'<span class="pill warn">duplicate — will merge</span> ':''}${r.flags.map(f=>`<span class="pill warn">${escapeHTML(f)}</span>`).join(' ')||'<span class="pill">clean</span>'}</td></tr>`).join('')}</tbody></table></div><div class="form-actions"><button type="button" data-action="cal-approve">Approve selected — add shifts</button><button type="button" class="secondary" data-action="cal-discard">Discard preview</button></div>`}
 async function importCalendar(e){e.preventDefault();calImportError='';const f=$('f_calFile').files[0];const sourceLabel=$('f_calSource').value||'Calendar file';if(!f){calImportError='Choose an .ics calendar file first (Google, Apple, or Outlook can all export one).';return render()}let text='';try{text=await f.text()}catch(err){calImportError='Could not read that file: '+err.message;return render()}if(!/^BEGIN:VCALENDAR/i.test(text.trim())){calImportError='That file is not a calendar (.ics) file. Export your calendar as .ics from Google, Apple, or Outlook and try again. Nothing was saved.';calPreview=null;return render()}const parsed=parseICS(text,f.name);const sourceCode=CAL_SOURCES[sourceLabel]||'calendar-file';const grossByBlock=text.split(/BEGIN:VEVENT/i).slice(1).map(b=>{const m=b.match(/Expected gross:\s*\$?([\d\\,]+(?:\.\d+)?)/i);return m?m[1].replace(/[\\,]/g,''):''});const rows=parsed.rows.map((r,ri)=>{const gb=grossByBlock[r.blockIndex!=null?r.blockIndex:ri];if(gb)r={...r,pay:gb};const duplicate=(db.shifts||[]).some(x=>shiftsSameShift(x,r));const flags=[...r.flags];if(duplicate)flags.push('already in CRNA Hub — will merge, not double');return {...r,source:sourceCode,sourceLabel,status:importStatusForDate(r.date),include:true,duplicate,incomplete:!String(r.pay||'').trim(),note:'Imported from '+sourceLabel+' (.ics): '+f.name}});calPreview={fileName:f.name,sourceLabel,sourceCode,rows};if(!rows.length){calImportError='No events found in that calendar file. Nothing was saved.';calPreview=null}render()}
-function approveCalendarImport(){if(!calPreview)return;let rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac){const fillTarget=facilityByNameOrAlias(fillFac);const pendingFill=rows.filter(r=>!scheduleRowFacilityResolved(r));for(const r of pendingFill){const prevFac=String(r.facility||'').trim();r.facility=fillFac;if(fillTarget&&prevFac&&prevFac.length<=12&&/^[A-Za-z0-9][A-Za-z0-9.&']*$/.test(prevFac))addFacilityAlias(fillTarget,prevFac)}}rows=combineDayCallRows(rows);let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportDescribed(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}const builtCal=[];for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0){pay=String(pp);payUnit='facility'}}builtCal.push({row:r,rec:{id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note}})}
+function approveCalendarImport(){if(!calPreview)return;let rows=calPreview.rows.filter(r=>r.include);const fillFac=String(calPreview.facilityAll||(($('calFacilityAll')||{}).value)||'').trim();if(fillFac){const fillTarget=facilityByNameOrAlias(fillFac);const pendingFill=rows.filter(r=>!scheduleRowFacilityResolved(r));for(const r of pendingFill){const prevFac=String(r.facility||'').trim();r.facility=fillFac;if(fillTarget&&prevFac&&prevFac.length<=12&&/^[A-Za-z0-9][A-Za-z0-9.&']*$/.test(prevFac))addFacilityAlias(fillTarget,prevFac)}}rows=combineDayCallRows(rows);let ratesSavedFor='',ratesSkippedFor='';const ratesTarget=importRatesTarget(calPreview.ratesSkipped?{...calPreview,ratesSkipped:false}:calPreview);if(ratesTarget){const applied=applyImportDescribed(calPreview,ratesTarget);if(applied.saved)ratesSavedFor=ratesTarget.name;else if(calPreview.ratesSkipped)ratesSkippedFor=ratesTarget.name}if(fillFac&&!facilityByNameOrAlias(fillFac)){db.facilities=db.facilities||[];db.facilities.push({id:id(),name:fillFac,aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:'',...(calPreview.ratesSkipped?{ratesPromptSkipped:true}:{})})}const blocked=rows.filter(r=>!r.date||!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!String(r.facility||'').trim());if(blocked.length){alert('Fix or uncheck these rows before approving: '+(blocked.map(r=>`${r.date||'(no date)'} ${r.facility||'(no facility)'} ${r.type}`).join('; ')));return}const builtCal=[];for(const r of rows){const conv=previewPayConversion(r.pay,calPreview.payUnit,r.type,facilityByNameOrAlias(r.facility));let pay=conv.pay,payRate=conv.payRate,payUnit=conv.payUnit,shiftType=r.type;const facP=facilityByNameOrAlias(r.facility);if(facP){const cp=clarifiedRowPricing(facP,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit}}persistDerivedCodeDefForRow(facP,r)}if(!pay&&facP){const pp=facilityPayFor(facP,shiftType,r.date);if(pp>0){pay=String(pp);payUnit='facility'}}builtCal.push({row:r,rec:{id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source,sources:[r.source],incomplete:!pay,note:r.note}})}
 const calGate=importGateCheck(calPreview,builtCal.map(b=>b.rec));if(calGate.stopped){render();gateStopAlert();return}
 const calAddSet=new Set([...calGate.clean,...calGate.dups,...(calGate.addAnyway||[]).map(c=>c.rec)]);const calLeftOut=(calGate.skippedConflicts||[]).length;
 let created=0,skipped=0,newFacilities=0;for(const b of builtCal){if(!calAddSet.has(b.rec))continue;const r=b.row;const res=addShiftDeduped(b.rec);if(res.merged){skipped++;continue}created++;if(r.facility&&!facilityByNameOrAlias(r.facility)){db.facilities.push({id:id(),name:String(r.facility).trim(),aliases:'',address:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',distance:'',notes:''});newFacilities++}}if(ratesTarget){const rf=facilityByNameOrAlias(ratesTarget.name);if(rf)repriceUnpricedShiftsForFacility(rf)}const dups=calPreview.rows.filter(r=>r.duplicate).length;acknowledgeImportConflicts(calGate);const calPaySchedSaved=applyImportPaySched(calPreview,'cal');const calPaySchedHint=importPaySchedHint(calPreview,'cal',calPaySchedSaved);calPreview=null;persist();render();if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();alert(`Added ${created} shift(s) from the calendar. Merged ${skipped} duplicate(s) into existing shifts — never doubled.${newFacilities&&!ratesSavedFor?` New facilit(ies) learned: set their pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}${calPaySchedSaved?` Pay schedule saved for ${calPaySchedSaved.agency} — paychecks for these shifts now show on your calendar.`:''}${calPaySchedHint}${calLeftOut?` Left out ${calLeftOut} shift(s) that would double-book you — tick "Add it anyway" in the preview if you really have both.`:''}`)}
@@ -7515,7 +7691,7 @@ function approveScheduleImport(){
       // it marked as facility-derived so a later rate correction
       // reprices it like every other derived pay.
       if((r.source==='qgenda'||r.source==='qgenda-feed')&&facForRow){const fp=facilityPayFor(facForRow,r.type,r.date);if(fp>0&&Math.abs(fp-Number(pay))<0.005){payUnit='facility';payRate=''}}}
-    if(facForRow){const cp=clarifiedRowPricing(facForRow,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit;inc=false}}}
+    if(facForRow){const cp=clarifiedRowPricing(facForRow,r);if(cp){shiftType=cp.type;if(!pay&&cp.pay){pay=cp.pay;payRate=cp.payRate;payUnit=cp.payUnit;inc=false}}persistDerivedCodeDefForRow(facForRow,r)}
     if(!pay&&facForRow){const p=facilityPayFor(facForRow,shiftType,r.date); if(p>0){pay=String(p);payUnit='facility';inc=false}}
     builtRows.push({row:r,noPay:!pay,rec:{id:id(),date:r.date,facility:String(r.facility).trim(),type:shiftType,code:String(r.code||'').trim(),pay,payRate,payUnit,status:importStatusForDate(r.date),source:r.source||'schedule-import',sources:[r.source||'schedule-import'],incomplete:inc,updatedAt:new Date().toISOString(),note:'Schedule import: '+schedulePreview.fileName+(schedulePreview.matchedName?(' — matched name "'+schedulePreview.matchedName+'"'):'')}});
   }
@@ -8123,8 +8299,11 @@ async function fetchQgendaFeed(opts){
   if(!SUPABASE_CONFIGURED||!cloudSession){if(!silent){qgendaStatusError='Sign in on the Account tab first.';render()}return}
   try{
     if(!silent){qgendaStatusError='Checking your QGenda feed…'; render()}
-    const facilities=(db.facilities||[]).map(f=>({name:f.name,aliases:String(f.aliases||'').split(',').map(x=>x.trim()).filter(Boolean),hourlyRate:f.hourlyRate,rate8:f.rate8,rate10:f.rate10,rate12:f.rate12,rate24:f.rate24,rateSecond:f.rateSecond,weekendRateSecond:f.weekendRateSecond,callBonus:f.callBonus,paidHours8:f.paidHours8,hourlyCall1st:f.hourlyCall1st,weekendRate24:f.weekendRate24}));
+    const facilities=(db.facilities||[]).map(f=>({name:f.name,aliases:String(f.aliases||'').split(',').map(x=>x.trim()).filter(Boolean),hourlyRate:f.hourlyRate,rate8:f.rate8,rate10:f.rate10,rate12:f.rate12,rate24:f.rate24,rateSecond:f.rateSecond,weekendRateSecond:f.weekendRateSecond,callBonus:f.callBonus,paidHours8:f.paidHours8,hourlyCall1st:f.hourlyCall1st,weekendRate24:f.weekendRate24,weekendDays:Array.isArray(f.weekendDays)?f.weekendDays:null,codeDefs:facilityCodeDefsPayload(f)}));
     const data=await liveSyncPost('qgenda-feed',{action:'fetch',facilities,name:scheduleName()});
+    // Derived definitions the feed read off the codes themselves
+    // (v134): persist them on their facilities like the sync does.
+    if(data&&Array.isArray(data.derivedCodes)){let dChanged=false;for(const dc of data.derivedCodes){const dfac=facilityByNameOrVariant(String(dc&&dc.facility||''));if(dfac&&ensureDerivedCodeDef(dfac,String(dc.code||''),dc.hours)){dChanged=true;try{if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',dfac.id)}catch(_){}}}if(dChanged)persist()}
     qgendaStatusError=''; pushWatchQgenda('ok');
     // A successful answer — even an empty one — is a check: stamp it
     // so the panel's "Last checked" line is honest in both modes.
@@ -8883,20 +9062,59 @@ function icsSpanDays(dtStartRaw,dtEndRaw,startDateStr){
  if(total<2||total>62)return [startDateStr];
  const out=[];for(let i=0;i<total;i++)out.push(icsAddDaysStr(startDateStr,i));
  return out}
+// The code a calendar title carries once the facility's own name
+// (or an alias) is taken off it (v134) — "CAMC 8s" at CAMC leaves
+// "8s". Textual twin of the server parser's remainder computation,
+// so the .ics path and the sync path read the same code.
+function icsTitleCodeCandidate(summary,fac){
+  let s=String(summary||'').trim();
+  if(!fac)return s;
+  const names=[fac.name].concat(facilityAliases(fac)).filter(Boolean).sort((a,b)=>String(b).length-String(a).length);
+  for(const nm of names){
+    const esc=String(nm).replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+');
+    const re=new RegExp('(^|[^A-Za-z0-9])'+esc+'([^A-Za-z0-9]|$)','i');
+    if(re.test(s)){s=s.replace(re,'$1 ').trim();break}
+  }
+  return s.replace(/^[-–—:;,\s]+|[-–—:;,\s]+$/g,'').trim();
+}
 function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,'');const rates=contractExtractRates(clean);const rows=[];let globalFacility='';
  const blocks=clean.split(/BEGIN:VEVENT/i).slice(1);
  for(let bi=0;bi<blocks.length;bi++){const b=blocks[bi];const get=k=>{const m=b.match(new RegExp(k+':(.*)','i'));return m?m[1].trim():''};
    const dt=get('DTSTART(?:;[^:]*)?');let dateStr=dt.replace(/^(\d{4})(\d{2})(\d{2}).*$/,'$1-$2-$3');if(!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)){const p=contractParseSingle(dt);dateStr=p.iso||''}
    const dtEnd=get('DTEND(?:;[^:]*)?');
    const summary=get('SUMMARY'),location=get('LOCATION'),desc=get('DESCRIPTION').replace(/\\n/g,' ');
-   const type=contractShiftType(summary+' '+desc)||'Other';
+   let type=contractShiftType(summary+' '+desc)||'Other';let rowCode='';
    const facObj=contractFacilityForLine(location||summary,globalFacility);
    const facility=facObj.name||location||'';if(facility&&!globalFacility)globalFacility=facility;
    const flags=[];if(!facility)flags.push('unknown facility');if(type==='Other')flags.push('shift type not classified from event title');
    if(/RRULE/i.test(b))flags.push('recurring rule (RRULE) not expanded — only the first occurrence is listed');
    const facilityObj=facilityByNameOrAlias(facility);
+   // Saved-definition + self-describing classification (v134):
+   // when the event's facility is a SAVED facility and the generic
+   // title read classified nothing, the facility's own code
+   // definitions read the code (plural-tolerant: "8s" is the "8"
+   // code), and failing that a purely-duration code describes
+   // itself — the same two rules the sync applies server-side, so
+   // a timed multi-day block of defined codes expands here too.
+   // The row carries its code so approve prices it through the one
+   // clarifier path. Facilities not yet saved keep the generic
+   // read untouched (a contract document must not borrow rules).
+   if(facilityObj&&type==='Other'){
+     const cand=icsTitleCodeCandidate(summary,facilityObj);
+     if(cand){
+       const cdef=codeDefForLoose(facilityObj,cand);
+       if(cdef){rowCode=cand;const ch=rateOrNull(cdef.hours);type=String(cdef.canonicalType||'').trim()||(cdef.unpaid?(String(cdef.label||'').trim()||cand):(ch!=null?durationTypeLabel(ch):(String(cdef.label||'').trim()||cand)))}
+       else{const sh=selfDescribingCodeHours(cand);if(sh!=null&&rateOrNull(facilityObj.hourlyRate)!=null){rowCode=cand;type=durationTypeLabel(sh)}}
+     }
+     if(rowCode){const fi=flags.indexOf('shift type not classified from event title');if(fi>=0)flags.splice(fi,1)}
+   }
    const savedContract=(db.contracts||[]).find(c=>(c.facility||'').toLowerCase()===facility.toLowerCase());
    const resolved=contractResolvePay({date:dateStr,type},rates,facilityObj,savedContract);flags.push(...resolved.flags);
+   // (An unpaid definition is deliberately NOT priced here: its
+   // $0 must land at approve through clarifiedRowPricing so the
+   // shift carries the 'unpaid' stamp — a bare $0 priced early
+   // loses the stamp and reads as a missing price downstream.)
+   if(rowCode&&facilityObj){const cp0=clarifiedRowPricing(facilityObj,{code:rowCode,date:dateStr});if(cp0&&cp0.pay!=null&&cp0.pay!==''&&cp0.payUnit!=='unpaid'){resolved.pay=cp0.pay;resolved.source='facility code definition'}}
    if((db.shifts||[]).some(x=>x.date===dateStr&&x.facility===facility&&x.type===type))flags.push('overlapping / duplicate shift already recorded');
    // Multi-day events (v130): one event covering several days (a week
    // block typed as a single calendar event) becomes ONE ROW PER
@@ -8922,8 +9140,9 @@ function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,
        else dayFlags.push('this event spans '+spanDays.length+' days ('+spanDays[0]+' to '+spanDays[spanDays.length-1]+') — imported on its first day only');
      }
      const dayResolved=dayKey===dateStr?resolved:contractResolvePay({date:dayKey,type},rates,facilityObj,savedContract);
+     if(dayKey!==dateStr&&rowCode&&facilityObj){const dcp=clarifiedRowPricing(facilityObj,{code:rowCode,date:dayKey});if(dcp&&dcp.pay!=null&&dcp.pay!==''&&dcp.payUnit!=='unpaid'){dayResolved.pay=dcp.pay;dayResolved.source='facility code definition'}}
      if(dayKey!==dateStr){dayResolved.flags.forEach(f=>{if(!dayFlags.includes(f))dayFlags.push(f)});if((db.shifts||[]).some(x=>x.date===dayKey&&x.facility===facility&&x.type===type))dayFlags.push('overlapping / duplicate shift already recorded')}
-     rows.push({date:dayKey,facility,type,pay:dayResolved.pay,paySource:dayResolved.source,flags:dayFlags,include:true,source:'extracted-from-contract',status:importStatusForDate(dayKey),blockIndex:bi});
+     rows.push({date:dayKey,facility,type,code:rowCode,pay:dayResolved.pay,paySource:dayResolved.source,flags:dayFlags,include:true,source:'extracted-from-contract',status:importStatusForDate(dayKey),blockIndex:bi});
    }}
  const ds=rows.map(r=>r.date).filter(Boolean).sort();
  const contract={id:id(),facility:globalFacility||(rows[0]?rows[0].facility:''),effectiveStart:ds[0]||'',effectiveEnd:ds[ds.length-1]||'',rates,source:'extracted-from-contract',sourceFile:fileName||'',method:'deterministic-parse (no AI model)',extractedAt:new Date().toISOString()};

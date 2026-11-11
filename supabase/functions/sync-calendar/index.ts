@@ -1005,6 +1005,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     // as one shift on their start date; ambiguousBlocks: unclassified
     // multi-day spans kept on their start date, flagged in the note.
     expandedBlocks: number;
+    // Self-describing codes classified in this import (v134): a
+    // purely-duration code ("8s") read straight off its own name at
+    // a facility with an hourly rate and no saved definition. The
+    // client persists each as a derived definition on the facility
+    // (visibly derived, user-editable; the user's own words replace
+    // it). Deduped by facility + code.
+    derivedCodes: { facility: string; code: string; hours: number }[];
     expandedExtraDays: number;
     keptCallBlocks: number;
     ambiguousBlocks: number;
@@ -1307,6 +1314,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       suggestions: [],
       skippedSuggested: 0,
       expandedBlocks: 0,
+      derivedCodes: [],
       expandedExtraDays: 0,
       keptCallBlocks: 0,
       ambiguousBlocks: 0,
@@ -1468,6 +1476,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           facilityRules,
         );
         if (parsed) imported.parsed++;
+        // A self-describing code the parser read off its own name
+        // (v134): report it once per facility + code so the client
+        // can persist the derived definition. Collected at parse
+        // time — even when this event turns out to be a duplicate,
+        // the definition is still news worth keeping.
+        if (parsed?.derivedCode) {
+          const dc = parsed.derivedCode;
+          if (!imported.derivedCodes.some((d) => d.facility === parsed.facility && d.code === dc.code)) {
+            imported.derivedCodes.push({ facility: parsed.facility, code: dc.code, hours: dc.hours });
+          }
+        }
         const pay = parsed ? (parsed.pay || ev.pay || "") : "";
         const importRow = parsed ? importByEvent.get(ev.providerEventId) : undefined;
         const local = importRow

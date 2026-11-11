@@ -193,6 +193,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({
         ok: true,
         shifts: parsed.shifts,
+        derivedCodes: parsed.derivedCodes,
         unknownFacilities: parsed.unknownFacilities,
         eventCount: parsed.eventCount,
         droppedHousekeeping: parsed.droppedHousekeeping,
