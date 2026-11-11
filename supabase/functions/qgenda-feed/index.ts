@@ -156,7 +156,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       } catch (_e) {
         return err("feed_unreachable", 502);
       }
-      if (!res.ok) return err("feed_unreachable", 502);
+      if (!res.ok) {
+        // v118: an expired/rotated subscription URL answers 401/403/
+        // 404 — that is a RELINK problem (the push watchdog notifies
+        // once per episode), not a transient outage. 5xx and network
+        // failures stay feed_unreachable and never trigger a relink
+        // notification.
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          return err("feed_link_rejected", 502);
+        }
+        return err("feed_unreachable", 502);
+      }
       try {
         const finalHost = new URL(res.url).hostname.toLowerCase();
         if (

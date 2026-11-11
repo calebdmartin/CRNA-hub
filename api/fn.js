@@ -11,9 +11,9 @@
 // reachable" on such devices even when the function is live.
 //
 // Security notes:
-// - This is NOT an open proxy. Only seven allowlisted functions are
+// - This is NOT an open proxy. Only eight allowlisted functions are
 //   forwarded (sync-calendar, google-auth, outlook-auth, portal-sync,
-//   extract-contract, assistant-chat, qgenda-feed), and only
+//   extract-contract, assistant-chat, qgenda-feed, push-watchdog), and only
 //   allowlisted actions:
 //   sync-calendar config/status/log/apple-calendars/
 //   sync/connect-apple/set-apple-source-calendar/disconnect/
@@ -78,6 +78,12 @@ const FUNCTIONS = {
   // forwards the four feed actions with the user's token, like the
   // rest. POST only, no public/token-less action.
   'qgenda-feed': new Set(['status', 'save', 'fetch', 'disconnect']),
+  // Push notifications (v118): the client asks for the VAPID public
+  // key and can send a test push to its OWN subscriptions. The
+  // watchdog 'evaluate' action is deliberately NOT allowlisted here —
+  // it is scheduler-only (x-watchdog-secret header) and is called
+  // directly, never through this proxy.
+  'push-watchdog': new Set(['config', 'test']),
 };
 
 function bad(res, code, status) {

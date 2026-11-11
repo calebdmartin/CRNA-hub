@@ -269,6 +269,69 @@ tombstone and applied to the provider. Every run writes a `sync_log`
 row (provider, direction, created/updated/flagged/deleted counts,
 timestamp, error) shown in the app's sync log.
 
+## Push notifications — the watchdog (v118, Nov 11, 2026)
+
+Caleb's north star: everything runs in the background and the app
+only interrupts when a human action is genuinely needed. The
+`push-watchdog` function is the single scheduled pass behind that:
+it evaluates EVERY trigger over the records users already sync, and
+sends a Web Push at most once per threshold/episode, never during
+quiet hours (22:00–06:00 in each user's timezone).
+
+Triggers (decision logic lives in `push-watchdog/evaluate.ts`, pure
+and harness-tested; sending is `push-watchdog/webpush.ts`, RFC 8291 +
+VAPID over WebCrypto):
+
+- **cert** — NBCRNA / AANA / license / certification-document
+  deadlines at 90/60/30/7 days (same collection the Dashboard card
+  uses), plus one "expired" notice.
+- **ce** — NBCRNA cycle ending within 90 days with MAC Ed/MAC Dev
+  below the tracked requirements, or a license renewing within 90
+  days with no CE records on file. Wording is always "may still need
+  education hours" — the app never claims a deficiency it cannot see.
+- **calendar** — on the 20th of a month, the next month has zero
+  shifts: "We see you have no scheduled dates next month — want to
+  add them?" (tap → Dashboard).
+- **qgenda** — a feed check failed with `feed_link_rejected` (the
+  qgenda-feed function returns that code for upstream 401/403/404
+  since v118; network/5xx failures stay `feed_unreachable` and never
+  notify). Once per failure episode; the episode ends on the next
+  successful check.
+- **portal** — a portal monitor is due and needs the user's sign-in,
+  once per due cycle per source. Portal state stays on-device; the
+  app syncs a compact summary into `user_settings.data.watch`.
+- **sync** — a calendar connection is in `needs_reauth`, once per
+  episode (the app syncs the same watch summary).
+
+Owner setup for push (one-time):
+
+1. Run migration 013 (`supabase-schema-013.sql`) — creates
+   `push_subscriptions` + `push_sent_log`.
+2. Deploy `push-watchdog` like the other functions.
+3. Set its secrets: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+   `VAPID_SUBJECT` (a `mailto:` contact), `WATCHDOG_CRON_SECRET`
+   (any long random string). Generate the VAPID pair with any Web
+   Push tool (e.g. `npx web-push generate-vapid-keys`).
+4. Schedule the evaluate call: pg_cron + pg_net every 6 hours
+   (commented example at the bottom of migration 013) or any external
+   scheduler POSTing `{ "action": "evaluate" }` with the
+   `x-watchdog-secret` header. The endpoint is idempotent — the
+   sent-log row is written before sending — so extra or overlapping
+   runs never double-send. Every-6-hours matters: a trigger that
+   lands in quiet hours is held (not logged) and goes out on the
+   first run after 06:00 user-local.
+
+Client actions (`config`, `test`) go through the `/api/fn` proxy
+allowlist; `evaluate` is deliberately NOT proxied — scheduler only.
+
+Honest limits of the web/PWA form (architecture is final — server-side
+evaluation; these are input limits): iPhone push requires the app on
+the Home Screen (the panel says so); the watch summary (portal /
+QGenda / sync health) refreshes when a device opens the app, so the
+watchdog notifies from the last synced state; hand-entered "other
+credentials" have no synced table, so their deadlines are evaluated
+on-device only today.
+
 ## What sync cannot do yet (honest limits — preview-only, not the final design)
 
 - Sync runs when the app is open (on load for connected providers, on

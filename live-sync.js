@@ -272,6 +272,10 @@ async function liveSyncFetchStatus() {
     const map = {};
     (data.connections || []).forEach((c) => { map[c.provider] = c; });
     liveSyncConnections = map;
+    // v118: mirror sync health into the app's push "watch" summary so
+    // the watchdog can notify (once per episode) when a connection
+    // needs reconnecting. app.js owns the writer; absent = no-op.
+    if (typeof window !== 'undefined' && typeof window.__crnaWatchSyncHealth === 'function') { try { window.__crnaWatchSyncHealth(); } catch (e) {} }
   } catch (e) { liveSyncConnections = {}; }
 }
 async function liveSyncFetchLog() {
