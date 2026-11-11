@@ -3871,6 +3871,56 @@ function describeCallAmounts(text,n){
   if(!before.length&&after.length>1){out.wd=after[0];out.we=after[after.length-1]}
   return Object.keys(out).length?out:null;
 }
+// --- Paid-hours statements that name their shift length (Nov
+// 11, 2026, v132) ---
+// A paid-hours figure can be stated FOR a shift length: "10.5
+// hours paid for 10 hour shifts". That sentence carries TWO
+// numbers with opposite jobs — 10.5 is the paid hours, 10 is the
+// length of the shift it belongs to — and every older pattern
+// read it wrong: the block pattern /paid (for)? N hours/ matched
+// "paid for 10 hour" and filed the LENGTH as the paid hours
+// (live: Caleb's G Main (10) priced $250 x 10 = $2,500 instead
+// of his stated 10.5 x $250 = $2,625), while the facility-level
+// extractor filed the paid figure as paidHours8 — the EIGHT-hour
+// field — whatever length the sentence named. This finder is
+// the one grammar for the shape, shared by every surface (the
+// statement blocks, the words parse, the contract extractor):
+// it returns each statement as {paid, dur, text, start, end} —
+// the paid figure, the shift length it targets, and its span,
+// so the plain patterns can refuse to read INSIDE one (a figure
+// that is part of a length-targeted statement is never an
+// untargeted figure, and a length is never a paid-hours figure).
+// Word orders covered: paid-first ("10.5 hours paid for/on 10
+// hour shifts", "10.5 paid hours for 10 hour shifts", "paid
+// 10.5 hours for 10-hour shifts", "paid for 10.5 hours on 10
+// hour shifts") and length-first ("10 hour shifts are paid for
+// 10.5 hours", "10hr shifts pay 10.5 hours"). The length side
+// must say "shift(s)" — without it the two numbers cannot be
+// told apart, and the statement stays with the plain patterns.
+function describePaidHoursTargets(text){
+  const t=String(text||'');
+  const N='(\\d+(?:\\.\\d+)?)',H='(?:hours?|hrs?)',SH='(?:day\\s+)?shifts?\\b';
+  const pats=[
+    {rx:new RegExp(N+'\\s*-?\\s*'+H+'\\s+paid\\s+(?:for|on)\\s+(?:an?\\s+)?'+N+'\\s*-?\\s*'+H+'\\s+'+SH,'gi'),paid:1,dur:2},
+    {rx:new RegExp(N+'\\s+paid\\s+hours?\\s+(?:for\\s+)?'+N+'\\s*-?\\s*'+H+'\\s+'+SH,'gi'),paid:1,dur:2},
+    {rx:new RegExp('\\bpaid\\s+(?:for\\s+)?'+N+'\\s*-?\\s*'+H+'\\s+(?:for|on)\\s+(?:an?\\s+)?'+N+'\\s*-?\\s*'+H+'\\s+'+SH,'gi'),paid:1,dur:2},
+    {rx:new RegExp(N+'\\s*-?\\s*'+H+'\\s+'+SH+'\\s+(?:are\\s+)?paid\\s+(?:for\\s+)?'+N+'\\s*-?\\s*'+H+'\\b','gi'),paid:2,dur:1},
+    {rx:new RegExp(N+'\\s*-?\\s*'+H+'\\s+'+SH+'\\s+pays?\\s+'+N+'\\s*-?\\s*'+H+'\\b','gi'),paid:2,dur:1},
+  ];
+  const found=[];
+  for(const p of pats){
+    let m;p.rx.lastIndex=0;
+    while((m=p.rx.exec(t))!==null){
+      const paid=Number(m[p.paid]),dur=Number(m[p.dur]);
+      if(isFinite(paid)&&isFinite(dur)&&paid>0&&dur>0)found.push({paid,dur,text:m[0],start:m.index,end:m.index+m[0].length});
+      if(m.index===p.rx.lastIndex)p.rx.lastIndex++;
+    }
+  }
+  found.sort((a,b)=>a.start-b.start||b.end-a.end);
+  const out=[];
+  for(const s of found){if(out.some(o=>s.start<o.end&&s.end>o.start))continue;out.push(s)}
+  return out;
+}
 // --- Code statements in the user's own words (Nov 10, 2026) ---
 // The reader's unit is the STATEMENT, not the field: the text is
 // cut into clauses (on . ; and line breaks); a clause that NAMES
@@ -4230,8 +4280,26 @@ function describeCodeBlocks(text,codes){
     // code inherited the 8-hour shift's 8.5 and priced $2,125.
     // A code that states its own ("paid for 10.5 hours") keeps
     // its own; a code that states none gets none from here.
-    const phM=(e.text||'').match(/paid\s+(?:for\s+)?(\d+(?:\.\d+)?)\s*hours?\b/i)||(e.text||'').match(/(\d+(?:\.\d+)?)\s*paid\s*hours?\b/i);
-    e.paidHours=phM?Number(phM[1]):null;
+    // Length-targeted statements are not this code's untargeted
+    // figure (Nov 11, 2026, v132): when "10.5 hours paid for 10
+    // hour shifts" rode into a block, the first pattern matched
+    // "paid for 10 hour" and filed the shift LENGTH (10) as the
+    // paid hours — the 10.5 was never seen. Matches inside a
+    // targeted statement's span are skipped here; the words
+    // parse binds those figures by length, to the codes whose
+    // shifts are that long (describePaidHoursTargets).
+    const phSpans=describePaidHoursTargets(e.text||'');
+    const inPhSpan=(idx,len)=>phSpans.some(s=>idx<s.end&&idx+len>s.start);
+    let phFound=null;
+    for(const phRx of [/paid\s+(?:for\s+)?(\d+(?:\.\d+)?)\s*hours?\b/gi,/(\d+(?:\.\d+)?)\s*paid\s*hours?\b/gi]){
+      let phMm;phRx.lastIndex=0;
+      while((phMm=phRx.exec(e.text||''))!==null){
+        if(!inPhSpan(phMm.index,phMm[0].length)){phFound=Number(phMm[1]);break}
+        if(phMm.index===phRx.lastIndex)phRx.lastIndex++;
+      }
+      if(phFound!=null)break;
+    }
+    e.paidHours=phFound;
     // Cross-code references (Nov 10, 2026, v113): "5* = same as
     // 5**" states no definition of its own — it POINTS at
     // another code's. Record the reference while the block's
@@ -4393,6 +4461,9 @@ function describeParseLocal(text,fac,codes){
   // amounts the user tied to a code they NAMED land on that
   // code's rate fields ahead of the generic extraction above.
   const blocks=describeCodeBlocks(t,codeList);
+  // Paid-hours statements that name their shift length (Nov 11,
+  // 2026, v132): bound to the day codes of that length below.
+  const phTargets=describePaidHoursTargets(t);
   for(const c of codeList){
     const blk=blocks[c.code];if(!blk||(blk.wd==null&&blk.we==null))continue;
     const bt=canonicalTypeOf(blk.phrase)||c.ctype||'';
@@ -4504,12 +4575,51 @@ function describeParseLocal(text,fac,codes){
       // code (the clarification fields) — also the code's own,
       // however the save that preserves it gets stamped.
       else if(newDef.paidHours!=null&&existing&&!existing.viaWords&&exPh!=null&&newDef.paidHours===exPh)newDef.paidHoursOwn=true;
+      // Paid hours stated BY SHIFT LENGTH (Nov 11, 2026, v132):
+      // "10.5 hours paid for 10 hour shifts" names no code — it
+      // names a LENGTH, and it binds every day code whose shifts
+      // are that long (two codes can share a length: CAMC's 5*
+      // and 5** are both 10-hour). It fills only a code whose own
+      // statement gave no untargeted figure (blkPh) — a rider
+      // attached to the code itself ("…, paid for 10.5 hours")
+      // is the more specific statement and keeps its win. The
+      // figure is this text's own statement, so it outranks an
+      // inherited saved figure, and it is marked the code's own
+      // so no heal can mistake it for residue.
+      if(isDay&&blkPh==null){
+        const durMe=rateOrNull(newDef.hours)!=null?rateOrNull(newDef.hours):(()=>{const cm=String(ct||'').match(/(\d+(?:\.\d+)?)\s*-\s*hour/i);return cm?Number(cm[1]):null})();
+        const tgt=durMe!=null?phTargets.find(s=>s.dur===durMe):null;
+        if(tgt){newDef.paidHours=tgt.paid;newDef.paidHoursOwn=true}
+      }
       // Amounts stated for a code whose type has no facility
       // split fields (a night call, a flat day code) stay ON the
       // definition — they are this code's own clarified pay.
       if(blk&&(blk.wd!=null||blk.we!=null)&&ct!=='Second call'&&ct!=='24-hour call'){if(blk.wd!=null)newDef.weekdayPay=blk.wd;if(blk.we!=null)newDef.weekendPay=blk.we}
       defs[c.code]=newDef;
     }else if(!c.shiftOnly||blk||codeHit||stmtLabel)unanswered.push(c.code);
+  }
+  // A length-targeted paid-hours statement whose length NO code
+  // in the universe carries (Nov 11, 2026, v132): there is no
+  // plausible target, so the figure is neither bound nor filed
+  // anywhere else — it is named in the read-back as unattached,
+  // in the user's own words, rather than dropped. (When a code
+  // of that length exists, the statement either bound above or
+  // was outranked by that code's own rider — both visible in
+  // the read-back — so nothing is owed here.)
+  {
+    const durSet=new Set();
+    for(const c of codeList){
+      const cand=[rateOrNull(c.hours)];
+      const cm=String(c.ctype||'').match(/(\d+(?:\.\d+)?)\s*-\s*hour/i);if(cm)cand.push(Number(cm[1]));
+      const exD=fac?codeDefFor(fac,c.code):null;
+      if(exD){cand.push(rateOrNull(exD.hours));const cm2=String(exD.canonicalType||'').match(/(\d+(?:\.\d+)?)\s*-\s*hour/i);if(cm2)cand.push(Number(cm2[1]))}
+      for(const d of cand)if(d!=null&&isFinite(d))durSet.add(d);
+    }
+    for(const s of phTargets){
+      if(durSet.has(s.dur))continue;
+      const phrase=s.text.replace(/\s+/g,' ').trim();
+      if(phrase&&!unanswered.includes(phrase))unanswered.push(phrase);
+    }
   }
   // Unknown-subject net (Nov 11, 2026, v128): the confusion
   // budget must hold for ANY text — including text naming
@@ -8143,9 +8253,17 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
  flatWeekend('weekendRate24',/(?:weekend|saturday|sunday)[^$\n.;]{0,80}?(?:24\s*-?\s*hour|1st call)[^$\n.;]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
  flatWeekend('weekendRateSecond',/(?:weekend|saturday|sunday)[^$\n.;]{0,80}?(?:(?:2nd|21d|20d) call|second call)[^$\n.;]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,50}?(?:call bonus|overnight call bonus)/i))||(m=text.match(/(?:call bonus|overnight[^$\n]{0,30}bonus|bonus[^$\n]{0,30}call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i)))rates.callBonus=Number(m[1].replace(/,/g,''));
- if((m=text.match(/paid\s+for\s+(\d+(?:\.\d+)?)\s*hours/i)))rates.paidHours8=Number(m[1]);
- if((m=text.match(/(\d+(?:\.\d+)?)\s*paid\s+hours/i)))rates.paidHours8=Number(m[1]);
- if((m=text.match(/paid\s+(\d+(?:\.\d+)?)\s*hours/i)))rates.paidHours8=Number(m[1]);
+ // A length-targeted paid-hours statement (Nov 11, 2026,
+ // v132 — describePaidHoursTargets) is NOT the facility's
+ // 8-hour figure: neither its length ("paid for 10 hour
+ // shifts") nor its paid figure ("10.5 hours paid…") may land
+ // in paidHours8. The words parse binds those figures by
+ // length; the contract extractor simply refuses them here.
+ const phTgtSpans=describePaidHoursTargets(text);
+ const inPhTgt=mm=>!!mm&&phTgtSpans.some(s=>mm.index<s.end&&mm.index+mm[0].length>s.start);
+ if((m=text.match(/paid\s+for\s+(\d+(?:\.\d+)?)\s*hours/i))&&!inPhTgt(m))rates.paidHours8=Number(m[1]);
+ if((m=text.match(/(\d+(?:\.\d+)?)\s*paid\s+hours/i))&&!inPhTgt(m))rates.paidHours8=Number(m[1]);
+ if((m=text.match(/paid\s+(\d+(?:\.\d+)?)\s*hours/i))&&!inPhTgt(m))rates.paidHours8=Number(m[1]);
  if(rates.rate8==null&&(m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,40}?(?:per day|a day|day rate)/i)))rates.rate8=Number(m[1].replace(/,/g,''));
  if(rates.rate8==null&&(m=text.match(/(?:day rate|per day)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i)))rates.rate8=Number(m[1].replace(/,/g,''));
  if(rates.rate24==null&&(m=text.match(/(?:24\s*-?\s*hour|1st call|first call)\s*(?:call\s+)?rate\s*[:\-]?\s*\$([\d,]+(?:\.\d{2})?)/i)))rates.rate24=Number(m[1].replace(/,/g,''));
@@ -8171,7 +8289,8 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
  text=text.replace(/\bS(\d[\d,]*\.\d{2})\b/g,'$$$1').replace(/\$\s+(\d)/g,'$$$1');
  const flatText=text.replace(/\r?\n/g,' ').replace(/\s+/g,' ');
  const fill=(key,rx)=>{if(rates[key]==null){const h=flatText.match(rx);if(h)rates[key]=Number(h[1].replace(/,/g,''))}};
- const fillNum=(key,rx)=>{if(rates[key]==null){const h=flatText.match(rx);if(h)rates[key]=Number(h[1])}};
+ const phTgtFlat=describePaidHoursTargets(flatText);
+ const fillNum=(key,rx)=>{if(rates[key]==null){const h=flatText.match(rx);if(h&&!phTgtFlat.some(s=>h.index<s.end&&h.index+h[0].length>s.start))rates[key]=Number(h[1])}};
  const fillLine=(key,rx)=>{if(rates[key]!=null)return;for(const ln of text.split(/\r?\n/)){const h=ln.match(rx);if(h){rates[key]=Number(h[1].replace(/,/g,''));return}}};
  fill('hourlyCall1st',/(?:1st call|first call)(?:(?!hourly)[^$]){0,40}?hourly[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('hourlyCall1st',/(?:1st call|first call)[^$]{0,40}?hourly[^$]{0,40}?\$\s*([\d,]+(?:\.\d{2})?)/i);
