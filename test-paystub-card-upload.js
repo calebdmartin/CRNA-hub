@@ -109,16 +109,22 @@ function assertNovember(label) {
   // ---------- Card UI: toggle, collapsed default, feature off ----------
   seed([]);
   const page = run(`facilitiesPage()`);
-  t('card carries an "Upload a pay stub" toggle', page.includes('data-action="paystub-card-toggle"') && page.includes('Upload a pay stub'));
-  t('card upload section is collapsed by default (no card form rendered)', !page.includes('paystubCardForm') && !page.includes('f_paystubCardFile_f1'));
+  // v129 (Nov 11, 2026): the card's stub upload is a collapsible
+  // panel under its own header — "Upload a pay stub (optional)",
+  // the general panel's pattern — instead of a toggle button.
+  // The three pins below changed shape with it (the toggle
+  // action is gone; collapsed now means a closed <details>, its
+  // body in the DOM but shut, exactly like every other panel).
+  t('card carries the collapsible "Upload a pay stub (optional)" header', page.includes('id="paystub-card-f1"') && page.includes('Upload a pay stub (optional)') && page.includes('collapse-title'));
+  t('card upload section is collapsed by default (details not open)', !page.includes('id="paystub-card-f1" open'));
   t('no pay-schedule line on the card before any stub', !page.includes('Pay schedule: '));
   const opened = run(`paystubCardOpenFac = 'f1'; facilitiesPage()`);
-  t('open card section renders its own form (file + paste text + Read)', opened.includes('paystubCardForm') && opened.includes('id="f_paystubCardFile_f1"') && opened.includes('id="f_paystubCardText_f1"') && opened.includes('Read my pay stub'));
+  t('open card section renders its own form (file + paste text + Read)', opened.includes('id="paystub-card-f1" open') && opened.includes('paystubCardForm') && opened.includes('id="f_paystubCardFile_f1"') && opened.includes('id="f_paystubCardText_f1"') && opened.includes('Read my pay stub'));
   t('open card section says the stub is never stored', opened.includes('The stub itself is never stored.'));
   run(`paystubCardOpenFac = ''; db.settings.featurePaychecks = false;`);
   const offSection = run(`paystubCardSectionHTML(db.facilities[0])`);
   t('feature off: card entry point collapses to the off line with a Turn on button',
-    offSection.includes('Paycheck estimates are off') && offSection.includes('data-action="feature-toggle"') && !offSection.includes('paystub-card-toggle'));
+    offSection.includes('Paycheck estimates are off') && offSection.includes('data-action="feature-toggle"') && !offSection.includes('paystub-card-f1'));
   t('feature off: no pay-schedule line on the card', run(`facilityPaystubLineHTML(db.facilities[0])`) === '');
   run(`db.settings.featurePaychecks = true;`);
 
