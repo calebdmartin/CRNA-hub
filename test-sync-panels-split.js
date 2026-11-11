@@ -205,7 +205,7 @@ function segments(html) {
     sandbox.__step2.includes('<details class="panel collapse-panel" id="live-sync-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v115'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v116'));
 
   console.log(failures === 0 ? 'sync-panels-split test done: all passed' : 'sync-panels-split test done: FAILURES=' + failures);
 })();

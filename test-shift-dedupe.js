@@ -75,10 +75,14 @@ t('wiring: QGenda + schedule + .ics previews flag duplicates by identity',
   appSrc.includes("shiftsSameShift(x,{date,facility,type,code:String(sh.code||'').trim()})"));
 t('wiring: approvals + CSV + contract + manual add enter via addShiftDeduped',
   (appSrc.match(/addShiftDeduped\(/g) || []).length >= 5 && appSrc.includes('addShiftDeduped(rec).shift.id') && appSrc.includes('addShiftDeduped(b.rec)'));
+// v116: the merge now runs the shared post-materialization heal
+// (healShiftsAfterChange), which passes the same tombstone callback
+// to dedupeShiftsInPlace — the wiring moved, the behavior is this
+// suite's subject and is unchanged.
 t('wiring: cloud merge collapses + tombstones absorbed ids; boot runs the pass',
-  appSrc.includes("dedupeShiftsInPlace((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); })") &&
+  appSrc.includes("healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }") &&
   appSrc.includes('const bootDedupe=dedupeShiftsInPlace()'));
-t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v115'));
+t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v116'));
 
 // ---------- Setup: Holzer saved as a facility ----------
 run(`

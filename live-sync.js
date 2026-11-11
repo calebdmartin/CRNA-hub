@@ -369,6 +369,11 @@ function liveSyncApplyChanges(provider, data) {
       const ccIn = typeof shiftConflictCandidate === 'function' ? shiftConflictCandidate(recIn, db.shifts) : null;
       if (ccIn) {
         conflictsHeld.push({ date: recIn.date, text: typeof conflictTextFor === 'function' ? conflictTextFor(recIn, ccIn) : recIn.date });
+        // A cross-hospital clash held at this door still alerts,
+        // persistently, on the Dashboard (v116) — the user is
+        // booked at both hospitals that day even though the app
+        // saved only one side.
+        if (typeof recordHeldDayConflict === 'function') { try { recordHeldDayConflict(recIn, ccIn); } catch (e) {} }
         return;
       }
       // Imported shifts arrive with source 'apple-import' (and a note
@@ -494,6 +499,12 @@ function liveSyncApplyChanges(provider, data) {
   liveSyncState.tombstones = liveSyncState.tombstones.filter((t) => t.provider !== provider);
   liveSyncStateSave();
   persist();
+  // Post-materialization heal (v116): a sync can apply changes
+  // after the boot/cloud heals already ran — collapse any pair it
+  // completed (same shift arriving under a renamed code) in the
+  // SAME session instead of leaving doubled totals until the next
+  // reload.
+  if (typeof healShiftsAfterChange === 'function') { try { healShiftsAfterChange(); } catch (e) {} }
   return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities: suggestions, suggestions, conflicts: conflictsHeld };
 }
 
