@@ -59,16 +59,22 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 
 // ---------- 1. Numbered list: contract item gone, numbering clean ----------
 const paths = run(`facilityThreePathsHTML({id:'sg1', name:'CAMC'})`);
-t('paths intro no longer mentions uploading a contract',
-  paths.includes('Sync your calendar or manually enter a facility') &&
-  !paths.includes('upload a contract, or'));
-t('paths list has exactly two items',
-  (paths.match(/<li>/g) || []).length === 2);
-t('no "Upload a contract" item or contract path button anywhere in the list',
-  !paths.includes('<strong>Upload a contract</strong>') && !paths.includes('data-date="contract"'));
-t('remaining items in order: 1 sync, 2 manual',
-  paths.indexOf('data-date="sync"') > -1 &&
-  paths.indexOf('data-date="manual"') > paths.indexOf('data-date="sync"'));
+// v121 (Caleb, Nov 11, 2026) SUPERSEDES the Nov 6 two-path cleanup
+// for this component: the suggestion card now offers all three rate
+// paths inline — upload a contract, describe rates in your words,
+// enter the hourly rate manually — because the post-sync handoff
+// lands the user right on the card and each path works there.
+t('paths are the three inline buttons (contract, words, manual)',
+  paths.includes('data-date="contract"') &&
+  paths.includes('data-action="facility-suggestion-words"') &&
+  paths.includes('data-date="manual"'));
+t('paths in order: contract, words, manual',
+  paths.indexOf('data-date="contract"') > -1 &&
+  paths.indexOf('data-action="facility-suggestion-words"') > paths.indexOf('data-date="contract"') &&
+  paths.indexOf('data-date="manual"') > paths.indexOf('data-action="facility-suggestion-words"'));
+t('path button labels are Caleb\'s three paths',
+  paths.includes('Upload a contract') && paths.includes('Describe rates in your words') &&
+  paths.includes('Enter hourly rate manually'));
 
 // ---------- 2. Contract panel: still there, build notes gone ----------
 const page = run(`facilitiesPage()`);
@@ -102,7 +108,7 @@ t('Account small print carries NO version line (Nov 6 sweep: build stamp removed
   !pages.Account.includes('cache v'));
 t('build stamp is gone entirely from the app',
   run(`typeof BUILD_STAMP`) === 'undefined' && !appSrc.includes('checkAppUpdate'));
-t('service worker cache bumped to v65', swSrc.includes("crna-hub-shell-v120"));
+t('service worker cache bumped to v65', swSrc.includes("crna-hub-shell-v124"));
 
 // ---------- 4. Contract upload still works end to end (pasted text) ----------
 (async () => {

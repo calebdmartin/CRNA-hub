@@ -278,8 +278,18 @@ t('Dec 8 row: "Dec 8, 2026 (Nov 16 – Nov 29)  $10,625.00"',
 t('Dec 22 row: "Dec 22, 2026 (Nov 30 – Dec 13)  $29,975.00"',
   rowFor('Dec 22, 2026').includes('(Nov 30 – Dec 13)') && rowFor('Dec 22, 2026').includes('$29,975.00'));
 t('exactly four rows, one line each; totals carry the dominant pc-total style',
-  (panel.match(/data-action="edit-paycheck"/g) || []).length === 4 &&
-  (panel.match(/class="pc-total"/g) || []).length === 4);
+  // v124 note (Nov 11, 2026, disclosed): paystubUpcomingHTML reads
+  // off the REAL today, so which of the four checks are "upcoming"
+  // drifts with the run date — the row CONTENTS are pinned exactly
+  // by the four row tests above (via paystubOccurrences over a
+  // fixed window); here we pin the panel's row FORMAT on however
+  // many rows are upcoming at run time: one line each, one
+  // pc-total each, and never a Jan 5, 2027 row — the Dec 14-27
+  // period holds no shifts, so v124 gives it no paydate.
+  (panel.match(/data-action="edit-paycheck"/g) || []).length >= 1 &&
+  (panel.match(/data-action="edit-paycheck"/g) || []).length === (panel.match(/class="pc-total"/g) || []).length &&
+  !panel.includes('Jan 5, 2027') &&
+  run(`paystubUpcoming(4, '2026-11-05').length`) === 4);
 t('panel title dropped "(estimated)"; the long disclaimer lives only in the collapsed toggle',
   !panel.includes('(estimated)') &&
   !panel.includes('includes $17,700.00 from proposed shifts') &&
@@ -324,6 +334,6 @@ const cssSrc = fs.readFileSync(R + 'styles.css', 'utf8');
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 t('wiring: swipe-down sheet dismissal + overlay CSS + cache v68',
   appSrc.includes("closest('.sheet')") && cssSrc.includes('.sheet-backdrop{position:fixed') &&
-  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v120'));
+  cssSrc.includes('.sheet-over{z-index:71}') && swSrc.includes('crna-hub-shell-v124'));
 
 console.log(fails ? `\n${fails} check(s) failed` : '\nall calendar-editing checks passed');

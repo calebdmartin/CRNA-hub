@@ -84,9 +84,11 @@ t('sections below keep their order (contract -> pay stub -> manual)',
   pageActive.indexOf('id="paystub-panel"') < pageActive.indexOf('id="facility-manual-panel"'));
 
 // --- 2. Active suggestion: card shows as before.
+// v121 (Caleb, Nov 11, 2026): per-hospital cards — the card is the
+// hospital's name + waiting count, not the old full-sentence title.
 t('active suggestion: the Hospitals noticed card appears',
   pageActive.includes('id="facility-suggestions-panel"') &&
-  pageActive.includes('We noticed shifts at CAMC in your calendar. Add it as a facility?'));
+  pageActive.includes('CAMC') && pageActive.includes('shift(s) waiting'));
 t('active suggestion: no bottom dismissed block rendered',
   !pageActive.includes('id="facility-dismissed-panel"'));
 t('facilitySuggestionsHTML() is empty only when nothing is active (static check)',
@@ -98,7 +100,7 @@ const pageDismissed = run(`facilitiesPage()`);
 t('all dismissed: suggestion card renders nothing (no panel, no heading)',
   !pageDismissed.includes('id="facility-suggestions-panel"') &&
   !pageDismissed.includes('Hospitals noticed in your calendar') &&
-  !pageDismissed.includes('We noticed shifts at CAMC'));
+  !pageDismissed.includes('shift(s) waiting'));
 t('all dismissed: facilitySuggestionsHTML() itself returns empty',
   run(`facilitySuggestionsHTML()`) === '');
 t('all dismissed: My facilities is still first on the page',
@@ -120,7 +122,7 @@ run(`actions('facility-suggestion-undismiss', 'sg-camc');`);
 const pageBack = run(`facilitiesPage()`);
 t('Ask again restores the Hospitals noticed card',
   pageBack.includes('id="facility-suggestions-panel"') &&
-  pageBack.includes('We noticed shifts at CAMC in your calendar. Add it as a facility?') &&
+  pageBack.includes('CAMC') && pageBack.includes('shift(s) waiting') &&
   !pageBack.includes('id="facility-dismissed-panel"'));
 
 // --- 6. Mixed state: one active + one dismissed -> card shows, dismissed folded inside it.
@@ -130,15 +132,17 @@ run(`
 `);
 const pageMixed = run(`facilitiesPage()`);
 t('mixed: card shows for the active suggestion, dismissed folded inside it, no bottom block',
-  pageMixed.includes('We noticed shifts at New General in your calendar. Add it as a facility?') &&
+  pageMixed.includes('New General') && pageMixed.includes('shift(s) waiting') &&
   pageMixed.includes('Dismissed suggestions (1)') &&
   !pageMixed.includes('id="facility-dismissed-panel"'));
 
 // --- 7. Facilities functions intact on the page.
-t('contract upload, AI rule chat, pay stub and manual form all still present',
+// v123 expectation change (Caleb, Nov 11, 2026 — disclosed): the
+// standalone rule chat is retired; its form must NOT come back.
+t('contract upload, pay stub and manual form all still present; rule chat retired',
   pageMixed.includes('id="facilityContractForm"') &&
-  pageMixed.includes('id="ruleChatForm"') &&
+  !pageMixed.includes('id="ruleChatForm"') &&
   pageMixed.includes('id="paystub-panel"') &&
   pageMixed.includes('id="f_name"'));
 
-t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v120'));
+t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v124'));

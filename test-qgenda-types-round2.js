@@ -11,8 +11,9 @@
 //     now stamp schedulePreview.parserVersion from the response, the
 //     status answer carries the server's current version, and a held
 //     preview older than the server is silently re-read once, with a
-//     "preview was refreshed" line. The Dashboard Review action also
-//     re-checks the feed instead of only scrolling to held rows.
+//     "preview was refreshed" line. (v123 update: Review no longer
+//     re-checks a held preview — it opens it as a sheet in place;
+//     the stale-preview protection is this silent re-read.)
 //  c. EDIT SYNC: renaming a row in the Shift type cell keeps code and
 //     type unified (the cell displays the code), pinned by source.
 // Response contract additions: fetch/status return parserVersion.
@@ -161,20 +162,41 @@ const HOLZ_ROW_REFINED = { date: '2026-08-22', facility: 'HOLZ', type: 'Second c
       w.fetchCount() === fetchesBefore + 1, 'fetches: ' + w.fetchCount());
   }
 
-  // ---------- b2. Review action re-checks instead of showing held rows ----------
+  // ---------- b2. Review opens the held preview as a sheet, in place ----------
+  // v123 expectation change (Caleb, Nov 11, 2026 — disclosed, not
+  // silent): Review used to re-check the feed and scroll to the
+  // preview buried under Upload a schedule. Now a held preview
+  // opens as a modal sheet right where the user is — "No
+  // searching or scrolling" — with no re-fetch; re-checking is
+  // what "Check feed now" is for, and stale-preview protection
+  // still lives in the silent parser-version re-read (case b).
+  // With nothing held, Review still checks the feed, and the
+  // sheet pops when new shifts are found.
   {
     const w = makeWorld();
     w.state.qgShifts = [HOLZ_ROW];
-    w.run(`${SIGNIN} db.facilities = []; db.shifts = []; db.settings.scheduleName = '';`);
+    w.run(`${SIGNIN} db.facilities = []; db.shifts = []; db.settings.scheduleName = ''; tab = 'Dashboard';`);
     await w.run(`fetchQgendaFeed({})`);
+    await w.run(`actions('qgenda-sheet-close')`);
     const fetchesBefore = w.fetchCount();
+    await w.run(`actions('qgenda-review')`);
+    await w.flush();
+    t('b2 Review with a held preview does not re-fetch — it opens the sheet',
+      w.fetchCount() === fetchesBefore, 'fetches: ' + w.fetchCount());
+    t('b2 sheet opens in place (same tab) with the held preview inside',
+      w.run(`qgendaSheetOpen`) === true && w.run(`tab`) === 'Dashboard' &&
+      w.run(`qgendaPreviewSheetHTML()`).includes('QGenda — review new shifts'));
+    await w.run(`actions('qgenda-sheet-close')`);
+    t('b2 closing the sheet keeps the pending preview waiting',
+      w.run(`qgendaSheetOpen`) === false && w.run(`qgendaPendingPreview()`) === true);
+    w.run(`schedulePreview = null; qgendaSheetOpen = false; qgendaClearPending();`);
     w.state.qgShifts = [HOLZ_ROW_REFINED];
     await w.run(`actions('qgenda-review')`);
     await w.flush();
-    t('b2 Review re-fetched the feed',
-      w.fetchCount() === fetchesBefore + 1, 'fetches: ' + w.fetchCount());
-    t('b2 preview shows the freshly read rows after Review',
-      w.run(`schedulePreview.rows[0].type`) === 'Second call');
+    t('b2 Review with nothing held re-checks the feed and pops the sheet',
+      w.fetchCount() === fetchesBefore + 1 &&
+      w.run(`schedulePreview.rows[0].type`) === 'Second call' &&
+      w.run(`qgendaSheetOpen`) === true);
   }
 
   // ---------- Source pins ----------
@@ -190,7 +212,7 @@ const HOLZ_ROW_REFINED = { date: '2026-08-22', facility: 'HOLZ', type: 'Second c
   t('pin: service worker update is re-checked when the app returns to the foreground',
     appSrc.includes('p2=reg.update()'));
   t('pin: service worker cache bumped to v98',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v120'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v124'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -108,10 +108,19 @@ t('normalizePayFrequency: unknown/blank -> empty, never guessed',
   run(`normalizePayFrequency(undefined)`) === '');
 
 // ---------- Schedule math ("today" 2026-11-05) ----------
+// v124 expectation change (Nov 11, 2026, disclosed): occurrences
+// are shift-derived now — a period with no shifts claimed by a
+// schedule produces NO occurrence, so the cadence-only occurrence
+// assertions below run on a fixture WITH shifts in the relevant
+// periods (the bare-cadence helpers paystubNextPayDate /
+// paystubStepDate are unchanged and still asserted shift-free).
+// p2's facility is CAMC here so the two agencies claim different
+// facilities' shifts and can genuinely pay on the same dates.
 run(`
+  db.facilities = [{id:'f1', name:'Holzer'}, {id:'f2', name:'CAMC'}];
   db.payStubs = [
     {id:'p1', agency:'Premier Anesthesia Group', facility:'Holzer', frequency:'biweekly', periodStart:'2026-10-19', periodEnd:'2026-11-01', payDate:'2026-10-23', gross:'3200', net:'2400', source:'ai-vision'},
-    {id:'p2', agency:'Holzer Locums', facility:'Holzer', frequency:'weekly', periodStart:'', periodEnd:'', payDate:'2026-11-06', gross:'2125', net:'1800', source:'manual'},
+    {id:'p2', agency:'Holzer Locums', facility:'CAMC', frequency:'weekly', periodStart:'', periodEnd:'', payDate:'2026-11-06', gross:'2125', net:'1800', source:'manual'},
     {id:'p3', agency:'Monthly Agency', facility:'', frequency:'monthly', periodStart:'', periodEnd:'', payDate:'2026-10-31', gross:'9000', net:'6500', source:'manual'},
     {id:'p4', agency:'Semi Monthly Co', facility:'', frequency:'semi-monthly', periodStart:'', periodEnd:'', payDate:'2026-11-07', gross:'4000', net:'3000', source:'manual'}
   ];
@@ -120,6 +129,11 @@ run(`
   globalThis.__next2 = paystubNextPayDate(db.payStubs[1], '2026-11-05');
   globalThis.__next3 = paystubNextPayDate(db.payStubs[2], '2026-11-05');
   globalThis.__next4 = paystubNextPayDate(db.payStubs[3], '2026-11-05');
+  db.shifts = [
+    {id:'h1', date:'2026-11-10', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
+    {id:'h2', date:'2026-11-18', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'},
+    {id:'c1', date:'2026-11-17', facility:'CAMC', type:'8-hour day', pay:'2000', status:'confirmed'}
+  ];
   globalThis.__occNov = paystubOccurrencesInMonth('2026-11');
   globalThis.__up = paystubUpcoming(6, '2026-11-05');
 `);
@@ -245,12 +259,20 @@ run(`
   globalThis.__dash = dashboard();
   globalThis.__split = yearIncomeSplit(2026, '2026-11-05');
   globalThis.__reconciled = reconciledYearSplit(2026, '2026-11-05');
+  month = new Date(2026, 9, 1);
+  globalThis.__calOct = calendar();
+  month = new Date(2026, 10, 1);
 `);
-t('calendar shows paycheck chips labelled by agency, amounts calculated from shifts',
+t('calendar shows paycheck chips labelled by agency, amounts calculated from shifts (v124: a period with no shifts for an agency shows no chip for it)',
   sandbox.__cal.includes('chip paycheck') &&
-  sandbox.__cal.includes('Premier Anesthesia Group') &&
   sandbox.__cal.includes('Holzer Locums') &&
-  sandbox.__cal.includes('est. $2,125'));
+  sandbox.__cal.includes('est. $2,125') &&
+  // v124: Premier's November periods hold no Premier shifts and its
+  // own actual landed Oct 23, so November shows no Premier chip;
+  // October shows the stub's own check as the actual.
+  !sandbox.__cal.includes('Premier Anesthesia Group') &&
+  sandbox.__calOct.includes('Premier Anesthesia Group') &&
+  sandbox.__calOct.includes('actual $3,200.00'));
 t('calendar carries the paystub disclaimer on paychecks',
   sandbox.__cal.includes('calculated from your shifts for each pay period'));
 t('dashboard upcoming-paychecks panel lists both agencies',

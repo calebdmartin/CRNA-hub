@@ -896,6 +896,14 @@ function paystubFrequencyFromPeriod(start,end){const s=psValidISO(start),e=psVal
 // frequency until it is today or later. A pay date of today IS the next
 // payday. Guarded: bad data can never loop forever.
 function paystubNextPayDate(stub,todayStr){if(!stub||!stub.payDate||!normalizePayFrequency(stub.frequency))return '';const today=todayStr||localDate(new Date());let d=psValidISO(stub.payDate);if(!d)return '';let guard=0;while(d<today&&guard++<400){const n=paystubStepDate(d,stub.frequency,+stub.payDate.slice(8,10));if(!n||n<=d)return '';d=n}return d}
+// The next paydays that will actually PAY (Nov 11, 2026, v124):
+// read off the occurrence engine instead of the bare cadence, so a
+// projected payday is listed only when its period holds shifts for
+// this schedule (or the check is an actual). The bare cadence
+// (paystubNextPayDate above) still describes a schedule's rhythm
+// where nothing is saved yet — the stub preview — where no shifts
+// can be claimed to an unsaved record.
+function paystubNextPaydays(stub,count,todayStr){const today=todayStr||localDate(new Date());if(!stub||!psValidISO(stub.payDate)||!normalizePayFrequency(stub.frequency))return [];const occ=paystubOccurrences(stub,today,psAddDays(today,400));const out=[],seen=new Set();for(const o of occ){if(!o||seen.has(o.date))continue;seen.add(o.date);out.push(o.date);if(out.length>=(count||3))break}return out}
 // --- Paycheck calculation engine (Nov 6, 2026) ---
 // A stub's pay period, anchored on the stub itself. When the stub
 // states its period, that IS the anchor. When it does not, the period
@@ -1429,6 +1437,25 @@ function reconciledYearSplit(y,todayStr){const split=yearIncomeSplit(y,todayStr)
 // the stub actually showed; each payday's amount is calculated from
 // the shifts in the period it covers — except the stub's own payday,
 // which shows the stub's actual.
+// SHIFT-DERIVED PAYDATES (Nov 11, 2026, v124 — Caleb: "if there are
+// no dates with a facility then the calendar should not populate
+// paydates moving forward... stop populating a pay schedule after
+// the last paycheck"): an ESTIMATED occurrence exists only when its
+// period holds at least one shift claimed by this schedule
+// (confirmed or proposed — status is a forecast split, not a pay
+// split). A period with no shifts produces NO occurrence — no
+// paydate on the calendar, no row in Upcoming paychecks, no empty
+// placeholder — however far the cadence would project, and a gap
+// period between two worked periods is skipped the same way.
+// Occurrences were always derived at render from (schedule x
+// shifts), never stored, so the series self-adjusts: adding a
+// shift in a later period brings its paydate back, and deleting a
+// period's last shift removes its projected paydate on the next
+// render. No "closed" flag, no toggle. ACTUALS are exempt: a
+// stub-backed check (the stub's own, or a carried second-stub
+// actual) and a check with an entered actual are real money that
+// landed, so they show even when their period ends up holding no
+// recorded shifts.
 // Per-check corrections the user enters from the calendar (Nov 7,
 // 2026) live ON the stub record — stub.occOverrides[scheduledPayday] =
 // {actual:'27950.00', payDate:'2026-11-25'} — so they ride the stub's
@@ -1445,7 +1472,7 @@ function paystubOccurrences(stub,fromISO,toISO,claimsIn){const out=[];if(!stub||
 // date: a one-off pay-date correction can pull a check across a month
 // boundary in either direction, and the check belongs to the month it
 // now lands in.
-const lo=psAddDays(fromISO,-70),hi=psAddDays(toISO,70);let d=stub.payDate,guard=0;while(d>lo&&guard++<400){const p=paystubStepBackDate(d,stub.frequency,anchorDay);if(!p||p>=d)break;d=p}guard=0;while(d<=hi&&guard++<300){const period=anchor?paystubPeriodForPayday(stub,d,anchor):null;const totals=period?paystubPeriodTotals(stub,period.start,period.end,claims):{gross:0,grossWithProposed:0,total:0,shiftCount:0,pricedCount:0,unpriced:0};const ownStubBacked=!!(act&&d===stub.payDate);const extraStubAmt=!ownStubBacked&&stub.stubActualDates&&typeof stub.stubActualDates==='object'?rateOrNull(stub.stubActualDates[d]):null;const stubBacked=ownStubBacked||extraStubAmt!=null;const ov=stubBacked?null:paystubOccurrenceOverride(stub,d);let date=d,enteredActual=null;if(ov){const od=psValidISO(ov.payDate);if(od)date=od;const oa=rateOrNull(ov.actual);if(oa!=null&&oa>0)enteredActual=oa}const isActual=stubBacked||enteredActual!=null;if(date>=fromISO&&date<=toISO)out.push({date,schedDate:d,dateOverridden:date!==d,periodStart:period?period.start:'',periodEnd:period?period.end:'',gross:totals.gross,grossWithProposed:totals.grossWithProposed,total:totals.total,unpriced:totals.unpriced,shiftCount:totals.shiftCount,agency:stub.agency||'',facility:stub.facility||'',stubId:stub.id||'',isActual,actual:ownStubBacked?act.amount:(extraStubAmt!=null?extraStubAmt:enteredActual),actualBasis:ownStubBacked?act.basis:(extraStubAmt!=null?'gross':(enteredActual!=null?'entered':'')),enteredActual:enteredActual!=null,stubBacked});const n=paystubStepDate(d,stub.frequency,anchorDay);if(!n||n<=d)break;d=n}return out}
+const lo=psAddDays(fromISO,-70),hi=psAddDays(toISO,70);let d=stub.payDate,guard=0;while(d>lo&&guard++<400){const p=paystubStepBackDate(d,stub.frequency,anchorDay);if(!p||p>=d)break;d=p}guard=0;while(d<=hi&&guard++<300){const period=anchor?paystubPeriodForPayday(stub,d,anchor):null;const totals=period?paystubPeriodTotals(stub,period.start,period.end,claims):{gross:0,grossWithProposed:0,total:0,shiftCount:0,pricedCount:0,unpriced:0};const ownStubBacked=!!(act&&d===stub.payDate);const extraStubAmt=!ownStubBacked&&stub.stubActualDates&&typeof stub.stubActualDates==='object'?rateOrNull(stub.stubActualDates[d]):null;const stubBacked=ownStubBacked||extraStubAmt!=null;const ov=stubBacked?null:paystubOccurrenceOverride(stub,d);let date=d,enteredActual=null;if(ov){const od=psValidISO(ov.payDate);if(od)date=od;const oa=rateOrNull(ov.actual);if(oa!=null&&oa>0)enteredActual=oa}const isActual=stubBacked||enteredActual!=null;if(date>=fromISO&&date<=toISO&&(isActual||totals.shiftCount>0))out.push({date,schedDate:d,dateOverridden:date!==d,periodStart:period?period.start:'',periodEnd:period?period.end:'',gross:totals.gross,grossWithProposed:totals.grossWithProposed,total:totals.total,unpriced:totals.unpriced,shiftCount:totals.shiftCount,agency:stub.agency||'',facility:stub.facility||'',stubId:stub.id||'',isActual,actual:ownStubBacked?act.amount:(extraStubAmt!=null?extraStubAmt:enteredActual),actualBasis:ownStubBacked?act.basis:(extraStubAmt!=null?'gross':(enteredActual!=null?'entered':'')),enteredActual:enteredActual!=null,stubBacked});const n=paystubStepDate(d,stub.frequency,anchorDay);if(!n||n<=d)break;d=n}return out}
 function paystubOccurrencesOn(dateISO){const claims=paystubShiftClaims();const all=[];for(const s of paystubSchedules())all.push(...paystubOccurrences(s,dateISO,dateISO,claims));all.sort((a,b)=>String(a.agency).localeCompare(String(b.agency)));return all}
 function paystubOccurrencesInMonth(prefix){if(!featureOn('featurePaychecks'))return[];const y=+prefix.slice(0,4),m=+prefix.slice(5,7),from=prefix+'-01',to=prefix+'-'+String(psDaysInMonth(y,m)).padStart(2,'0');const claims=paystubShiftClaims();const all=[];for(const s of paystubSchedules())all.push(...paystubOccurrences(s,from,to,claims));all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.agency).localeCompare(String(b.agency)));return all}
 // --- One headline number per month (Caleb, Nov 7, 2026) ---
@@ -1587,10 +1614,11 @@ function paystubListHTML(){
   if(!stubs.length)return '<p class="muted">No pay stubs yet — optional. Add one per agency below and each agency gets its own estimated pay schedule on the calendar.</p>';
   const unifiedNote=paystubSchedules().length<stubs.length?'<p class="muted">Some schedules below are the same payer saved two ways (a pay schedule plus a pay stub). CRNA Hub treats them as one schedule — and the pay stub is always the default, so its check shows the stub amount, not an estimate.</p>':'';
   return unifiedNote+stubs.map(x=>{
-    const next=paystubNextPayDate(x);
-    const dates=[];let d=next;for(let i=0;i<3&&d;i++){dates.push(d);const n=paystubStepDate(d,x.frequency,+String(x.payDate||'').slice(8,10));if(!n||n<=d)break;d=n}
+    const eff=paystubSchedules().find(s=>s.id===x.id||(s.mergedFrom||[]).includes(x.id))||x;
+    const dates=paystubNextPaydays(eff,3);
+    const hasRhythm=!!(normalizePayFrequency(x.frequency)&&psValidISO(x.payDate));
     const src=x.source==='ai-vision'?'Read from pay stub with AI':x.source==='device-ocr'?'Read from pay stub on this device':x.source==='text-parse'?'Read from pasted text / PDF':x.source==='manual'?'Entered manually':'Saved pay schedule';
-    return `<div class="item"><div><div class="item-title">${escapeHTML(x.agency||'Unnamed agency')}${x.facility?` <span class="muted">(${escapeHTML(x.facility)})</span>`:''}</div><div class="muted">${PAY_FREQUENCY_LABELS[x.frequency]||'Frequency not set'} · Last pay date ${x.payDate?fmt(x.payDate):'not set'}${x.periodStart&&x.periodEnd?` · Period ${fmt(x.periodStart)} – ${fmt(x.periodEnd)}`:''}</div><div class="muted">${(()=>{const act=paystubStubActual(x);return act?`This stub's own check (${x.payDate?fmt(x.payDate):'pay date not set'}): ${currency(act.amount)} ${act.basis} — the actual for its period. Every other paycheck is calculated from your shifts in that period.`:'No amount on this stub — every paycheck is calculated from your shifts in that period.'})()}</div><div class="muted">Next expected pay dates: ${dates.length?dates.map(z=>fmt(z)).join(' · '):'set a pay frequency and pay date to see them'}</div><div class="muted">${escapeHTML(src)}${x.fileName?` · ${escapeHTML(x.fileName)}`:''}</div></div><div class="item-actions"><button class="tiny secondary" data-action="edit-paystub" data-id="${escapeHTML(x.id)}">Edit</button><button class="tiny danger" data-action="delete-paystub" data-id="${escapeHTML(x.id)}">Delete</button></div></div>`;
+    return `<div class="item"><div><div class="item-title">${escapeHTML(x.agency||'Unnamed agency')}${x.facility?` <span class="muted">(${escapeHTML(x.facility)})</span>`:''}</div><div class="muted">${PAY_FREQUENCY_LABELS[x.frequency]||'Frequency not set'} · Last pay date ${x.payDate?fmt(x.payDate):'not set'}${x.periodStart&&x.periodEnd?` · Period ${fmt(x.periodStart)} – ${fmt(x.periodEnd)}`:''}</div><div class="muted">${(()=>{const act=paystubStubActual(x);return act?`This stub's own check (${x.payDate?fmt(x.payDate):'pay date not set'}): ${currency(act.amount)} ${act.basis} — the actual for its period. Every other paycheck is calculated from your shifts in that period.`:'No amount on this stub — every paycheck is calculated from your shifts in that period.'})()}</div><div class="muted">Next expected pay dates: ${dates.length?dates.map(z=>fmt(z)).join(' · '):(hasRhythm?'none coming up — a pay date appears when a pay period has shifts recorded':'set a pay frequency and pay date to see them')}</div><div class="muted">${escapeHTML(src)}${x.fileName?` · ${escapeHTML(x.fileName)}`:''}</div></div><div class="item-actions"><button class="tiny secondary" data-action="edit-paystub" data-id="${escapeHTML(x.id)}">Edit</button><button class="tiny danger" data-action="delete-paystub" data-id="${escapeHTML(x.id)}">Delete</button></div></div>`;
   }).join('');
 }
 // --- Pay stub on a facility's own card (Nov 10, 2026) ---
@@ -1623,7 +1651,7 @@ function facilityPaystubLineHTML(f){
   if(!featureOn('featurePaychecks'))return '';
   const s=paystubScheduleForFacility(f);if(!s)return '';
   const act=paystubStubActual(s);
-  const next=paystubNextPayDate(s);
+  const next=paystubNextPaydays(s,1)[0]||'';
   return `<div class="muted">Pay schedule: ${escapeHTML(s.agency||'Unnamed agency')}${PAY_FREQUENCY_LABELS[s.frequency]?` · ${escapeHTML(PAY_FREQUENCY_LABELS[s.frequency])}`:''}${next?` · next payday ${fmt(next)}`:''}${act?` · pay stub on file — ${currency(act.amount)} actual for the ${fmt(s.payDate)} check`:''}</div>`;
 }
 // A preview belongs to exactly one surface: a card-started preview
@@ -8305,7 +8333,8 @@ function approvePaystub(){
   // preview: its pay-schedule section switches to the on-file line
   // (never asks twice) and its apply path saves nothing more.
   if(p.importKind){const ip=p.importKind==='cal'?calPreview:p.importKind==='contract'?contractPreview:p.importKind==='faccontract'?facilityContractPreview:schedulePreview;if(ip)ip.paySchedStubSaved={agency:rec.agency,frequency:rec.frequency}}
-  const next=paystubNextPayDate(rec);
+  const nextRec=paystubSchedules().find(s=>s.id===rec.id||(s.mergedFrom||[]).includes(rec.id))||rec;
+  const next=paystubNextPaydays(nextRec,1)[0]||'';
   paystubPreview=null;paystubError='';paystubStatus='';paystubCardFacId='';paystubCardOpenFac='';paystubImportCtx=null;editId=null;persist();cloudSaveKind('payStubs',rec.id);render();
   alert(`Pay schedule saved for ${agency} — ${PAY_FREQUENCY_LABELS[frequency]}${next?`, next expected payday ${fmt(next)}`:''}. Each paycheck is calculated from your shifts in its pay period${(gross||net)?` — and this stub's own check (${fmt(payDate)}) counts as the actual ${currency(num(gross||net))} from the stub`:''}. Paychecks for ${agency} now show on the Dashboard and calendar, labelled estimate or actual.`);
 }
