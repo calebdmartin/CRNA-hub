@@ -3424,7 +3424,7 @@ function codeDefFor(f,code){const k=String(code||'').trim();if(!k)return null;co
 // one the facility pay rule prices directly ("Second call",
 // "24-hour call", "8-hour day", ...). Generic patterns only — a
 // facility's own numbers always come from its saved rates.
-function canonicalTypeOf(text){const t=String(text||'').toLowerCase();if(!t)return '';if(/call/.test(t)&&(/second/.test(t)||/(?:^|\D)2nd\b/.test(t)||/\bcall\s*2\b/.test(t)))return 'Second call';if(/call/.test(t)&&(/\b24\b/.test(t)||/\b24\s*-?\s*h(?:ou)?r\b/.test(t)||/first/.test(t)||/(?:^|\D)1st\b/.test(t)||/\bcall\s*1\b/.test(t)))return '24-hour call';const m=t.match(/(\d{1,2})\s*-\s*hour|(\d{1,2})\s*hour|(\d{1,2})\s*-?\s*hr\b|\((\d{1,2})\)\s*$/);if(m){const n=+(m[1]||m[2]||m[3]||m[4]);if(n===8)return '8-hour day';if(n===10)return '10-hour shift';if(n===12)return '12-hour shift';if(n===24)return '24-hour call'}return ''}
+function canonicalTypeOf(text){const t=String(text||'').toLowerCase().replace(/\bhousr\b/g,'hour').replace(/\bhuor\b/g,'hour');if(!t)return '';if(/call/.test(t)&&(/second/.test(t)||/(?:^|\D)2nd\b/.test(t)||/\bcall\s*2\b/.test(t)))return 'Second call';if(/call/.test(t)&&(/\b24\b/.test(t)||/\b24\s*-?\s*h(?:ou)?r\b/.test(t)||/first/.test(t)||/(?:^|\D)1st\b/.test(t)||/\bcall\s*1\b/.test(t)))return '24-hour call';const m=t.match(/(\d{1,2})\s*-\s*hour|(\d{1,2})\s*hour|(\d{1,2})\s*-?\s*hrs?\b|\((\d{1,2})\)\s*$/);if(m){const n=+(m[1]||m[2]||m[3]||m[4]);if(n===8)return '8-hour day';if(n===10)return '10-hour shift';if(n===12)return '12-hour shift';if(n===24)return '24-hour call'}return ''}
 // True when a call type's weekday/weekend split is nowhere in the
 // facility's saved rates — no weekend flat, no weeknight flat, no
 // call-bonus structure the pricer could apply by day of week. Only
@@ -3778,12 +3778,17 @@ function describeCodeBlocks(text,codes){
   // paid-hours figure unreadable as a unit — live, the number
   // resurfaced as an $8.50 flat rate on the 8-hour code. Digit
   // '.' digit is protected while clauses are cut and restored
-  // in addChunk. A "/" set off by spaces is a clause boundary
+  // in addChunk. Thousands commas get the same protection
+  // (\u0002, Nov 11, 2026, v128): "$2,000" otherwise reads as
+  // the bare number "2" followed by ",000", and a code named
+  // "2" — or the final token of "Call 2" — matched INSIDE
+  // the amount and inherited money that was never its own.
+  // A "/" set off by spaces is a clause boundary
   // too: Caleb writes his statements separated by " / " on one
   // line, and without the cut a carry-forward clause ("Weekday=
   // $4,800 weekend $4,200") sweeps into the NEXT named code's
   // chunk and donates its amounts to it.
-  const t=String(text||'').replace(/(\d)\.(\d)/g,'$1\u0001$2');
+  const t=String(text||'').replace(/(\d)\.(\d)/g,'$1\u0001$2').replace(/(\d),(\d)/g,'$1\u0002$2');
   // Asterisks are part of a code's name, not punctuation (Nov
   // 10, 2026, v113): real grids carry codes like "5*" and "5**"
   // side by side, and tokenizing on [^a-z0-9]+ collapsed BOTH
@@ -3802,47 +3807,142 @@ function describeCodeBlocks(text,codes){
     const full=toks(code);if(!full.length)continue;
     const tailSrc=code.includes(' - ')?code.slice(code.lastIndexOf(' - ')+3):code;
     const seen=new Set();
-    for(const tk of [full,toks(tailSrc)]){
-      if(!tk.length)continue;const key=tk.join(' ');if(seen.has(key))continue;seen.add(key);
+    const pushForm=(tk,prio)=>{
+      if(!tk.length)return;
+      const key=tk.join(' ')+'|'+prio;if(seen.has(key))return;seen.add(key);
       // A lone generic word ("call", "day") is not a name — it
       // would match everywhere. Distinctive single tokens
       // ("PCDO", "NOC") and any multi-token form are fine.
-      if(tk.length===1&&/^(call|day|shift|first|second)$/.test(tk[0]))continue;
-      forms.push({code,rx:new RegExp('(?<![a-z0-9*])'+tk.map(escRx).join('[^a-z0-9*]+')+'(?![a-z0-9*])','gi')});
+      if(tk.length===1&&/^(call|day|shift|first|second)$/.test(tk[0]))return;
+      forms.push({code,prio:prio||0,rx:new RegExp('(?<![a-z0-9*])'+tk.map(escRx).join('[^a-z0-9*]+')+'(?![a-z0-9*])','gi')});
+    };
+    const pushName=tk=>{
+      if(!tk.length)return;
+      pushForm(tk,0);
+      // Plural spelling (Nov 11, 2026, v128): schedules print
+      // codes both ways — "8" on one row, "8s" on the next —
+      // and users write the name they saw. A code whose last
+      // token ends in a digit or asterisk also answers to its
+      // plural ("8s", "10s"), at LOWER priority than any exact
+      // form, so a code literally named "8s" keeps its own
+      // mentions. The trailing lookahead keeps the plural's
+      // "s" from being read out of a longer word ("shifts",
+      // "hrs" are never code names).
+      const last=tk[tk.length-1];
+      if(last&&/[0-9*]$/.test(last)&&!/s$/.test(last))pushForm(tk.slice(0,-1).concat(last+'s'),1);
+    };
+    // Standard call synonyms (Nov 11, 2026, v128): a code the
+    // app knows as first or second call (its saved type says
+    // so) also answers to the names schedules and contracts
+    // use for it — "first call", "1st call", "second call",
+    // "2nd call" — the same synonyms canonicalTypeOf already
+    // recognizes. Without them, "First call (24 hour) pays
+    // $4,800…" named nothing the reader knew, and its amounts
+    // were free to slide onto the next code the text named.
+    const ct0=String(c&&c.ctype||'');
+    if(ct0==='24-hour call'){pushName(toks('call 1'));pushName(toks('1st call'));pushName(toks('first call'))}
+    else if(ct0==='Second call'){pushName(toks('call 2'));pushName(toks('2nd call'));pushName(toks('second call'))}
+    for(const tk of [full,toks(tailSrc)]){
+      if(!tk.length)continue;
+      pushName(tk);
+      // Shortened names (Nov 11, 2026, v128): users abbreviate
+      // a code to its tail end — "Main 8" for "G Main (8)",
+      // "8" for "CAMC 8". Every token suffix of two or more,
+      // and the final token on its own when it carries the
+      // identity (a digit or asterisk, or a distinctive word),
+      // is also a name for the code. This generalizes the old
+      // ' - ' tail rule, which only fired when the code's name
+      // happened to contain a dash: "CAMC 8" had NO short form
+      // at all, so a user writing "8=…" named nothing the
+      // reader knew and every definition dropped silently.
+      for(let k=1;k<=tk.length-2;k++)pushName(tk.slice(k));
+      const last=tk[tk.length-1];
+      if(tk.length>1&&last&&(/[0-9*]/.test(last)||(last.length>=4&&!/^(call|day|shift|first|second|main)$/.test(last))))pushName([last]);
     }
   }
   const scopeRx=/\b(weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i;
   const out={};
   const addChunk=(code,chunk,after)=>{
-    chunk=String(chunk||'').replace(/\u0001/g,'.');
-    if(after!=null)after=String(after).replace(/\u0001/g,'.');
+    chunk=String(chunk||'').replace(/\u0001/g,'.').replace(/\u0002/g,',');
+    if(after!=null)after=String(after).replace(/\u0001/g,'.').replace(/\u0002/g,',');
     const e=out[code]||(out[code]={phrase:'',amounts:[],text:''});
     e.text=(e.text?e.text+' ':'')+chunk;
     if(!e.phrase){
-      let p=String(after!=null?after:chunk||'').replace(/^[\s=:\-–—.()]+/,'').replace(/^(?:is|means|called|pays?|at)\s+/i,'');
+      let p=String(after!=null?after:chunk||'').replace(/^[\s=:\-–—.()]+/,'').replace(/^(?:is|are|means|called|pays?|at)\s+/i,'');
       p=p.split(/\b(?:weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i)[0].split(/[.;\n$,]/)[0].trim().replace(/\s+/g,' ').replace(/[\s\-–—:\/]+$/,'');
+      // Glue is not a phrase (Nov 11, 2026, v128): a subject
+      // list's first name is followed by nothing but the
+      // conjunction ("5* or 5**=…" leaves "or" as the first
+      // code's trailing text), and that word used to become
+      // the code's "phrase" — an unresolvable label that
+      // priced nothing and blocked the real definition.
+      if(p&&!/[a-z0-9*$]/.test(p.replace(/\b(?:and|or)\b/gi,'')))p='';
       if(p)e.phrase=p;
     }
-    if(!amountsHourly(chunk)){
-      const amounts=[...String(chunk).matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>({v:Number(x[1].replace(/,/g,'')),start:x.index,end:x.index+x[0].length,scope:null}));
+    {
+      // Per-amount hourly exclusion (Nov 11, 2026, v128): a
+      // dollar figure is the hourly rate only when the hourly
+      // unit rides on THAT figure — "$250/hr", "$250 per
+      // hour", "hourly is $250". The old chunk-level test
+      // dropped EVERY amount in a statement that mentioned an
+      // hourly rate anywhere: "$250/hr" held as a lead-in
+      // poisoned the next clause, and "8 is $2,000 a shift"
+      // lost its $2,000 without a trace.
+      const amounts=[...String(chunk).matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>({v:Number(x[1].replace(/,/g,'')),start:x.index,end:x.index+x[0].length,scope:null}))
+        .filter(a=>!/^\s*(?:\/|per\s+)?(?:hrs?|hours?|hourly)\b/i.test(String(chunk).slice(a.end,a.end+12))&&!/hourly(?:\s+rate)?\s*(?:is|:|=)?\s*$/i.test(String(chunk).slice(Math.max(0,a.start-16),a.start)));
       const kws=[...String(chunk).matchAll(new RegExp(scopeRx.source,'gi'))].map(x=>({kind:/^(?:weeke|wknd)/i.test(x[1])?'we':'wd',start:x.index,end:x.index+x[0].length}));
       for(const kw of kws){let best=null,bd=Infinity;for(const a of amounts){const d=kw.start>=a.end?kw.start-a.end:(kw.end<=a.start?a.start-kw.end:0);if(d<bd){bd=d;best=a}}if(best&&!best.scope)best.scope=kw.kind}
       for(const a of amounts)if(isFinite(a.v)&&a.v>0)e.amounts.push(a);
     }
   };
-  const amountsHourly=chunk=>/\b(?:hourly|per\s+hour|an\s+hour|\/\s*h(?:ou)?r\b)/i.test(String(chunk||''));
   const segCodes=seg=>{
     const ms=[];
-    for(const f of forms){let m;f.rx.lastIndex=0;while((m=f.rx.exec(seg))!==null){ms.push({code:f.code,start:m.index,end:m.index+m[0].length,len:m[0].length});if(m.index===f.rx.lastIndex)f.rx.lastIndex++}}
-    ms.sort((a,b)=>a.start-b.start||b.len-a.len);
+    for(const f of forms){let m;f.rx.lastIndex=0;while((m=f.rx.exec(seg))!==null){
+      // A mention ending right at a protected decimal point
+      // is a number fragment, not a name (Nov 11, 2026,
+      // v128): "paid for 8.5 hours" protects to "8\u00015",
+      // and the bare "8" a shortened-name form sees there is
+      // the paid-hours figure, never a code mention.
+      if(seg[m.index+m[0].length]!=='\u0001'&&seg[m.index+m[0].length]!=='\u0002')ms.push({code:f.code,start:m.index,end:m.index+m[0].length,len:m[0].length,prio:f.prio||0});
+      if(m.index===f.rx.lastIndex)f.rx.lastIndex++}}
+    // Longest match wins a span; at equal span an exact form
+    // beats a plural variant, so a code literally named "8s"
+    // keeps the mentions its own name earns.
+    ms.sort((a,b)=>a.start-b.start||b.len-a.len||a.prio-b.prio);
     const acc=[];let cov=-1;for(const mn of ms){if(mn.start<cov)continue;acc.push(mn);cov=mn.end}
     return acc;
   };
-  let current=null,lead='';
+  // Duration mentions (Nov 11, 2026, v128): a bare number
+  // immediately followed by an hour unit is a DURATION, not
+  // a code reference — "5** are 10 hour shifts" matched the
+  // code "10" inside the definition itself, cut the phrase
+  // down to "are", and orphaned the subject. The clause's
+  // FIRST mention is exempt: a statement may open with its
+  // subject ("10 = 10hr shifts" — that restatement is the
+  // collapse's business, below).
+  const dropDurations=(seg,list)=>list.filter((mn,i)=>{
+    if(i===0)return true;
+    if(!/^\d+$/.test(seg.slice(mn.start,mn.end)))return true;
+    return !/^\s*-?\s*(?:hrs?|hours?)\b/i.test(seg.slice(mn.end,mn.end+12));
+  });
+  let current=null,lead='',leadCodes='';
   const mentionOrder=[];
   const pendingRefs={};
-  for(const rawSeg of t.split(/[.;\n;]+|\s+\/\s+/)){
+  const listGroups=[];
+  const segParts=t.split(/([.;\n;]+|\s+\/\s+)/);
+  for(let si=0;si<segParts.length;si+=2){
+    let rawSeg=segParts[si];
+    const sepAfter=si+1<segParts.length?segParts[si+1]:'';
     if(!rawSeg.trim())continue;
+    // A spaced slash is a LIST joiner, not a sentence break
+    // (Nov 11, 2026, v128): "5* / 5** = 10hr shifts" was cut
+    // into a bare "5*" clause and a defining "5**" clause,
+    // and the first code got an empty block. A clause that
+    // names codes but says nothing about them (names and
+    // joiners only — see the hold below) is the head of the
+    // list the slash joins; it is prepended here so the two
+    // halves read as one statement.
+    if(leadCodes){rawSeg=leadCodes+rawSeg;leadCodes=''}
     // A clause naming no code carries FORWARD to the most
     // recently named one — but a clause before ANY code has been
     // named can only be a lead-in for the statement that follows
@@ -3854,9 +3954,9 @@ function describeCodeBlocks(text,codes){
     // ("Weekend is Friday and Saturday") carries no money, is
     // read at text level elsewhere, and its stray day keywords
     // would poison the nearest-amount scoping if prepended.
-    let seg=rawSeg,acc=segCodes(seg);
+    let seg=rawSeg,acc=dropDurations(seg,segCodes(seg));
     if(!acc.length&&current==null&&/\$/.test(rawSeg)){lead+=rawSeg+' ';continue}
-    if(lead){seg=lead+rawSeg;acc=segCodes(seg);lead=''}
+    if(lead){seg=lead+rawSeg;acc=dropDurations(seg,segCodes(seg));lead=''}
     // A code restated as the first words of its own definition
     // is not a second subject (Nov 11, 2026, v122): "12=12 hr
     // shifts" matched the code TWICE — the space in "12 hr"
@@ -3871,16 +3971,52 @@ function describeCodeBlocks(text,codes){
       const kept=[acc[0]];
       for(let i=1;i<acc.length;i++){
         const prev=kept[kept.length-1];
-        if(acc[i].code===prev.code&&/^[\s=:\-–—.]*$/.test(seg.slice(prev.end,acc[i].start)))continue;
+        if(acc[i].code===prev.code){
+          const gap=seg.slice(prev.end,acc[i].start);
+          // Separators only (v122) — or separators plus the
+          // assignment's own small words (v128): "8 is an 8
+          // hour shift" restates the code after "is an", and
+          // keeping the second mention cut the phrase down to
+          // the article ("an"), which reads as nothing.
+          if(/^(?:[\s=:\-–—.,&]|\b(?:and|or)\b|\b(?:is|are|means|an?|the)\b)*$/.test(gap))continue;
+          // Alias list (Nov 11, 2026, v128): the SAME code
+          // named twice with only a conjunction between —
+          // "8s or 8=8hr shifts" offers the plural and the
+          // plain spelling as ONE subject — and an assignment
+          // right after the second name. One subject: the
+          // mention extends over both spellings, so the
+          // definition that follows binds a single time.
+          if(/^(?:[\s=:\-–—.,&]|\b(?:and|or)\b)+$/i.test(gap)&&/^\s*[=:]/.test(seg.slice(acc[i].end,acc[i].end+3))){prev.end=acc[i].end;prev.len=prev.end-prev.start;continue}
+        }
         kept.push(acc[i]);
       }
       acc=kept;
+    }
+    // Glue-only clause before a slash (Nov 11, 2026, v128):
+    // the segment names codes but says nothing about them —
+    // outside the mentions there is only joiner glue, and no
+    // money. When the boundary after it is the spaced slash,
+    // it is a list head: hold it and let the next clause read
+    // as its continuation. After any other boundary the same
+    // shape just leaves empty blocks, which the parse then
+    // surfaces as unanswered — named, never silent.
+    if(acc.length&&!/\$/.test(seg)&&/^\s*\/\s*$/.test(sepAfter)){
+      let stripped='',pos=0;for(const mn of acc){stripped+=seg.slice(pos,mn.start);pos=mn.end}stripped+=seg.slice(pos);
+      if(/^(?:[\s=:\-–—.,&\/]|\b(?:and|or)\b)*$/i.test(stripped)){leadCodes=seg+' ';continue}
     }
     if(!acc.length){if(current)addChunk(current,seg,null);continue}
     for(let i=0;i<acc.length;i++){
       const mn=acc[i];
       const from=i===0?0:mn.start,to=i+1<acc.length?acc[i+1].start:seg.length;
-      addChunk(mn.code,seg.slice(from,to),seg.slice(mn.end,to));
+      let afterTxt=seg.slice(mn.end,to);
+      // A numeric code IS the hour count of its own definition
+      // when the definition continues the number ("8-hour
+      // shift" — the "8" was consumed as the code mention, so
+      // the phrase that remains is "-hour shift"). Fold the
+      // code's digits back in so the phrase reads whole.
+      const numTail=String(mn.code).match(/(\d+)\s*$/);
+      if(numTail&&/^\s*-?\s*h(?:ou)?rs?\b/i.test(afterTxt))afterTxt=numTail[1]+afterTxt;
+      addChunk(mn.code,seg.slice(from,to),afterTxt);
       current=mn.code;
       if(!mentionOrder.includes(mn.code))mentionOrder.push(mn.code);
     }
@@ -3902,13 +4038,29 @@ function describeCodeBlocks(text,codes){
       // definition to the code it follows, so record the first
       // code as pointing at the second and let the inheritance
       // pass below share the read — the same machinery "same
-      // as" uses. Scoped to a bare conjunction followed by an
+      // as" uses. Scoped to a glue-only gap followed by an
       // assignment, so an incidental "and" between unrelated
-      // statements binds nothing.
-      if(!pendingRefs[acc[i].code]&&/^\s*(?:and|&|,)\s*$/i.test(rel)){
+      // statements binds nothing. (v128: the gap is the whole
+      // glue family — and / or / & / comma / slash / bare
+      // space after a slash-joined list head — and the
+      // assignment may be a verb: "5* or 5** are 10hr shifts"
+      // binds exactly like "5* and 5**=10hr shifts". Caleb's
+      // CAMC card text used "or" throughout and every listed
+      // code but the last dropped.)
+      if(!pendingRefs[acc[i].code]&&/^(?:[\s:.,&\/]|\b(?:and|or)\b)+$/i.test(rel)){
         const afterNext=seg.slice(acc[i+1].end,i+2<acc.length?acc[i+2].start:seg.length);
-        if(/^\s*[=:]/.test(afterNext))pendingRefs[acc[i].code]=acc[i+1].code;
+        if(/^\s*(?:[=:]|\bis\b|\bare\b|\bmeans?\b)/.test(afterNext))pendingRefs[acc[i].code]=acc[i+1].code;
       }
+    }
+    // List group (Nov 11, 2026, v128): every gap in the
+    // statement is glue and each code is named once — the
+    // codes were offered as ONE subject. The group is
+    // remembered so the sharing pass below can give every
+    // member the read, wherever the slicing put it.
+    if(acc.length>=2&&new Set(acc.map(mn2=>mn2.code)).size===acc.length){
+      let allGlue=true;
+      for(let i=0;i+1<acc.length;i++){if(!/^(?:[\s:.,&\/]|\b(?:and|or)\b)*$/i.test(seg.slice(acc[i].end,acc[i+1].start))){allGlue=false;break}}
+      if(allGlue)listGroups.push(acc.map(mn2=>mn2.code));
     }
     // Subject binding (Nov 10, 2026, v113): a statement can name
     // TWO codes — "5* = same as 5**: 10 hour shift, $250/hr" —
@@ -4019,6 +4171,25 @@ function describeCodeBlocks(text,codes){
         changed=true;
       }
       if(!changed)break;
+    }
+    // List sharing (Nov 11, 2026, v128): codes named as ONE
+    // glue-joined subject share the statement's read wherever
+    // the slicing happened to put it. The slicing hands
+    // content to the code it follows — for "5* and 5**=10hr
+    // shifts" that is the second name; for "$2,500 for 5* and
+    // 5**" the amount precedes both names and lands on the
+    // first. Either way the sentence defines the LIST, so a
+    // member with no read of its own takes the read of a
+    // member that has one — the reference rule, applied to
+    // the group. A member with its own read is never touched.
+    for(const group of listGroups){
+      const src=group.map(c=>out[c]).find(e=>hasOwn(e));
+      if(!src)continue;
+      for(const code of group){
+        const e=out[code];if(!e||hasOwn(e))continue;
+        e.phrase=src.phrase;e.wd=src.wd;e.we=src.we;e.hasAmounts=src.hasAmounts;
+        e.paidHours=src.paidHours;e.noPay=src.noPay;e.dayOff=src.dayOff;e.unpaid=src.unpaid;e.conflict=src.conflict;
+      }
     }
     for(const code of Object.keys(out)){delete out[code].sameAs;delete out[code].sameAsAbove}
   }
@@ -4222,6 +4393,67 @@ function describeParseLocal(text,fac,codes){
       if(blk&&(blk.wd!=null||blk.we!=null)&&ct!=='Second call'&&ct!=='24-hour call'){if(blk.wd!=null)newDef.weekdayPay=blk.wd;if(blk.we!=null)newDef.weekendPay=blk.we}
       defs[c.code]=newDef;
     }else if(!c.shiftOnly||blk||codeHit||stmtLabel)unanswered.push(c.code);
+  }
+  // Unknown-subject net (Nov 11, 2026, v128): the confusion
+  // budget must hold for ANY text — including text naming
+  // codes this facility has never carried (a fresh facility
+  // whose shifts have not imported yet, or a code the app
+  // only knows under a longer name). Everything above can
+  // only resolve names already in the reader's universe; a
+  // statement whose subject matches NO known code used to
+  // vanish without a trace — live, a CAMC text naming five
+  // codes read back as a bare "Day shifts pay $250/hr."
+  // because none of the five were in the universe on that
+  // surface. An assignment-shaped subject ("NAME = …",
+  // "NAME is …") that looks like a code (carries a digit or
+  // an asterisk, or an all-caps word) and that nothing
+  // resolved — no definition, no rate, no known-code match
+  // in any spelling — is therefore named in unanswered
+  // exactly as written, so the read-back asks about it
+  // instead of dropping it. Descriptor phrases ("the 8-hour
+  // shift rate is …") are descriptions, not code names, and
+  // never trip the net.
+  {
+    const normS=s=>String(s||'').toLowerCase().replace(/[^a-z0-9*]+/g,' ').trim();
+    const knownForms=new Set(),knownLast=new Set();
+    for(const c of codeList){
+      const tk=String(c&&c.code||'').toLowerCase().split(/[^a-z0-9*]+/).filter(x=>/[a-z0-9]/.test(x));
+      if(!tk.length)continue;
+      knownForms.add(tk.join(' '));
+      for(let k=1;k<tk.length;k++)knownForms.add(tk.slice(k).join(' '));
+      const last=tk[tk.length-1];knownLast.add(last);knownLast.add(last+'s');
+      if(last.endsWith('s'))knownLast.add(last.slice(0,-1));
+    }
+    const answeredS=new Set([...Object.keys(defs),...unanswered].map(normS));
+    const isKnownS=subj=>{
+      const ns=normS(subj);if(!ns)return true;
+      if(knownForms.has(ns)||answeredS.has(ns))return true;
+      const tk=ns.split(' ');
+      if(tk.length===1)return knownLast.has(tk[0]);
+      for(let k=1;k<tk.length;k++)if(knownForms.has(tk.slice(k).join(' ')))return true;
+      // A subject LIST of known spellings ("8s or 8",
+      // "12s or 12s") is known when every name in it is.
+      const parts=tk.filter(w=>w!=='and'&&w!=='or');
+      if(parts.length&&parts.length<=tk.length&&parts.every(w=>knownLast.has(w)||knownForms.has(w)))return true;
+      return false;
+    };
+    const callCoveredS=subj=>{
+      const ns=normS(subj);
+      if(/\bcall 1\b|1st call|first call/.test(ns))return rates.rate24!=null||rates.weekendRate24!=null||rates.hourlyCall1st!=null;
+      if(/\bcall 2\b|2nd call|second call/.test(ns))return rates.rateSecond!=null||rates.weekendRateSecond!=null||rates.callBonus!=null;
+      return false;
+    };
+    for(const clause of t.split(/[.;\n;]+|\s+\/\s+/)){
+      if(unanswered.length>=12)break;
+      const m=clause.match(/^\s*"?\(?\s*([A-Za-z0-9][A-Za-z0-9*()\- ]{0,26}?)\s*(?:=|:|\bis\b|\bare\b|\bmeans\b|\bpays?\b)/);
+      if(!m)continue;
+      const subj=m[1].replace(/\s+/g,' ').replace(/[\s()]+$/,'').trim();
+      if(!subj||subj.split(' ').length>4)continue;
+      if(!(/\d|\*/.test(subj)||/(?:^|\s)[A-Z]{2,}(?:\s|$)/.test(subj)))continue;
+      if(/(?:^|\s)(?:shifts?|rates?|pay|hours?|days?|per)(?:\s|$)/i.test(subj))continue;
+      if(isKnownS(subj)||callCoveredS(subj)||answeredS.has(normS(subj)))continue;
+      answeredS.add(normS(subj));unanswered.push(subj);
+    }
   }
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
   // weekendStated (Nov 11, 2026, v122): whether the TEXT ITSELF
@@ -4460,7 +4692,16 @@ async function submitDescribe(key){
             const unionDefs={...re.defs};
             for(const k of Object.keys(localDefs))unionDefs[k]=localDefs[k];
             parsed.defs=unionDefs;
-            parsed.unanswered=(ctx.codes||[]).map(c=>c.code).filter(code=>!(code in unionDefs)&&(localUnanswered.includes(code)||re.unanswered.includes(code)));
+            // Union semantics for the unanswered list too
+            // (Nov 11, 2026, v128): a name is asked about iff
+            // EITHER reading left it unresolved and NEITHER
+            // resolved it. The old recompute iterated only the
+            // caller's code list, so a name the facility's own
+            // universe contributed — or a name neither reading
+            // could attach to a known code at all (the
+            // unknown-subject net) — was filtered out of the
+            // question and dropped silently by the merge.
+            parsed.unanswered=[...new Set([...localUnanswered,...re.unanswered])].filter(code=>!(code in unionDefs));
             parsed.question=parsed.unanswered.length?('One thing I couldn\'t tell from that: what '+(parsed.unanswered.length===1?'is':'are')+' '+parsed.unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(parsed.unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
           }
           if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=describeFollowUpQuestion(parsed.question,data.rule.clarifying_question);
@@ -7633,10 +7874,10 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)\s*(?:\/\s*hr|per hour|an hour|\/hour|hourly)/i)))rates.hourly=Number(m[1].replace(/,/g,''));
  const flat=(label,rx)=>{const hit=textNoWeekend.match(rx);if(hit)rates[label]=Number(hit[1].replace(/,/g,''))};
  const flatWeekend=(label,rx)=>{const hit=text.match(rx);if(hit)rates[label]=Number(hit[1].replace(/,/g,''))};
- flat('rate24',/\$([\d,]+(?:\.\d{2})?)(?:(?!hourly)[^$\n]){0,60}?(?:24\s*-?\s*hour|24h|1st call|first call)/i);
- flat('rate24',/(?:24\s*-?\s*hour|24h|1st call|first call)(?:(?!hourly)[^$\n]){0,60}?\$([\d,]+(?:\.\d{2})?)/i);
- flat('rateSecond',/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,60}?(?:(?:2nd|21d|20d) call|second call)/i);
- flat('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$\n]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
+ flat('rate24',/\$([\d,]+(?:\.\d{2})?)(?:(?!hourly)[^$\n.;]){0,60}?(?:24\s*-?\s*hour|24h|1st call|first call)/i);
+ flat('rate24',/(?:24\s*-?\s*hour|24h|1st call|first call)(?:(?!hourly)[^$\n.;]){0,60}?\$([\d,]+(?:\.\d{2})?)/i);
+ flat('rateSecond',/\$([\d,]+(?:\.\d{2})?)[^$\n.;]{0,60}?(?:(?:2nd|21d|20d) call|second call)/i);
+ flat('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$\n.;]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  // A flat DAY rate must be stated per day: the amount's own clause
  // has to say "per day / a day / daily / per shift / flat". Without
  // that, "$250/hr" standing near an "8-hour" mention would invent
@@ -7647,8 +7888,14 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
  flatDay('rate8','8\\s*-?\\s*hour|8h\\b');
  flatDay('rate10','10\\s*-?\\s*hour|10h\\b');
  flatDay('rate12','12\\s*-?\\s*hour|12h\\b');
- flatWeekend('weekendRate24',/(?:weekend|saturday|sunday)[^$\n]{0,80}?(?:24\s*-?\s*hour|1st call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
- flatWeekend('weekendRateSecond',/(?:weekend|saturday|sunday)[^$\n]{0,80}?(?:(?:2nd|21d|20d) call|second call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
+ // The weekend spans are clause-bounded too (Nov 11, 2026,
+ // v128): "…$4,200 on weekends. Second call pays $3,000…"
+ // used to file Call 2's WEEKDAY $3,000 as its weekend rate,
+ // because the span walked across the sentence boundary to
+ // the next dollar. A missing value surfaces; a wrong one
+ // would have been silent.
+ flatWeekend('weekendRate24',/(?:weekend|saturday|sunday)[^$\n.;]{0,80}?(?:24\s*-?\s*hour|1st call)[^$\n.;]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
+ flatWeekend('weekendRateSecond',/(?:weekend|saturday|sunday)[^$\n.;]{0,80}?(?:(?:2nd|21d|20d) call|second call)[^$\n.;]{0,40}?\$([\d,]+(?:\.\d{2})?)/i);
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)[^$\n]{0,50}?(?:call bonus|overnight call bonus)/i))||(m=text.match(/(?:call bonus|overnight[^$\n]{0,30}bonus|bonus[^$\n]{0,30}call)[^$\n]{0,40}?\$([\d,]+(?:\.\d{2})?)/i)))rates.callBonus=Number(m[1].replace(/,/g,''));
  if((m=text.match(/paid\s+for\s+(\d+(?:\.\d+)?)\s*hours/i)))rates.paidHours8=Number(m[1]);
  if((m=text.match(/(\d+(?:\.\d+)?)\s*paid\s+hours/i)))rates.paidHours8=Number(m[1]);
@@ -7688,8 +7935,8 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
  fill('hourly',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:premium hourly rate|hourly rate)/i);
  if(rates.hourly==null){const h=flatText.match(/([\d,]+(?:\.\d{2})?)\s*(?:per hour|\/\s*hr|an hour)/i);if(h)rates.hourly=Number(h[1].replace(/,/g,''))}
  fill('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$]{0,40}?weeknight[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
- fill('weekendRateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$]{0,40}?weekend[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
- fill('weekendRateSecond',/(?:weekend|saturday|sunday)[^$]{0,220}?(?:(?:2nd|21d|20d) call|second call)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fill('weekendRateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$.]{0,40}?weekend[^$.]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
+ fill('weekendRateSecond',/(?:weekend|saturday|sunday)[^$.]{0,220}?(?:(?:2nd|21d|20d) call|second call)[^$.]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('callBonus',/(?:call stipend|stipend)[^$]{0,220}?\$\s*([\d,]+(?:\.\d{2})?)/i);
  fill('callBonus',/\$\s*([\d,]+(?:\.\d{2})?)[^$]{0,220}?(?:call stipend|stipend)/i);
  fillNum('paidHours8',/(\d+(?:\.\d+)?)\s*hours?\s+paid/i);

@@ -25,6 +25,10 @@ Deno.test("normalizeAiSchedule: keeps dated rows for the named person, drops the
     code: "",
     name: "C. Martin",
     pay: "",
+    // Grid-reliability fields (Nov 6, 2026): a list row has no
+    // grid column and its date was not re-derived from one.
+    column: null,
+    anchored: false,
   });
   assertEquals(out[1].date, "2026-11-12");
   assertEquals(out[1].name, "Martin, Caleb");
