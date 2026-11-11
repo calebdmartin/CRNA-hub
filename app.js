@@ -3129,7 +3129,17 @@ function describeCodeBlocks(text,codes){
   // $4,800 weekend $4,200") sweeps into the NEXT named code's
   // chunk and donates its amounts to it.
   const t=String(text||'').replace(/(\d)\.(\d)/g,'$1\u0001$2');
-  const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  // Asterisks are part of a code's name, not punctuation (Nov
+  // 10, 2026, v113): real grids carry codes like "5*" and "5**"
+  // side by side, and tokenizing on [^a-z0-9]+ collapsed BOTH
+  // to ["5"] — one shared name form, so every mention was
+  // attributed to whichever code came first, the other code
+  // never got a block, and the "5**" match ended after the "5",
+  // leaving the definition label "** = 10 hour shift". Tokens
+  // keep their asterisks (a bare "*" carries no identity and is
+  // dropped), and the match boundaries treat "*" as a name
+  // character, so "5*" never matches inside "5**" or vice versa.
+  const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9*]+/).filter(tk=>/[a-z0-9]/.test(tk));
   const escRx=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const forms=[];
   for(const c of (codes||[])){
@@ -3143,7 +3153,7 @@ function describeCodeBlocks(text,codes){
       // would match everywhere. Distinctive single tokens
       // ("PCDO", "NOC") and any multi-token form are fine.
       if(tk.length===1&&/^(call|day|shift|first|second)$/.test(tk[0]))continue;
-      forms.push({code,rx:new RegExp('(?<![a-z0-9])'+tk.map(escRx).join('[^a-z0-9]+')+'(?![a-z0-9])','gi')});
+      forms.push({code,rx:new RegExp('(?<![a-z0-9*])'+tk.map(escRx).join('[^a-z0-9*]+')+'(?![a-z0-9*])','gi')});
     }
   }
   const scopeRx=/\b(weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i;
@@ -3174,6 +3184,8 @@ function describeCodeBlocks(text,codes){
     return acc;
   };
   let current=null,lead='';
+  const mentionOrder=[];
+  const pendingRefs={};
   for(const rawSeg of t.split(/[.;\n;]+|\s+\/\s+/)){
     if(!rawSeg.trim())continue;
     // A clause naming no code carries FORWARD to the most
@@ -3196,6 +3208,35 @@ function describeCodeBlocks(text,codes){
       const from=i===0?0:mn.start,to=i+1<acc.length?acc[i+1].start:seg.length;
       addChunk(mn.code,seg.slice(from,to),seg.slice(mn.end,to));
       current=mn.code;
+      if(!mentionOrder.includes(mn.code))mentionOrder.push(mn.code);
+    }
+    // Reference recording (Nov 10, 2026, v113): the slicing
+    // above cuts the referenced code's NAME out of the subject's
+    // chunks, so a "same as" reference has to be recorded here,
+    // at statement level, where both names are still present —
+    // a reference relation between two codes named in one
+    // statement points the first at the second, and the
+    // inheritance pass at the end resolves it.
+    for(let i=0;i+1<acc.length;i++){
+      const rel=seg.slice(acc[i].end,acc[i+1].start);
+      if(/(?:=|\bsame\s+as\b|\bidentical\s+to\b|\bditto\b|\blike\b)/i.test(rel)&&!pendingRefs[acc[i].code])pendingRefs[acc[i].code]=acc[i+1].code;
+    }
+    // Subject binding (Nov 10, 2026, v113): a statement can name
+    // TWO codes — "5* = same as 5**: 10 hour shift, $250/hr" —
+    // where the FIRST code is the subject and the second is only
+    // a reference. The slicing above hands the definition after
+    // the colon to the code it follows (the reference), so the
+    // subject kept nothing but "same as". When the words between
+    // the subject and the referenced code are a reference
+    // relation ("=", "same as", "identical to", "like", "ditto")
+    // and a ":" follows the referenced code, the definition
+    // after that colon ALSO binds to the subject.
+    if(acc.length>=2){
+      const rel=seg.slice(acc[0].end,acc[1].start);
+      if(/(?:=|\bsame\s+as\b|\bidentical\s+to\b|\bditto\b|\blike\b)/i.test(rel)){
+        const colon=seg.indexOf(':',acc[1].end);
+        if(colon>acc[1].end){const defText=seg.slice(colon+1);if(defText.trim())addChunk(acc[0].code,defText,null)}
+      }
     }
   }
   for(const code of Object.keys(out)){
@@ -3233,7 +3274,64 @@ function describeCodeBlocks(text,codes){
     // its own; a code that states none gets none from here.
     const phM=(e.text||'').match(/paid\s+(?:for\s+)?(\d+(?:\.\d+)?)\s*hours?\b/i)||(e.text||'').match(/(\d+(?:\.\d+)?)\s*paid\s*hours?\b/i);
     e.paidHours=phM?Number(phM[1]):null;
+    // Cross-code references (Nov 10, 2026, v113): "5* = same as
+    // 5**" states no definition of its own — it POINTS at
+    // another code's. Record the reference while the block's
+    // text is still at hand: the code a reference word ("same
+    // as", "identical to", "like", "=") directly precedes, or —
+    // for "same as above" / a bare "ditto" — a marker the
+    // inheritance pass below resolves against the order codes
+    // were first named in. Resolution happens after every
+    // block is built, so a reference to a code defined LATER
+    // in the text resolves exactly like one defined earlier.
+    e.sameAs=null;e.sameAsAbove=false;
+    {
+      const raw=String(e.text||'');
+      if(/\b(?:same\s+as|identical\s+to|ditto|same\s+deal|just\s+like|like)\b/i.test(raw)){
+        for(const f of forms){
+          if(f.code===code)continue;
+          f.rx.lastIndex=0;let m,hit=false;
+          while((m=f.rx.exec(raw))!==null){
+            const before=raw.slice(Math.max(0,m.index-28),m.index);
+            if(/(?:same\s+as|identical\s+to|ditto|like|=)\s*$/i.test(before)){e.sameAs=f.code;hit=true;break}
+            if(m.index===f.rx.lastIndex)f.rx.lastIndex++;
+          }
+          if(hit)break;
+        }
+        if(!e.sameAs&&/\b(?:same\s+as\s+(?:the\s+)?above|ditto)\b/i.test(raw))e.sameAsAbove=true;
+      }
+    }
+    // The statement-level record (both names present when it
+    // was taken) outranks the block-text search above.
+    if(pendingRefs[code])e.sameAs=pendingRefs[code];
     delete e.text;
+  }
+  // Reference inheritance (Nov 10, 2026, v113): a block whose
+  // statement only points at another code inherits that code's
+  // read — phrase, split amounts, paid hours, no-pay — once
+  // every statement has been read. Its OWN stated definition
+  // always wins: a block that prices or denies pay itself is
+  // never overwritten. Chains resolve by repetition, and a
+  // reference cycle, or a reference to a code with no read of
+  // its own, leaves the block for the one follow-up question,
+  // exactly as an unstated code was handled before.
+  {
+    const hasOwn=e=>!!(e&&(canonicalTypeOf(e.phrase||'')||e.hasAmounts||e.unpaid||e.conflict));
+    for(let pass=0;pass<=(codes||[]).length;pass++){
+      let changed=false;
+      for(const code of Object.keys(out)){
+        const e=out[code];if(hasOwn(e))continue;
+        let tgt=e.sameAs||null;
+        if(!tgt&&e.sameAsAbove){const i=mentionOrder.indexOf(code);if(i>0)tgt=mentionOrder[i-1]}
+        if(!tgt||tgt===code)continue;
+        const tb=out[tgt];if(!tb||!hasOwn(tb))continue;
+        e.phrase=tb.phrase;e.wd=tb.wd;e.we=tb.we;e.hasAmounts=tb.hasAmounts;
+        e.paidHours=tb.paidHours;e.noPay=tb.noPay;e.dayOff=tb.dayOff;e.unpaid=tb.unpaid;e.conflict=tb.conflict;
+        changed=true;
+      }
+      if(!changed)break;
+    }
+    for(const code of Object.keys(out)){delete out[code].sameAs;delete out[code].sameAsAbove}
   }
   return out;
 }
@@ -3416,6 +3514,25 @@ function describeParseLocal(text,fac,codes){
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
   return {rates,defs,weekendDays,unanswered,question};
 }
+// The follow-up question under a describe read-back (Nov 10,
+// 2026, v113): the LOCAL question names the codes the text did
+// not cover AND states how to answer ("Add a sentence about it
+// and make the rules again, or use these rules as-is"). The AI
+// rule read can add a clarifying question of its own — live, in
+// the CAMC import gate, its "Does this rule apply on
+// weekends?" REPLACED the local question wholesale, leaving a
+// yes/no-shaped question in the yellow box with the answer
+// path deleted (no Yes/No controls exist in this surface by
+// design — answers are sentences in the same box). Compose,
+// never replace: the local question always stands, and the
+// AI's question is appended with the answer cue restored.
+function describeFollowUpQuestion(localQ,aiQ){
+  const lq=String(localQ||'').trim(),aq=String(aiQ||'').trim();
+  if(!aq)return lq;
+  if(!lq)return 'One thing I couldn\'t tell from that: '+aq+' Add a sentence about it in the box above and make the rules again, or use these rules as-is.';
+  if(lq.includes(aq))return lq;
+  return lq+' The rule reader also asked: '+aq+' You can answer that in the box above too.';
+}
 function describeSummaryText(facName,parsed,fac){
   const eff={};for(const k of ['hourlyRate','paidHours8','rate8','rate10','rate12','rate24','weekendRate24','hourlyCall1st','rateSecond','weekendRateSecond','callBonus']){const v=parsed.rates[k]!=null?parsed.rates[k]:(fac?rateOrNull(fac[k]):null);if(v!=null)eff[k]=v}
   const bits=[];
@@ -3576,7 +3693,7 @@ async function submitDescribe(key){
           // shifts at $8.50). The same misread screen the local
           // parse runs therefore runs on the merged rates too.
           describeSanitizeRates(parsed.rates,text,null,ctx.codes||[]);
-          if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=String(data.rule.clarifying_question);
+          if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=describeFollowUpQuestion(parsed.question,data.rule.clarifying_question);
         }
       }catch(aiErr){/* the deterministic parse stands on its own */}
     }
