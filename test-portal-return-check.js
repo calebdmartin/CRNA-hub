@@ -131,7 +131,7 @@ run(`
 `);
 t('check step opens the guided panel for THAT portal directly (step 1 names the page it needs)',
   sandbox.__collectHtml.includes('NBCRNA — step 1 of 2') &&
-  sandbox.__collectHtml.includes('Open your certification record — that’s the page I need.') &&
+  sandbox.__collectHtml.includes('Open your certification record on your timeline — that’s the page I need.') &&
   sandbox.__collectHtml.includes('name="shotFile"') &&
   sandbox.__collectHtml.includes('name="pasted"') &&
   sandbox.__collectHtml.includes('Read it'));
@@ -164,7 +164,7 @@ t('canned portal answer is one short line pointing at the check step',
     cloudSession = { email: 'crna@example.com' };
     aiContractImagesDataURLs = async (files) => files.map(() => 'data:image/png;base64,AAAA');
     liveSyncPost = async (fnName, body) => {
-      if (body && body.mode === 'portal' && body.portalSource === 'nbcrna') return { ok: true, mode: 'portal', portal: { status:'Certified', number:'126402', period_start:'2023-05-01', period_end:'2027-04-30', renewal_deadline:'2027-04-30', class_a:103, class_b:2, mac_ed:60, mac_dev:40, expiration:null, license_type:null, issue_date:null, expiry:null, state:null }, raw_text: 'NBCRNA Certification Record' };
+      if (body && body.mode === 'portal' && body.portalSource === 'nbcrna') return { ok: true, mode: 'portal', portal: { status:'Certified', number:'126402', period_start:'2023-05-01', period_end:'2027-04-30', renewal_deadline:'2027-04-30', class_a:103, class_b:2, mac_ed:60, mac_dev:40, check_status:'Complete', expiration:null, license_type:null, issue_date:null, expiry:null, state:null }, raw_text: 'NBCRNA Certification Record' };
       throw new Error('unexpected fn ' + fnName);
     };
     startPortalCheck('nbcrna');
@@ -263,7 +263,7 @@ t('canned portal answer is one short line pointing at the check step',
 
   // --- 12. Cache bumped for the shell change.
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v118'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v119'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

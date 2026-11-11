@@ -2122,9 +2122,9 @@ const PORTAL_CHECK_SOURCES={
     what:'membership status, membership expiration, and CE transcript totals (Class A / Class B)',
     how:'AANA needs a member sign-in. Open aana.com/login and sign in yourself, then screenshot your membership page or CE transcript — the page that shows your status and totals.',
     limit:'Honest limit: AANA sign-in runs through SSO and that page is bot-gated, so the assistant cannot sign in for you — it reads the member page you show it instead. AANA also shares CE with NBCRNA, so NBCRNA totals may already cover the same credits.'},
-  licenses:{title:'State Licenses',short:'a state license',url:'https://www.nursys.com/',siteLabel:'your state board lookup (via Nursys)',
+  licenses:{title:'State Licenses',short:'a state license',url:'https://www.nursys.com/',siteLabel:'your official state board lookup',
     what:'license status, license type (RN / APRN), license number, issue date, and expiration date',
-    how:'Open your state board\u2019s license lookup (or Nursys), look yourself up, and screenshot the result page that shows your license.',
+    how:'Open the official lookup for the license — WV Board License Lookup for West Virginia (RN and APRN; Nursys does not verify APRN licenses) or Ohio eLicense for Ohio — look yourself up, and screenshot the result page that shows your license.',
     limit:'Honest limit: WV and Ohio board lookups block automation, so the assistant cannot pull them directly — it reads the lookup page you show it instead. Nursys e-Notify can alert you when a license changes.'}
 };
 
@@ -2142,21 +2142,24 @@ const PORTAL_CHECK_SOURCES={
 // every needed page has been shown or skipped. Nothing saves before
 // approval — unchanged.
 const PORTAL_FIELD_LABELS={
-  nbcrna:[['status','Certification status'],['number','License / certification number'],['periodStart','Certification period start'],['periodEnd','Certification period end'],['renewalDeadline','Renewal / recertification deadline'],['classA','Class A credits'],['classB','Class B credits'],['macEd','MAC Ed credits'],['macDev','MAC Dev credits']],
+  nbcrna:[['status','Certification status'],['number','License / certification number'],['periodStart','Certification period start'],['periodEnd','Certification period end'],['renewalDeadline','Renewal / recertification deadline'],['checkStatus','CPC / MAC Check status'],['classA','Class A credits'],['classB','Class B credits'],['macEd','MAC Ed credits'],['macDev','MAC Dev credits']],
   aana:[['status','Membership status'],['number','Membership number'],['expiration','Membership expiration'],['classA','Class A credits'],['classB','Class B credits']],
   licenses:[['status','License status'],['number','License / certification number'],['type','License type'],['issue','Issue date'],['expiry','Expiration date']]
 };
 const PORTAL_NAV_MAPS={
   nbcrna:{required:['status','periodEnd'],pages:[
-    {key:'record',name:'certification record',direction:'Open your certification record — that’s the page I need.',fields:['status','number','periodStart','periodEnd','renewalDeadline']},
-    {key:'progress',name:'CPC progress',direction:'Now open your CPC progress — that’s the page I need.',fields:['classA','classB','macEd','macDev']}]},
+    {key:'record',name:'certification record / timeline',direction:'Open your certification record on your timeline — that’s the page I need.',fields:['status','number','periodStart','periodEnd','renewalDeadline']},
+    {key:'progress',name:'CPC / MAC progress',direction:'Now open your CPC / MAC progress — the page showing MAC Check, MAC Ed and MAC Dev — that’s the page I need.',fields:['checkStatus','classA','classB','macEd','macDev']}]},
   aana:{required:['status','expiration'],pages:[
-    {key:'membership',name:'membership page',direction:'Open your membership page — that’s the page I need.',fields:['status','number','expiration']},
+    {key:'membership',name:'Member Dashboard — My AANA Membership Information',direction:'Open your Member Dashboard, then My AANA Membership Information — that’s the page I need. I read the “Dues paid through” date as your membership expiration.',fields:['status','number','expiration']},
     {key:'transcript',name:'CE transcript',direction:'Now open your CE transcript — that’s the page I need.',fields:['classA','classB']}]},
   licenses:{required:['status','expiry'],pages:[
-    {key:'license',name:'license lookup result',direction:'Open your license lookup result — that’s the page I need.',fields:['status','number','type','issue','expiry']}]}
+    {key:'license',name:'license lookup result',direction:'Open ONE license result — the WV Board License Lookup for a West Virginia license (RN or APRN), or your Ohio eLicense verification details for an Ohio license — that’s the page I need.',fields:['status','number','type','issue','expiry']}]}
 };
 function portalNavMap(source){ return PORTAL_NAV_MAPS[source]||{required:[],pages:[{key:'record',name:'record page',direction:'Open the page that lists your record — that’s the page I need.',fields:[]}]}; }
+const PORTAL_LOOKUP_LINKS={
+  licenses:'<p class="muted">Official lookups: <a href="https://wvrn.boardsofnursing.org/licenselookup" target="_blank" rel="noopener">WV Board License Lookup</a> (West Virginia RN + APRN) · <a href="https://elicense.ohio.gov/oh_verifylicense" target="_blank" rel="noopener">Ohio eLicense</a> (Ohio licenses) · <a href="https://www.nursys.com/" target="_blank" rel="noopener">Nursys</a> (RN licenses in other states only — it does not verify APRN licenses).</p>'
+};
 function portalGuidePage(pc){ const map=portalNavMap(pc.source); return map.pages[Math.min(pc.page||0,map.pages.length-1)]; }
 // After a page is read (or skipped): finish at the preview when the
 // required fields are all in, or when no unshown page can still give
@@ -2265,8 +2268,13 @@ function addDaysStr(iso,n){const d=new Date(iso+'T12:00:00');d.setDate(d.getDate
 function monitorNextDue(mon,todayStr){
   const today=todayStr||localDate(new Date());
   let due;
-  if(!mon.lastChecked)due=today;
-  else due=addDaysStr(String(mon.lastChecked).slice(0,10),monitorCadence(mon));
+  // A failed / blocked attempt retries on the same cadence measured from
+  // the attempt — it stays "not checked", but it is not retried on every
+  // app open either.
+  const failedAttempt=mon.lastAttempt&&(!mon.lastChecked||mon.lastAttempt>mon.lastChecked)&&['blocked','failed','needs_signin'].includes(mon.lastOutcome);
+  const base=failedAttempt?mon.lastAttempt:mon.lastChecked;
+  if(!base)due=today;
+  else due=addDaysStr(String(base).slice(0,10),monitorCadence(mon));
   if(mon.snoozeUntil&&mon.snoozeUntil>due)due=mon.snoozeUntil;
   return due;
 }
@@ -2294,7 +2302,7 @@ function ensurePortalMonitoring(){
   let added=false;
   const ensure=(key,source,state,type)=>{
     if(!db.portalMonitoring.some(m=>m.key===key)){
-      db.portalMonitoring.push({key,source,state:state||'',type:type||'',label:'',enabled:true,cadenceDays:7,lastChecked:'',lastOutcome:'',lastSummary:'',lastMethod:'',changeFlag:false,firstName:'',lastName:''});
+      db.portalMonitoring.push({key,source,state:state||'',type:type||'',label:'',enabled:true,cadenceDays:7,lastChecked:'',lastAttempt:'',lastOutcome:'',lastSummary:'',lastMethod:'',changeFlag:false,firstName:'',lastName:''});
       added=true;
     }
   };
@@ -2307,8 +2315,8 @@ function ensurePortalMonitoring(){
 // Snapshot of the fields a check can change, for change detection: compare
 // before and after a check and flag only a real difference.
 function monitorSnapshot(source,state,type){
-  if(source==='nbcrna'){const n=db.nbcrna||{};return [n.status,n.number,n.periodStart,n.periodEnd,n.renewalDeadline,n.classA,n.classB,n.macEd,n.macDev].map(v=>String(v??'')).join('|')}
-  if(source==='aana'){const a=db.aana||{};return [a.status,a.number,a.expiration].map(v=>String(v??'')).join('|')}
+  if(source==='nbcrna'){const n=db.nbcrna||{};return [n.status,n.number,n.periodStart,n.periodEnd,n.renewalDeadline,n.checkStatus,n.classA,n.classB,n.macEd,n.macDev].map(v=>String(v??'')).join('|')}
+  if(source==='aana'){const a=db.aana||{};return [a.status,a.number,a.expiration,a.classA,a.classB].map(v=>String(v??'')).join('|')}
   const lic=(db.licenses||[]).find(x=>String(x.state||'')===String(state||'')&&String(x.type||'').toUpperCase()===String(type||'APRN').toUpperCase());
   return lic?[lic.status||'',lic.number,lic.issue,lic.expiry].map(v=>String(v??'')).join('|'):'';
 }
@@ -2317,7 +2325,13 @@ function recordMonitorCheck(key,outcome,summary,method){
   const mons=ensurePortalMonitoring();
   const mon=mons.find(m=>m.key===key);if(!mon)return null;
   const when=cloudNow();
-  mon.lastChecked=when;mon.lastOutcome=outcome;mon.lastSummary=summary||'';mon.lastMethod=method||'';
+  // A source counts as CHECKED only when a check returned data: successful
+  // outcomes (changed / no_change) move lastChecked. Blocked, failed and
+  // needs-sign-in attempts are logged as attempts — they never stamp a
+  // check that did not happen.
+  mon.lastAttempt=when;
+  if(outcome==='changed'||outcome==='no_change')mon.lastChecked=when;
+  mon.lastOutcome=outcome;mon.lastSummary=summary||'';mon.lastMethod=method||'';
   mon.snoozeUntil='';mon.promptDismissedCycle='';mon.autoAttemptCycle='';
   if(outcome==='changed')mon.changeFlag=true;
   db.portalChecks=[{source:mon.source,state:mon.state||'',retrievedAt:when,status:outcome,summary:summary||''},...(db.portalChecks||[])].slice(0,20);
@@ -2343,7 +2357,7 @@ function portalMonitoringHTML(){
   const monOpen=!!(mons.some(m=>monitorPromptVisible(m,today))||mons.some(m=>monitorIsDue(m,today))||mons.some(m=>m.changeFlag));
   const monLastChecked=mons.map(m=>m.lastChecked||'').filter(Boolean).sort().pop()||'';
   const monTitle='Portal monitoring'+(monLastChecked?(' · checked '+fmt(String(monLastChecked).slice(0,10))):'');
-  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. If a check needs your sign-in, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue&&monitorMethod(m)!=='public'?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
+  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. If a check needs your sign-in, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'}${m.lastAttempt&&m.lastAttempt!==m.lastChecked?` · Last attempt: ${fmt(String(m.lastAttempt).slice(0,10))}`:''} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue&&monitorMethod(m)!=='public'?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
 }
 // Dashboard portal-monitoring card removed (Nov 6, 2026): monitoring
 // lives on the Credentials tab; the Dashboard no longer repeats it.
@@ -2354,7 +2368,7 @@ function portalMonitoringHTML(){
 // attempted on its own: no prompt, no alert. Names come from the monitor
 // (asked once in the guided flow) or the step-1 profile name. Outcomes —
 // including blocked / failed — are recorded in the monitoring log, and
-// lastChecked only moves when a check actually ran. Nothing is faked.
+// lastChecked only moves when a check returned data. Nothing is faked.
 async function monitorAttemptPublic(mon){
   if(!SUPABASE_CONFIGURED||!cloudSession)return false;
   let first=mon.firstName||'',last=mon.lastName||'';
@@ -2367,6 +2381,7 @@ async function monitorAttemptPublic(mon){
   try{
     const data=await portalCall({action:'verify-nbcrna',firstName:first,lastName:last,certNumber:((db.nbcrna||{}).number||''),state:''});
     const r=data.record||{};
+    if(!r.certification_number&&!r.period_end&&!r.period_start) throw new Error('NBCRNA public verification returned no record data');
     db.nbcrna={...(db.nbcrna||{}),status:r.certification_status||'Certified',number:r.certification_number||(db.nbcrna&&db.nbcrna.number)||'',periodEnd:r.period_end||(db.nbcrna&&db.nbcrna.periodEnd)||'',renewalDeadline:r.renewal_deadline||(db.nbcrna&&db.nbcrna.renewalDeadline)||'',source:'public_verification',reminders:(db.nbcrna&&db.nbcrna.reminders)||'90,60,30,7'};
     cloudSyncTimes.nbcrna=data.retrievedAt||cloudNow();
     delete portalAttemptFailed['nbcrna'];delete portalHealed['nbcrna'];
@@ -2456,9 +2471,15 @@ function portalCheckStatus(t,source){
 function portalCheckNumber(t,source){
   const pats=source==='aana'
     ?[/(?:member(?:ship)?|aana)\s*(?:no\.?|number|#|id)\s*[:#]?\s*(\d{4,})/i]
-    :[/(?:certification|certificate|license|lic\.?)\s*(?:no\.?|number|#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,19})/i,
-      /(?:cert|lic)\s*#\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,19})/i];
-  for(const re of pats){ const m=t.match(re); if(m) return m[1]; }
+    :[/(?:certification|certificate|license|lic\.?)\s*(?:no\.?|number|#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9.-]{3,30})/i,
+      /(?:cert|lic)\s*#\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9.-]{3,30})/i];
+  for(const re of pats){ const m=t.match(re); if(m) return m[1].replace(/\.+$/,''); }
+  return '';
+}
+function portalCheckStatusText(t){
+  const m=t.match(/(?:CPC\s*(?:check[\- ]?in)?|MAC\s*Check)\s*(?:status)?\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9 /-]{1,40})/i);
+  if(m){ const v=m[1].trim().replace(/\s+(?:Class|MAC|Certification|Period)\b.*$/i,'').trim(); if(v) return v; }
+  if(/CPC\s*check[\- ]?in[^.]{0,40}\bcomplete\b/i.test(t)||/\bcheck[\- ]?in complete\b/i.test(t)) return 'Complete';
   return '';
 }
 function portalCheckCredits(t,label){
@@ -2484,15 +2505,17 @@ function parsePortalCheckText(text,source,opts){
     take('renewalDeadline','Renewal / recertification deadline',exp.iso||fields.periodEnd||'');
     take('classA','Class A credits',portalCheckCredits(t,'class\\s*A(?:\\s+credits?)?'));
     take('classB','Class B credits',portalCheckCredits(t,'class\\s*B(?:\\s+credits?)?'));
+    take('checkStatus','CPC / MAC Check status',portalCheckStatusText(t));
     take('macEd','MAC Ed credits',portalCheckCredits(t,'MAC\\s*Ed(?:ucation)?(?:\\s+credits?)?'));
     take('macDev','MAC Dev credits',portalCheckCredits(t,'MAC\\s*Dev(?:elopment)?(?:\\s+credits?)?'));
   } else if(source==='aana'){
+    const dues=portalCheckDateNear(t,'dues\\s+paid\\s+through|paid\\s+through');
     const exp=extractExpiryDateInfo(t,opts);
-    take('expiration','Membership expiration',exp.iso||'');
+    take('expiration','Membership expiration',dues||exp.iso||'');
     take('classA','Class A credits',portalCheckCredits(t,'class\\s*A(?:\\s+credits?)?'));
     take('classB','Class B credits',portalCheckCredits(t,'class\\s*B(?:\\s+credits?)?'));
   } else {
-    take('type','License type',/\bAPRN\b/i.test(t)?'APRN':(/\bRN\b/i.test(t)?'RN':''));
+    take('type','License type',(/\bAPRN\b/i.test(t)||/\bCRNA\b/i.test(t)||/certified registered nurse anesthetist/i.test(t))?'APRN':(/\bRN\b/i.test(t)?'RN':''));
     take('issue','Issue date',portalCheckDateNear(t,'issue(?:d)?(?:\\s+date)?|issued'));
     const exp=extractExpiryDateInfo(t,opts);
     take('expiry','Expiration date',exp.iso||'');
@@ -2512,9 +2535,9 @@ function startPortalCheck(source){
   portalStatePersist(); persist(); assistantSheetOpen=false; tab='Assistant'; render();
 }
 function portalCheckFieldRows(source,f){
-  if(source==='nbcrna') return field('status','Certification status','text',f.status||'')+field('number','Certification number','text',f.number||'')+field('periodStart','Certification period start','date',f.periodStart||'')+field('periodEnd','Certification period end','date',f.periodEnd||'')+field('renewalDeadline','Renewal / recertification deadline','date',f.renewalDeadline||f.periodEnd||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"')+field('macEd','MAC Ed credits','number',f.macEd??'','min="0" step="1"')+field('macDev','MAC Dev credits','number',f.macDev??'','min="0" step="1"');
+  if(source==='nbcrna') return field('status','Certification status','text',f.status||'')+field('number','Certification number','text',f.number||'')+field('periodStart','Certification period start','date',f.periodStart||'')+field('periodEnd','Certification period end','date',f.periodEnd||'')+field('renewalDeadline','Renewal / recertification deadline','date',f.renewalDeadline||f.periodEnd||'')+field('checkStatus','CPC / MAC Check status','text',f.checkStatus||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"')+field('macEd','MAC Ed credits','number',f.macEd??'','min="0" step="1"')+field('macDev','MAC Dev credits','number',f.macDev??'','min="0" step="1"');
   if(source==='aana') return field('status','Membership status','text',f.status||'')+field('number','Membership number','text',f.number||'')+field('expiration','Membership expiration','date',f.expiration||'')+field('classA','Class A credits','number',f.classA??'','min="0" step="0.25"')+field('classB','Class B credits','number',f.classB??'','min="0" step="0.25"');
-  return select('state','State',US_STATES,f.state||(portalCheck&&portalCheck.state)||'West Virginia')+select('type','License type',['RN','APRN'],f.type||'APRN')+field('number','License number','text',f.number||'')+field('issue','Issue date','date',f.issue||'')+field('expiry','Expiration date','date',f.expiry||'','required');
+  return select('state','State',US_STATES,f.state||(portalCheck&&portalCheck.state)||'West Virginia')+select('type','License type',['RN','APRN'],f.type||'APRN')+field('status','License status','text',f.status||'')+field('number','License number','text',f.number||'')+field('issue','Issue date','date',f.issue||'')+field('expiry','Expiration date','date',f.expiry||'','required');
 }
 function portalCheckHTML(){
   const checks=(db.portalChecks||[]);
@@ -2526,7 +2549,7 @@ function portalCheckHTML(){
     const map=portalNavMap(portalCheck.source), page=portalGuidePage(portalCheck);
     const stepNo=(portalCheck.page||0)+1, stepCount=map.pages.length;
     const rows=(PORTAL_FIELD_LABELS[portalCheck.source]||[]).map(([k,l])=>{ const got=portalCheck.fields&&String(portalCheck.fields[k]||'').trim()!==''; return `<div>${got?'✓':'○'} ${escapeHTML(l)}${got?' — got it':''}</div>`; }).join('');
-    inner=`<h3>${m.title} — step ${stepNo} of ${stepCount}</h3><p><strong>${escapeHTML(page.direction)}</strong></p><p class="muted">📸 On your phone: screenshot that page over there, come back to this tab, then upload it below.</p><p class="muted">No screenshot handy? Paste the page's text below instead.</p>${portalCheck.notice?`<p class="hint">${escapeHTML(portalCheck.notice)}</p>`:''}<div class="item"><strong>Your record so far</strong>${rows}</div><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of that page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste that page’s text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it</button>${stepCount>1?`<button type="button" class="secondary" data-action="portal-guide-skip">Skip this page</button>`:''}${(portalCheck.pagesShown||0)>0?`<button type="button" class="secondary" data-action="portal-guide-finish">That’s everything — show my report</button>`:''}<button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
+    inner=`<h3>${m.title} — step ${stepNo} of ${stepCount}</h3><p><strong>${escapeHTML(page.direction)}</strong></p>${PORTAL_LOOKUP_LINKS[portalCheck.source]||''}<p class="muted">📸 On your phone: screenshot that page over there, come back to this tab, then upload it below.</p><p class="muted">No screenshot handy? Paste the page's text below instead.</p>${portalCheck.notice?`<p class="hint">${escapeHTML(portalCheck.notice)}</p>`:''}<div class="item"><strong>Your record so far</strong>${rows}</div><form data-kind="portal-check"><div class="form-grid">${portalCheck.source==='licenses'?select('state','State',US_STATES,portalCheck.state||'West Virginia'):''}${field('shotFile','Screenshot of that page (PNG/JPG)','file','','accept=".png,.jpg,.jpeg,.webp,.heic,image/*"')}${area('pasted','Or paste that page’s text','','Status: Certified\nCertification expires: June 30, 2028')}</div><div class="form-actions"><button type="submit">Read it</button>${stepCount>1?`<button type="button" class="secondary" data-action="portal-guide-skip">Skip this page</button>`:''}${(portalCheck.pagesShown||0)>0?`<button type="button" class="secondary" data-action="portal-guide-finish">That’s everything — show my report</button>`:''}<button type="button" class="secondary" data-action="portal-check-cancel">Cancel</button></div></form>${portalCheckOcrStatus?`<p class="hint" id="portalCheckOcrStatus">${escapeHTML(portalCheckOcrStatus)}</p>`:''}${portalCheckError?`<p class="hint">${escapeHTML(portalCheckError)}</p>`:''}`;
   } else {
     const m=PORTAL_CHECK_SOURCES[portalCheck.source], f=portalCheck.fields||{};
     inner=`<h3>Preview — ${m.title} portal check</h3><p class="muted">Read from the portal page you showed the assistant on ${portalCheck.retrievedAt?String(portalCheck.retrievedAt).slice(0,10):'today'} (${portalCheck.via==='ai'?'read with AI from your screenshot':portalCheck.via==='ocr'?'on-device OCR':portalCheck.via==='pdf'?'PDF text':portalCheck.via==='file'?'uploaded file':'pasted text'} · ${(portalCheck.pagesShown||0)} page${(portalCheck.pagesShown||0)===1?'':'s'} shown). <strong>Check every field — correct anything wrong.</strong> Nothing is saved until you approve below.</p><p class="muted">Found: ${(portalCheck.found||[]).join(', ')||'nothing recognised'}.${(portalCheck.missing||[]).length?(' Not found on the page — fill in by hand if you know it: '+(portalCheck.missing||[]).join(', ')+'.'):''}</p><form data-kind="portal-check-approve"><input type="hidden" name="source" value="${portalCheck.source}"><div class="form-grid">${portalCheckFieldRows(portalCheck.source,f)}</div><div class="form-actions"><button type="submit">Save — I checked this</button><button type="button" class="secondary" data-action="portal-check-cancel">Discard — save nothing</button></div></form>`;
@@ -2566,13 +2589,18 @@ function portalCheckFoundMissing(source, fields){
 function portalCheckFieldsFromAi(portal, rawText, source){
   const fromText=rawText?parsePortalCheckText(rawText,source,{}):{fields:{}};
   const fields={...fromText.fields};
-  const map={status:'status',number:'number',periodStart:'period_start',periodEnd:'period_end',renewalDeadline:'renewal_deadline',classA:'class_a',classB:'class_b',macEd:'mac_ed',macDev:'mac_dev',expiration:'expiration',type:'license_type',issue:'issue_date',expiry:'expiry',state:'state'};
+  const map={status:'status',number:'number',periodStart:'period_start',periodEnd:'period_end',renewalDeadline:'renewal_deadline',checkStatus:'check_status',classA:'class_a',classB:'class_b',macEd:'mac_ed',macDev:'mac_dev',expiration:'expiration',type:'license_type',issue:'issue_date',expiry:'expiry',state:'state'};
   for(const k of Object.keys(map)){
     const v=portal?portal[map[k]]:null;
     if(v!==null&&v!==undefined&&String(v).trim()!=='') fields[k]=String(v);
   }
   const fm=portalCheckFoundMissing(source,fields);
   return {fields,found:fm.found,missing:fm.missing};
+}
+function portalAiHasContent(portal,rawText){
+  if(String(rawText||'').trim()) return true;
+  if(!portal||typeof portal!=='object') return false;
+  return ['status','number','period_start','period_end','renewal_deadline','check_status','class_a','class_b','mac_ed','mac_dev','expiration','license_type','issue_date','expiry','state'].some(k=>portal[k]!==null&&portal[k]!==undefined&&String(portal[k]).trim()!=='');
 }
 async function submitPortalCheck(e){
   if(!portalCheck) return;
@@ -2591,14 +2619,20 @@ async function submitPortalCheck(e){
         // is the automatic fallback when the AI read is unavailable
         // (signed out, key missing, network) — with an honest status
         // line saying so, never a silent downgrade.
-        let aiParsed=null, aiFailed=false;
+        let aiParsed=null, aiFailed=false, aiBlank=false;
         try{
           const data=await callExtractPortalCheck([file],portalCheck.source);
-          aiParsed=portalCheckFieldsFromAi(data.portal||{},data.raw_text||'',portalCheck.source);
+          if(portalAiHasContent(data.portal||{},data.raw_text||'')) aiParsed=portalCheckFieldsFromAi(data.portal||{},data.raw_text||'',portalCheck.source);
+          else aiBlank=true;
         }catch(aiErr){ aiFailed=true; }
         if(aiParsed){
           portalCheckOcrStatus='';
           portalGuideIngest(aiParsed,'ai',state);
+          render(); return;
+        }
+        if(aiBlank){
+          portalCheckOcrStatus='';
+          portalCheckError='The AI reader came back blank from that page — nothing was read, and nothing was saved. Try showing the page again, or paste its text below instead.';
           render(); return;
         }
         if(aiFailed) portalCheckOcrStatus='AI reading isn’t available right now — reading on this device instead…';
@@ -2623,10 +2657,14 @@ async function submitPortalCheck(e){
 // blank fields never clear an existing value, and a record a server portal
 // pull already verified is NEVER downgraded to the assistant source.
 function applyPortalCheckRecord(source,f,when){
-  const keep=(cur)=>PORTAL_VERIFIED_SOURCES.includes(cur&&cur.source)?cur.source:'assistant_portal_check';
+  // Provenance follows what actually happened: a page was shown and read
+  // -> assistant check; every page skipped and values typed by hand ->
+  // the user's own entry. A server-verified record is never downgraded.
+  const prov=(portalCheck&&(portalCheck.pagesShown||0)>0)?'assistant_portal_check':'user_entered';
+  const keep=(cur)=>PORTAL_VERIFIED_SOURCES.includes(cur&&cur.source)?cur.source:prov;
   if(source==='nbcrna'){
     const cur=db.nbcrna||{};
-    db.nbcrna={...cur,status:f.status||cur.status||'',number:f.number||cur.number||'',periodStart:f.periodStart||cur.periodStart||'',periodEnd:f.periodEnd||cur.periodEnd||'',renewalDeadline:f.renewalDeadline||f.periodEnd||cur.renewalDeadline||'',classA:f.classA!==undefined?f.classA:(cur.classA??''),classB:f.classB!==undefined?f.classB:(cur.classB??''),macEd:f.macEd!==undefined?f.macEd:(cur.macEd??''),macDev:f.macDev!==undefined?f.macDev:(cur.macDev??''),macEdRequired:cur.macEdRequired||60,macDevRequired:cur.macDevRequired||40,docNote:cur.docNote||'',ceNote:cur.ceNote||'',reminders:cur.reminders||'90,60,30,7',source:keep(cur),updatedAt:new Date().toISOString()};
+    db.nbcrna={...cur,status:f.status||cur.status||'',number:f.number||cur.number||'',periodStart:f.periodStart||cur.periodStart||'',periodEnd:f.periodEnd||cur.periodEnd||'',renewalDeadline:f.renewalDeadline||f.periodEnd||cur.renewalDeadline||'',checkStatus:f.checkStatus||cur.checkStatus||'',classA:f.classA!==undefined?f.classA:(cur.classA??''),classB:f.classB!==undefined?f.classB:(cur.classB??''),macEd:f.macEd!==undefined?f.macEd:(cur.macEd??''),macDev:f.macDev!==undefined?f.macDev:(cur.macDev??''),macEdRequired:cur.macEdRequired||60,macDevRequired:cur.macDevRequired||40,docNote:cur.docNote||'',ceNote:cur.ceNote||'',reminders:cur.reminders||'90,60,30,7',source:keep(cur),updatedAt:new Date().toISOString()};
     cloudSyncTimes.nbcrna=when; cloudSaveKind('nbcrna');
     return 'NBCRNA '+(f.status||db.nbcrna.status||'')+' · expires '+(db.nbcrna.renewalDeadline||db.nbcrna.periodEnd||'unknown');
   }
@@ -2641,10 +2679,10 @@ function applyPortalCheckRecord(source,f,when){
   let recId;
   if(existing){
     recId=existing.id;
-    Object.assign(existing,{number:f.number||existing.number||'',issue:f.issue||existing.issue||'',expiry:f.expiry||existing.expiry||'',source:keep(existing),reminders:existing.reminders||'90,60,30,7'});
+    Object.assign(existing,{status:f.status||existing.status||'',number:f.number||existing.number||'',issue:f.issue||existing.issue||'',expiry:f.expiry||existing.expiry||'',source:keep(existing),reminders:existing.reminders||'90,60,30,7'});
   } else {
     recId=id();
-    (db.licenses=db.licenses||[]).push({id:recId,state,type,number:f.number||'',issue:f.issue||'',expiry:f.expiry||'',portal:'',note:'',source:'assistant_portal_check',reminders:'90,60,30,7'});
+    (db.licenses=db.licenses||[]).push({id:recId,state,type,status:f.status||'',number:f.number||'',issue:f.issue||'',expiry:f.expiry||'',portal:'',note:'',source:prov,reminders:'90,60,30,7'});
   }
   cloudSaveKind('licenses',recId);
   return state+' '+type+' '+(f.number||'')+' · expires '+(f.expiry||'unknown');
@@ -2654,7 +2692,7 @@ function approvePortalCheck(e){
   const source=f.source||(portalCheck&&portalCheck.source);
   if(!source) return;
   const fields={};
-  for(const k of ['status','number','periodStart','periodEnd','renewalDeadline','classA','classB','macEd','macDev','expiration','state','type','issue','expiry'])
+  for(const k of ['status','number','periodStart','periodEnd','renewalDeadline','checkStatus','classA','classB','macEd','macDev','expiration','state','type','issue','expiry'])
     if(String(f[k]||'').trim()) fields[k]=String(f[k]).trim();
   if(!Object.keys(fields).length){ alert('Nothing to save — every field is blank. Fill in at least one detail, or discard this check.'); return; }
   const when=(portalCheck&&portalCheck.retrievedAt)||cloudNow();
@@ -2662,9 +2700,14 @@ function approvePortalCheck(e){
   const beforeSnap=monitorSnapshot(source,fields.state||(portalCheck&&portalCheck.state)||'',fields.type||'APRN');
   const summary=applyPortalCheckRecord(source,fields,when);
   const changed=monitorSnapshotChanged(beforeSnap,monitorSnapshot(source,fields.state||(portalCheck&&portalCheck.state)||'',fields.type||'APRN'));
-  recordMonitorCheck(monKey,changed?'changed':'no_change',(changed?'Changed on assistant check — ':'Checked, no change — ')+summary,'signed_in');
+  // A check counts as checked only when a portal page was actually shown
+  // and read. A preview reached by skipping every page and typing values
+  // in by hand still saves the record — as a manual save — but it does
+  // not stamp the monitor as checked.
+  const pagesShown=portalCheck?(portalCheck.pagesShown||0):0;
+  if(pagesShown>0) recordMonitorCheck(monKey,changed?'changed':'no_change',(changed?'Changed on assistant check — ':'Checked, no change — ')+summary,'signed_in');
   portalCheck=null; portalCheckError=''; portalCheckOcrStatus=''; portalStatePersist(); persist(); render();
-  alert('Saved from the assistant portal check ('+String(when).slice(0,10)+'): '+summary+'\n\nSource: assistant portal check — read from the portal page you showed the assistant. It is not a server portal pull, and nothing was stored from your sign-in.');
+  alert(pagesShown>0?('Saved from the assistant portal check ('+String(when).slice(0,10)+'): '+summary+'\n\nSource: assistant portal check — read from the portal page you showed the assistant. It is not a server portal pull, and nothing was stored from your sign-in.'):('Saved what you typed in: '+summary+'\n\nNo portal page was shown for this check, so it is saved as your own entry — not counted as a portal check.'));
 }
 
 function assistantChatInner(){
@@ -5036,14 +5079,14 @@ function credentialsPage(){
   const manualKind = (manualType==='NBCRNA CE')?'nbcrnaCE':(manualType==='AANA CE')?'aanaCE':(manualType==='State license')?'licenses':(manualType==='Other credential')?'credentials':(manualType==='AANA')?'aana':'nbcrna';
   let manualForm='', manualList='';
   if(manualType==='NBCRNA'){
-    manualForm=`<form data-kind="nbcrna"><div class="form-grid">${select('status','Certification status',['','Certified','Pending','Expired','Not certified'],n.status||'')}${field('number','Certification number (optional)','text',n.number||'')}${field('periodStart','Certification period start','date',n.periodStart||'')}${field('periodEnd','Certification period end','date',n.periodEnd||'')}${field('renewalDeadline','Renewal / recertification deadline','date',n.renewalDeadline||'')}${field('classA','Class A credits earned','number',n.classA??'','min="0" step="0.25"')}${field('classB','Class B credits earned','number',n.classB??'','min="0" step="0.25"')}${field('macEd','MAC Ed credits earned','number',n.macEd??'','min="0" step="0.25"')}${field('macDev','MAC Dev credits earned','number',n.macDev??'','min="0" step="0.25"')}${field('macEdRequired','MAC Ed credits required','number',n.macEdRequired??60,'min="0" step="1"')}${field('macDevRequired','MAC Dev credits required','number',n.macDevRequired??40,'min="0" step="1"')}${field('reminders','Reminder windows (days, comma-separated)','text',n.reminders||'90,60,30,7')}${field('docNote','Supporting document note (filename only)','text',n.docNote||'')}${area('ceNote','CE notes',n.ceNote||'')}</div>${formEnd('Save NBCRNA record')}</form>`;
+    manualForm=`<form data-kind="nbcrna"><div class="form-grid">${select('status','Certification status',['','Certified','Pending','Expired','Not certified'],n.status||'')}${field('number','Certification number (optional)','text',n.number||'')}${field('periodStart','Certification period start','date',n.periodStart||'')}${field('periodEnd','Certification period end','date',n.periodEnd||'')}${field('renewalDeadline','Renewal / recertification deadline','date',n.renewalDeadline||'')}${field('checkStatus','CPC / MAC Check status','text',n.checkStatus||'')}${field('classA','Class A credits earned','number',n.classA??'','min="0" step="0.25"')}${field('classB','Class B credits earned','number',n.classB??'','min="0" step="0.25"')}${field('macEd','MAC Ed credits earned','number',n.macEd??'','min="0" step="0.25"')}${field('macDev','MAC Dev credits earned','number',n.macDev??'','min="0" step="0.25"')}${field('macEdRequired','MAC Ed credits required','number',n.macEdRequired??60,'min="0" step="1"')}${field('macDevRequired','MAC Dev credits required','number',n.macDevRequired??40,'min="0" step="1"')}${field('reminders','Reminder windows (days, comma-separated)','text',n.reminders||'90,60,30,7')}${field('docNote','Supporting document note (filename only)','text',n.docNote||'')}${area('ceNote','CE notes',n.ceNote||'')}</div>${formEnd('Save NBCRNA record')}</form>`;
     manualList=`<p class="muted">Official site: <a href="https://www.nbcrna.com/" target="_blank" rel="noopener">nbcrna.com</a> · ${portalSourceLabel(n.source||'user_entered', cloudSyncTimes.nbcrna)} · Status shown: ${escapeHTML(n.status||'Not entered')}${nbcrnaDays!==null?` · Renewal in ${nbcrnaDays<0?Math.abs(nbcrnaDays)+' days overdue':nbcrnaDays+' days'}`:''}</p>`;
   } else if(manualType==='AANA'){
     manualForm=`<form data-kind="aana"><div class="form-grid">${select('status','Membership status',['','Active','Lapsed','Pending','Not a member'],a.status||'')}${field('number','Membership number (optional)','text',a.number||'')}${field('expiration','Membership expiration','date',a.expiration||'')}${field('reminders','Reminder windows (days, comma-separated)','text',a.reminders||'90,60,30,7')}${field('docNote','Supporting document note (filename only)','text',a.docNote||'')}${area('ceNote','CE documentation notes',a.ceNote||'')}</div>${formEnd('Save AANA record')}</form>`;
     manualList=`<p class="muted">Kept separate from NBCRNA certification. Official site: <a href="https://www.aana.com/" target="_blank" rel="noopener">aana.com</a> · ${portalSourceLabel(a.source||'user_entered', cloudSyncTimes.aana)} · Status shown: ${escapeHTML(a.status||'Not entered')}${aanaDays!==null?` · Expires in ${aanaDays<0?Math.abs(aanaDays)+' days overdue':aanaDays+' days'}`:''}</p>`;
   } else if(manualType==='State license'){
-    manualForm=`<form data-kind="licenses"><div class="form-grid">${select('state','State',US_STATES,lic.state||'West Virginia')}${select('type','License type',['RN','APRN'],lic.type||'RN')}${field('number','License number','text',lic.number||'')}${field('issue','Issue date','date',lic.issue||'')}${field('expiry','Expiration date','date',lic.expiry||'','required')}${field('portal','Official board portal (URL or name)','text',lic.portal||'')}${field('reminders','Reminder windows (days, comma-separated)','text',lic.reminders||'90,60,30,7')}${area('note','Notes',lic.note||'')}</div>${formEnd(editId&&db.licenses.some(x=>x.id===editId)?'Save license':'Add license')}</form>`;
-    manualList=list('licenses',db.licenses.slice().sort((a,b)=>a.expiry.localeCompare(b.expiry)),x=>{const d=daysUntil(x.expiry);return `<strong>${escapeHTML(x.state||'')} ${escapeHTML(x.type||'')}</strong> · ${x.number?escapeHTML(x.number)+' · ':''}${fmt(x.expiry)} · ${portalSourceLabel(x.source||'user_entered', '')} <span class="${d!==null&&d<0?'expired':d!==null&&d<=7?'expired':d!==null&&d<=30?'warning':'success'}">${d===null?'':d<0?('Expired '+Math.abs(d)+' days ago'):d===0?'Due today':('Due in '+d+' days')}</span><div class="muted">${portalLink(x.portal)} ${escapeHTML(x.note||'')}</div>`});
+    manualForm=`<form data-kind="licenses"><div class="form-grid">${select('state','State',US_STATES,lic.state||'West Virginia')}${select('type','License type',['RN','APRN'],lic.type||'RN')}${select('status','License status',['','Active','Expired','Lapsed','Pending'],lic.status||'')}${field('number','License number','text',lic.number||'')}${field('issue','Issue date','date',lic.issue||'')}${field('expiry','Expiration date','date',lic.expiry||'','required')}${field('portal','Official board portal (URL or name)','text',lic.portal||'')}${field('reminders','Reminder windows (days, comma-separated)','text',lic.reminders||'90,60,30,7')}${area('note','Notes',lic.note||'')}</div>${formEnd(editId&&db.licenses.some(x=>x.id===editId)?'Save license':'Add license')}</form>`;
+    manualList=list('licenses',db.licenses.slice().sort((a,b)=>a.expiry.localeCompare(b.expiry)),x=>{const d=daysUntil(x.expiry);return `<strong>${escapeHTML(x.state||'')} ${escapeHTML(x.type||'')}</strong>${x.status?' · '+escapeHTML(x.status):''} · ${x.number?escapeHTML(x.number)+' · ':''}${fmt(x.expiry)} · ${portalSourceLabel(x.source||'user_entered', '')} <span class="${d!==null&&d<0?'expired':d!==null&&d<=7?'expired':d!==null&&d<=30?'warning':'success'}">${d===null?'':d<0?('Expired '+Math.abs(d)+' days ago'):d===0?'Due today':('Due in '+d+' days')}</span><div class="muted">${portalLink(x.portal)} ${escapeHTML(x.note||'')}</div>`});
   } else if(manualType==='NBCRNA CE'){
     manualForm=ceForm('nbcrnaCE','NBCRNA CE',nce);
     manualList=`<p class="muted">Recorded totals — Class A: ${ceTotal(db.nbcrnaCE,'Class A')} · Class B: ${ceTotal(db.nbcrnaCE,'Class B')} · All: ${ceTotal(db.nbcrnaCE)}</p>`+list('nbcrnaCE',db.nbcrnaCE.slice().sort((a,b)=>b.date.localeCompare(a.date)),x=>`<strong>${escapeHTML(x.title)}</strong> · ${fmt(x.date)} · ${escapeHTML(x.credits||'—')} credits · ${escapeHTML(x.class||'')}`);
@@ -8479,9 +8522,9 @@ function cloudLocalHasAana() { const a = db.aana || {}; return !!(a.status || a.
 function cloudLocalHasRecords() { return cloudLocalHasNbcrna() || cloudLocalHasAana() || (db.licenses || []).length > 0 || (db.nbcrnaCE || []).length > 0 || (db.aanaCE || []).length > 0; }
 function cloudNumOrNull(v) { if (v === '' || v === null || v === undefined) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
 function cloudNow() { return new Date().toISOString(); }
-function cloudNbcrnaRow() { const n = db.nbcrna || {}; return { user_id: cloudUid(), certification_status: n.status || null, certification_number: n.number || null, period_start: n.periodStart || null, period_end: n.periodEnd || null, renewal_deadline: n.renewalDeadline || null, class_a_credits: cloudNumOrNull(n.classA), class_b_credits: cloudNumOrNull(n.classB), mac_ed_credits: cloudNumOrNull(n.macEd), mac_dev_credits: cloudNumOrNull(n.macDev), mac_ed_required: cloudNumOrNull(n.macEdRequired) || 60, mac_dev_required: cloudNumOrNull(n.macDevRequired) || 40, cpc_check_in_status: null, source: n.source || 'user_entered', last_synced_at: cloudNow() }; }
+function cloudNbcrnaRow() { const n = db.nbcrna || {}; return { user_id: cloudUid(), certification_status: n.status || null, certification_number: n.number || null, period_start: n.periodStart || null, period_end: n.periodEnd || null, renewal_deadline: n.renewalDeadline || null, class_a_credits: cloudNumOrNull(n.classA), class_b_credits: cloudNumOrNull(n.classB), mac_ed_credits: cloudNumOrNull(n.macEd), mac_dev_credits: cloudNumOrNull(n.macDev), mac_ed_required: cloudNumOrNull(n.macEdRequired) || 60, mac_dev_required: cloudNumOrNull(n.macDevRequired) || 40, cpc_check_in_status: n.checkStatus || null, source: n.source || 'user_entered', last_synced_at: cloudNow() }; }
 function cloudAanaRow() { const a = db.aana || {}; return { user_id: cloudUid(), membership_status: a.status || null, membership_number: a.number || null, expiration: a.expiration || null, source: a.source || 'user_entered', last_synced_at: cloudNow() }; }
-function cloudLicenseRow(x) { return { id: x.id, user_id: cloudUid(), state: x.state, license_type: x.type, license_number: x.number || null, issue_date: x.issue || null, expiration_date: x.expiry || null, status: null, board_portal_url: x.portal || null, notes: x.note || null, source: x.source || 'user_entered', last_synced_at: cloudNow() }; }
+function cloudLicenseRow(x) { return { id: x.id, user_id: cloudUid(), state: x.state, license_type: x.type, license_number: x.number || null, issue_date: x.issue || null, expiration_date: x.expiry || null, status: x.status || null, board_portal_url: x.portal || null, notes: x.note || null, source: x.source || 'user_entered', last_synced_at: cloudNow() }; }
 function cloudCeRow(x, source) { return { id: x.id, user_id: cloudUid(), source: source, title: x.title || null, credits: cloudNumOrNull(x.credits) || 0, credit_class: source === 'nbcrna' ? (x.class || null) : null, completed_date: x.date || null }; }
 async function cloudUpsertPortals() { const states = []; (db.licenses || []).forEach(x => { if (x.state && states.indexOf(x.state) === -1) states.push(x.state); }); const desired = [{ portal: 'nbcrna', state: null }, { portal: 'aana', state: null }].concat(states.map(st => ({ portal: 'state_board', state: st }))); let existing = []; try { existing = await sbReq('/rest/v1/portal_connections?select=*&user_id=eq.' + encodeURIComponent(cloudUid()), 'GET'); } catch (e) { existing = []; } // Only create rows that do not exist yet, as 'not_connected' —
 // NEVER overwrite an existing row's status: a portal that a live pull
@@ -8557,7 +8600,7 @@ function cloudMergeList(localArr, cloudArr) { const out = (Array.isArray(localAr
 // conflict resolves by the same newest-edit rule, and an exact tie
 // keeps the local value — it is the copy in hand, pushed back up next.
 function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasCloud) return localObj; if (!hasLocal) return cloudObj; const lt = cloudRecTs(localObj), ct = cloudRecTs(cloudObj); const cloudNewer = (!!lt && !!ct && ct > lt) || (!lt && !!ct); const merged = Object.assign({}, localObj); for (const k of Object.keys(cloudObj)) { if (k === 'updatedAt' || k === 'docNote' || k === 'ceNote' || k === 'reminders') continue; const lv = localObj[k], cv = cloudObj[k]; const lEmpty = lv === '' || lv === null || lv === undefined, cEmpty = cv === '' || cv === null || cv === undefined; if (cEmpty) continue; if (lEmpty || (cloudNewer && String(lv) !== String(cv))) merged[k] = cv; } merged.docNote = localObj.docNote || cloudObj.docNote || ''; merged.ceNote = localObj.ceNote || cloudObj.ceNote || ''; merged.reminders = localObj.reminders || cloudObj.reminders || '90,60,30,7'; merged.updatedAt = cloudNewer ? ct : (lt || ct || ''); return merged; }
-function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
+function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }, (shellId, twin) => { cloudRecordTombstone('facilities', shellId); if (twin && twin.id) { try { cloudSaveKind('facilities', twin.id); } catch (e) {} } }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }

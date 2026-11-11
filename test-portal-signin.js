@@ -138,7 +138,7 @@ t('Connect AANA opens the real AANA login URL in a new tab',
 t('"I signed in — check it" opens the check step directly (collect step, NBCRNA) — Nov 6 flow fix',
   sandbox.__checkStep === 'collect' && sandbox.__checkSource === 'nbcrna');
 t('collect step is the guided panel for that portal (names the page it needs), not an instruction restart',
-  sandbox.__assistantHtml.includes('Open your certification record — that’s the page I need.') &&
+  sandbox.__assistantHtml.includes('Open your certification record on your timeline — that’s the page I need.') &&
   sandbox.__assistantHtml.includes('name="shotFile"') &&
   sandbox.__assistantHtml.includes('name="pasted"') &&
   sandbox.__assistantHtml.includes('Read it') &&
@@ -172,7 +172,7 @@ t('Credentials page (step 4 destination) carries no scaffolding at all',
 
 // --- 6. Deterministic portal-page parsing: reads what is there, invents nothing.
 run(`
-  globalThis.__nb = parsePortalCheckText('NBCRNA Certification Record Certification status: Certified Certification number: 126402 Certification Period: May 1, 2023 - April 30, 2027 Class A credits: 103 Class B credits: 2 MAC Ed credits: 60 MAC Dev credits: 40', 'nbcrna');
+  globalThis.__nb = parsePortalCheckText('NBCRNA Certification Record Certification status: Certified Certification number: 126402 Certification Period: May 1, 2023 - April 30, 2027 Class A credits: 103 Class B credits: 2 MAC Ed credits: 60 MAC Dev credits: 40 CPC Check-In: Complete', 'nbcrna');
   globalThis.__aa = parsePortalCheckText('AANA Membership Membership status: Active Membership number: 126402 Membership expiration: June 30, 2027', 'aana');
   globalThis.__lic = parsePortalCheckText('West Virginia Board of Nursing License Verification License status: Active APRN License number: RN86131 Issue date: July 2, 2013 Expiration date: June 30, 2028', 'licenses');
   globalThis.__thin = parsePortalCheckText('Certification status: Certified', 'nbcrna');
@@ -211,7 +211,7 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     startPortalCheck('nbcrna');
     globalThis.__beforeSubmit = { status: db.nbcrna.status, source: db.nbcrna.source };
   `);
-  const pasted = 'NBCRNA Certification Record Certification status: Certified Certification number: 126402 Certification Period: May 1, 2023 - April 30, 2027 Class A credits: 103 Class B credits: 2 MAC Ed credits: 60 MAC Dev credits: 40';
+  const pasted = 'NBCRNA Certification Record Certification status: Certified Certification number: 126402 Certification Period: May 1, 2023 - April 30, 2027 Class A credits: 103 Class B credits: 2 MAC Ed credits: 60 MAC Dev credits: 40 CPC Check-In: Complete';
   run(`globalThis.__fakeForm = { _entries: [['pasted', ${JSON.stringify(pasted)}]], querySelector: () => null };`);
   await run(`submitPortalCheck({currentTarget: globalThis.__fakeForm})`);
   t('starting a check saves nothing', sandbox.__beforeSubmit.status === '' && sandbox.__beforeSubmit.source === 'user_entered');

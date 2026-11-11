@@ -99,7 +99,7 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   await run(`monitorBackgroundSweep()`);
   run(`globalThis.__nb2 = db.portalMonitoring.find(x => x.key === 'nbcrna');`);
   t('failed public attempt records blocked (never a fake success)',
-    sandbox.__nb2.lastOutcome === 'blocked' && !!sandbox.__nb2.lastChecked);
+    sandbox.__nb2.lastOutcome === 'blocked' && !!sandbox.__nb2.lastAttempt && !sandbox.__nb2.lastChecked);
 
   // --- 4. Due signed-in source: sweep does NOT check it; exactly one prompt.
   run(`

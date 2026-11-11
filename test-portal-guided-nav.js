@@ -79,11 +79,12 @@ t('NBCRNA map: record page then CPC progress page, status + period end required'
   sandbox.__maps.nbcrna.required.includes('periodEnd'));
 t('AANA map: membership page then CE transcript, status + expiration required',
   sandbox.__maps.aana.pages === 2 &&
-  sandbox.__maps.aana.first.includes('membership page') &&
+  sandbox.__maps.aana.first.includes('My AANA Membership Information') &&
   sandbox.__maps.aana.required.includes('expiration'));
 t('State licenses map: one lookup-result page, status + expiry required',
   sandbox.__maps.licenses.pages === 1 &&
-  sandbox.__maps.licenses.first.includes('license lookup result') &&
+  sandbox.__maps.licenses.first.includes('WV Board License Lookup') &&
+  sandbox.__maps.licenses.first.includes('Ohio eLicense') &&
   sandbox.__maps.licenses.required.includes('expiry'));
 
 (async () => {
@@ -97,7 +98,7 @@ t('State licenses map: one lookup-result page, status + expiry required',
   `);
   t('step 1 names the exact page needed, in one line',
     sandbox.__step1.includes('NBCRNA — step 1 of 2') &&
-    sandbox.__step1.includes('Open your certification record — that’s the page I need.') &&
+    sandbox.__step1.includes('Open your certification record on your timeline — that’s the page I need.') &&
     sandbox.__step1.includes('Your record so far') &&
     sandbox.__step1.includes('○ Certification status'));
 
@@ -112,7 +113,7 @@ t('State licenses map: one lookup-result page, status + expiry required',
     sandbox.__afterPage1.status === 'Certified' &&
     sandbox.__afterPage1.periodEnd === '2027-04-30');
   t('step 2 asks for the next page by name and shows what is already found',
-    sandbox.__step2.includes('Now open your CPC progress — that’s the page I need.') &&
+    sandbox.__step2.includes('Now open your CPC / MAC progress — the page showing MAC Check, MAC Ed and MAC Dev — that’s the page I need.') &&
     sandbox.__step2.includes('✓ Certification status — got it') &&
     sandbox.__step2.includes('○ MAC Ed credits'));
   t('nothing saved mid-walk', sandbox.__afterPage1.saved === '');
@@ -125,8 +126,8 @@ t('State licenses map: one lookup-result page, status + expiry required',
   t('wrong page re-asks for the right page by name, in one line, and does not advance',
     sandbox.__wrong.step === 'collect' &&
     sandbox.__wrong.page === 1 &&
-    sandbox.__wrong.err.includes('doesn’t show your CPC progress') &&
-    sandbox.__wrong.err.includes('open your CPC progress') &&
+    sandbox.__wrong.err.includes('doesn’t show your CPC / MAC progress') &&
+    sandbox.__wrong.err.includes('open your CPC / MAC progress') &&
     sandbox.__wrong.err.length < 160 &&
     !sandbox.__wrong.html.includes('Nothing was saved'));
 
@@ -152,7 +153,7 @@ t('State licenses map: one lookup-result page, status + expiry required',
   run(`startPortalCheck('aana'); globalThis.__aanaStep = portalCheckHTML();`);
   t('AANA flow starts at the membership page',
     sandbox.__aanaStep.includes('AANA — step 1 of 2') &&
-    sandbox.__aanaStep.includes('Open your membership page — that’s the page I need.'));
+    sandbox.__aanaStep.includes('Open your Member Dashboard, then My AANA Membership Information — that’s the page I need.'));
   await submit('AANA Membership. Membership status: Active. Membership number: 126402. Membership expiration: June 30, 2027.');
   run(`actions('portal-guide-skip'); globalThis.__aanaDone = { step: portalCheck.step, status: portalCheck.fields.status };`);
   t('skipping the transcript page finishes at the preview with what was found',
@@ -173,7 +174,7 @@ t('State licenses map: one lookup-result page, status + expiry required',
   run(`
     db.nbcrna.status = '';
     liveSyncPost = async () => { throw new Error('offline'); };
-    ocrImageFile = async () => 'NBCRNA Certification Record. Certification status: Certified. Certification number: 126402. Certification Period: May 1, 2023 - April 30, 2027. Class A credits: 103. Class B credits: 2. MAC Ed credits: 60. MAC Dev credits: 40.';
+    ocrImageFile = async () => 'NBCRNA Certification Record. Certification status: Certified. Certification number: 126402. Certification Period: May 1, 2023 - April 30, 2027. Class A credits: 103. Class B credits: 2. MAC Ed credits: 60. MAC Dev credits: 40. CPC Check-In: Complete.';
     startPortalCheck('nbcrna');
     globalThis.__shotInput = { files: [{ type: 'image/png', name: 'all-in-one.png' }] };
     globalThis.__shotForm = { _entries: [['pasted','']], querySelector: (sel) => sel.includes('file') ? globalThis.__shotInput : null };
@@ -182,7 +183,8 @@ t('State licenses map: one lookup-result page, status + expiry required',
   t('one page with everything completes the walk in a single showing',
     run(`portalCheck && portalCheck.step`) === 'preview' &&
     run(`portalCheck && portalCheck.pagesShown`) === 1 &&
-    run(`portalCheck && portalCheck.fields.macDev`) === '40');
+    run(`portalCheck && portalCheck.fields.macDev`) === '40' &&
+    run(`portalCheck && portalCheck.fields.checkStatus`) === 'Complete');
 
   // --- 8. The return path from c28931c6 is untouched.
   t('return path still wired (portal-return action + connect flow)',

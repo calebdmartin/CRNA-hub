@@ -271,6 +271,7 @@ export interface AiPortalCheck {
   class_b: number | null;
   mac_ed: number | null;
   mac_dev: number | null;
+  check_status: string | null;
   expiration: string | null;
   license_type: "APRN" | "RN" | null;
   issue_date: string | null;
@@ -290,6 +291,7 @@ export function normalizeAiPortalCheck(raw: unknown): AiPortalCheck {
     class_b: null,
     mac_ed: null,
     mac_dev: null,
+    check_status: null,
     expiration: null,
     license_type: null,
     issue_date: null,
@@ -308,6 +310,7 @@ export function normalizeAiPortalCheck(raw: unknown): AiPortalCheck {
   out.class_b = coerceAiNumber(obj["class_b"]);
   out.mac_ed = coerceAiNumber(obj["mac_ed"]);
   out.mac_dev = coerceAiNumber(obj["mac_dev"]);
+  out.check_status = coerceAiText(obj["check_status"] ?? obj["cpc_check_in_status"] ?? obj["mac_check"]);
   out.expiration = coercePaystubDate(obj["expiration"] ?? obj["membership_expiration"]);
   const lt = coerceAiText(obj["license_type"]);
   out.license_type = lt && /aprn/i.test(lt) ? "APRN" : lt && /\brn\b/i.test(lt) ? "RN" : null;

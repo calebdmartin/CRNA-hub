@@ -255,11 +255,11 @@ function portalPrompt(source: string): string {
   return (
     "Read these photos of " + which + ". The user signed in themselves and photographed the page that lists their record. " +
     "Return ONLY a JSON object with these keys, using null where the page does not state a value: " +
-    "status, number, period_start, period_end, renewal_deadline, class_a, class_b, mac_ed, mac_dev, expiration, license_type, issue_date, expiry, state, raw_text. " +
+    "status, number, period_start, period_end, renewal_deadline, class_a, class_b, mac_ed, mac_dev, check_status, expiration, license_type, issue_date, expiry, state, raw_text. " +
     "status is the certification / membership / license status exactly as printed (e.g. Certified, Active). " +
     "number is the certification / membership / license number. " +
     "period_start and period_end are the certification period dates (YYYY-MM-DD); renewal_deadline is the renewal / recertification deadline when the page states one. " +
-    "class_a and class_b are CE credit totals; mac_ed and mac_dev are the MAC Ed / MAC Dev credit totals — numbers without commas. " +
+    "class_a and class_b are CE credit totals; mac_ed and mac_dev are the MAC Ed / MAC Dev credit totals — numbers without commas. check_status is the CPC check-in / MAC Check status exactly as printed (e.g. Complete), or null when the page does not state one. " +
     "expiration is a membership expiration date; license_type is APRN or RN; issue_date and expiry are the license issue and expiration dates; state is the licensing state when printed. " +
     "raw_text is the full text visible on the page. Do not invent any value."
   );

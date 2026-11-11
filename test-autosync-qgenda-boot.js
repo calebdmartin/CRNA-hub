@@ -304,7 +304,7 @@ const SCHED_PREVIEW = `schedulePreview = { fileName: 'sched.csv', source: 'sched
   t('pin: panel copy states the auto-check-on-open behaviour',
     appSrc.includes('We check your feed each time you open the app'));
   t('pin: service worker cache bumped to v85',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v118'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v119'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -150,7 +150,7 @@ runA(`
 t('current step carries the phone guidance in the step (screenshot, come back, upload; paste alternative)',
   A.__collectHtml.includes('screenshot that page over there, come back to this tab, then upload it below') &&
   A.__collectHtml.includes("Paste the page's text below instead") &&
-  A.__collectHtml.includes('Open your certification record — that’s the page I need.'));
+  A.__collectHtml.includes('Open your certification record on your timeline — that’s the page I need.'));
 
 (async () => {
   // --- 6. Guided state survives a full reload and resumes mid-check ---
@@ -172,7 +172,7 @@ t('current step carries the phone guidance in the step (screenshot, come back, u
     B.__restored.page === 1 && B.__restored.pagesShown === 1 &&
     B.__restored.status === 'Certified' && B.__restored.periodEnd === '2027-04-30');
   t('resumed check shows step 2 asking for the CPC progress page',
-    B.__restoredHtml.includes('NBCRNA — step 2 of 2') && B.__restoredHtml.includes('CPC progress'));
+    B.__restoredHtml.includes('NBCRNA — step 2 of 2') && B.__restoredHtml.includes('CPC / MAC progress'));
   t('opened-portal state also survives the reload (return prompt still waiting)',
     B.__restoredCred.includes('data-action="portal-return" data-id="aana"'));
   runB(`actions('portal-check-cancel'); globalThis.__cleared = !portalCheck && JSON.parse(localStorage.getItem('crna-hub-portal-check') || '{}').check === null;`);
