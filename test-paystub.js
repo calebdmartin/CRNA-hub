@@ -470,7 +470,10 @@ run(`
 `);
 t('a huge stub amount leaks nowhere: only its own check is the actual; later periods stay shift-calculated (none recorded -> no amount)',
   sandbox.__hugeOcc.find((x) => x.date === '2026-11-10').actual === 99999 &&
-  sandbox.__hugeOcc.find((x) => x.date === '2026-11-24').shiftCount === 0 &&
+  // v124 (Nov 11, 2026, disclosed): with no shifts recorded, the
+  // Nov 24 period produces NO occurrence at all now — the check
+  // is absent, which is stronger than the old shiftCount-0 read.
+  !sandbox.__hugeOcc.some((x) => x.date === '2026-11-24') &&
   run(`paystubOccurrenceAmount(globalThis.__hugeOcc.find((x) => x.date === '2026-11-24'))`) === null);
 t('paystubStubActual: gross wins; net is only the fallback; blank stub has no actual',
   run(`paystubStubActual({gross:'100', net:'80'}).amount`) === 100 &&
@@ -492,7 +495,16 @@ t('manual entry with agency + frequency + pay date saves',
   sandbox.__manualSaved === true);
 
 // ---------- Assistant + onboarding + persistence ----------
-run(`globalThis.__ans = answerQuestion('When is my next paycheck?');`);
+// v124 note (Nov 11, 2026, disclosed): the sections above leave a
+// Premier schedule whose periods hold no shifts, so under the
+// shift-derived rule the assistant honestly has no upcoming
+// paycheck to report until a shift exists in a coming period —
+// seed one (Nov 18, inside the Nov 16-29 period) and the answer
+// names the agency with its estimate again.
+run(`
+  db.shifts.push({id:'as1', date:'2026-11-18', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'});
+  globalThis.__ans = answerQuestion('When is my next paycheck?');
+`);
 t('assistant answers next-paycheck questions per agency, labelled, with amounts from shifts or the stub actual',
   sandbox.__ans.includes('Premier Anesthesia Group, PC') &&
   sandbox.__ans.includes('double-check') &&
