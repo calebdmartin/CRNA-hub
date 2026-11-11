@@ -338,6 +338,7 @@ function liveSyncApplyChanges(provider, data) {
   const changes = data.providerChanges || [];
   let created = 0, updated = 0, deleted = 0;
   const suggestions = [];
+  const conflictsHeld = [];
   // Sourced-status rule (Nov 6, 2026 status model): a shift arriving
   // from a calendar sync is on a real schedule, so it arrives
   // confirmed whatever its date — liveSyncImportStatusForDate (above),
@@ -358,6 +359,16 @@ function liveSyncApplyChanges(provider, data) {
       if (byIdIn || twinIn) {
         if (typeof mergeShiftInto === 'function') mergeShiftInto(byIdIn || twinIn, recIn);
         updated++;
+        return;
+      }
+      // Double-booking guard (v115): a synced event landing on a
+      // day that already holds a DIFFERENT shift is held out and
+      // reported in the sync result — never silently stacked onto
+      // the day. It stays on the source calendar; the user can add
+      // it by hand (with the same warning and override) if real.
+      const ccIn = typeof shiftConflictCandidate === 'function' ? shiftConflictCandidate(recIn, db.shifts) : null;
+      if (ccIn) {
+        conflictsHeld.push({ date: recIn.date, text: typeof conflictTextFor === 'function' ? conflictTextFor(recIn, ccIn) : recIn.date });
         return;
       }
       // Imported shifts arrive with source 'apple-import' (and a note
@@ -483,7 +494,7 @@ function liveSyncApplyChanges(provider, data) {
   liveSyncState.tombstones = liveSyncState.tombstones.filter((t) => t.provider !== provider);
   liveSyncStateSave();
   persist();
-  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities: suggestions, suggestions };
+  return { created, updated, deleted, flagged: (data.pendingDeletions || []).length, newFacilities: suggestions, suggestions, conflicts: conflictsHeld };
 }
 
 async function liveSyncNow(provider, silent) {
@@ -513,6 +524,7 @@ async function liveSyncNow(provider, silent) {
     render();
     if (!silent) {
       let msg = 'Synced ' + liveSyncLabel(provider) + ': ' + applied.created + ' created, ' + applied.updated + ' updated, ' + applied.deleted + ' deleted, ' + applied.flagged + ' flagged for your confirmation (see Pending deletions below).';
+      if (applied.conflicts && applied.conflicts.length) msg += ' Looks like you\u2019re double-booking yourself: ' + applied.conflicts.length + ' synced shift(s) were NOT added because those days already have a shift (' + applied.conflicts.map((c) => c.text).join('; ') + '). Add one by hand from the calendar if you really have both.';
       if (data.imported && typeof data.imported === 'object') {
         if (data.imported.error) {
           msg += ' Import from “' + data.imported.sourceCalendarName + '” failed (' + data.imported.error + ') — the app-calendar sync above still ran; try Sync now again.';

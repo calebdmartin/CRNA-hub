@@ -158,6 +158,16 @@ run(`
   schedulePreview.facilityAll = 'CAMC';
   approveScheduleImport();
 `);
+// v115 double-booking guard: Dec 7 already holds the Holzer day
+// shift, so the CAMC upload STOPS at the warning first — the user
+// confirms "Add it anyway" for that date, then approves again.
+t('v115: the CAMC upload stops at the double-booking warning for Dec 7',
+  run(`(schedulePreview.pendingConflicts || []).length`) === 1 && run(`!db.shifts.some(x=>x.facility==='CAMC')`));
+run(`
+  schedulePreview.conflictOverrides = {};
+  schedulePreview.pendingConflicts.forEach(c => { schedulePreview.conflictOverrides[c.key] = true; });
+  approveScheduleImport();
+`);
 t('schedule-level facility filled the grid rows', run(`db.shifts.filter(x=>x.source==='schedule-import-ai').every(x=>x.facility==='CAMC')`));
 run(`month = new Date(2026, 11, 1); selectDay('2026-12-07'); render();`);
 sheet = daySheet();
@@ -174,6 +184,15 @@ run(`
     {date:'2026-12-10', facility:'CAMC', type:'12-hour shift', pay:'', include:true, match:'matched', source:'schedule-import'}
   ]};
   approveScheduleImport();
+`);
+// v115: the Dec 7 CAMC row clashes with the booked Holzer day —
+// stopped by default; the user adds it anyway, Dec 10 is clean.
+run(`
+  if (schedulePreview) {
+    schedulePreview.conflictOverrides = {};
+    (schedulePreview.pendingConflicts || []).forEach(c => { schedulePreview.conflictOverrides[c.key] = true; });
+    approveScheduleImport();
+  }
 `);
 const camcId = run(`db.shifts.find(x=>x.facility==='CAMC' && x.type==='8-hour day' && x.date==='2026-12-07').id`);
 t('named CAMC upload priced from the CAMC rule ($2,000)', run(`db.shifts.find(x=>x.id===${JSON.stringify(camcId)}).pay`) === '2000');

@@ -71,14 +71,14 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
 t('wiring: calendar sync create merges by identity (no exact-string skip)',
   liveSrc.includes('findSameShift(recIn, db.shifts)') && liveSrc.includes('mergeShiftInto(byIdIn || twinIn, recIn)'));
 t('wiring: QGenda + schedule + .ics previews flag duplicates by identity',
-  (appSrc.match(/shiftsSameShift\(x,\{date,facility,type\}\)/g) || []).length >= 2 &&
-  appSrc.includes('shiftsSameShift(x,r)') && appSrc.includes('shiftsSameShift(x,{date,facility,type})'));
+  appSrc.includes('shiftsSameShift(x,r)') && appSrc.includes('shiftsSameShift(x,{date,facility,type,code})') &&
+  appSrc.includes("shiftsSameShift(x,{date,facility,type,code:String(sh.code||'').trim()})"));
 t('wiring: approvals + CSV + contract + manual add enter via addShiftDeduped',
-  (appSrc.match(/addShiftDeduped\(\{/g) || []).length >= 4 && appSrc.includes('addShiftDeduped(rec).shift.id'));
+  (appSrc.match(/addShiftDeduped\(/g) || []).length >= 5 && appSrc.includes('addShiftDeduped(rec).shift.id') && appSrc.includes('addShiftDeduped(b.rec)'));
 t('wiring: cloud merge collapses + tombstones absorbed ids; boot runs the pass',
   appSrc.includes("dedupeShiftsInPlace((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); })") &&
   appSrc.includes('const bootDedupe=dedupeShiftsInPlace()'));
-t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v114'));
+t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v115'));
 
 // ---------- Setup: Holzer saved as a facility ----------
 run(`
