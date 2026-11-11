@@ -27,7 +27,7 @@
 //  6 post-erase landing: the wipe's reset block resets the auth form
 //     (source pin), and with the banner status set the signed-out
 //     Account shows the banner above the SIGN-IN form.
-//  7 SW cache is v126.
+//  7 SW cache is v127.
 // Run: node test-v126-auth-form-split.js
 const fs = require('fs');
 const path = require('path');
@@ -195,7 +195,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     afterWipe.indexOf('Start over (testing) is done') < afterWipe.indexOf('id="cloudAuthForm"'));
 
   // ---------- 7. SW ----------
-  t('7 sw cache bumped to v126', swSrc.includes('crna-hub-shell-v126'));
+  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v127'));
 
   console.log(`\nv126 auth-form split: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;
