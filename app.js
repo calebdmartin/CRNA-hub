@@ -3268,6 +3268,40 @@ const WEEKDAY_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function facilityWeekendDays(f){const raw=f&&Array.isArray(f.weekendDays)?f.weekendDays:[];const days=[...new Set(raw.map(n=>Number(n)).filter(n=>Number.isInteger(n)&&n>=0&&n<=6))].sort((a,b)=>a-b);return days.length?days:[0,6]}
 function isFacilityWeekend(f,date){if(!f||!psValidISO(date))return false;return facilityWeekendDays(f).includes(new Date(date+'T12:00:00').getDay())}
 function weekendDaysText(f){return facilityWeekendDays(f).slice().sort((a,b)=>((a+6)%7)-((b+6)%7)).map(d=>WEEKDAY_NAMES[d]).join(' and ')}
+function weekendDayListLabel(days){return (days||[]).slice().sort((a,b)=>((a+6)%7)-((b+6)%7)).map(d=>WEEKDAY_NAMES[d]).join(' and ')}
+// Weekend provenance (Nov 11, 2026, v122): a facility's weekend
+// definition is either STATED (the user wrote it in their words,
+// or saved it before provenance existed — a saved weekendDays
+// array with no source marker is the user's captured rule) or
+// DEFAULTED (the Sat/Sun working default the pricer falls back
+// to when weekend pricing exists but no definition was ever
+// stated — recorded as weekendDaysSource:'default' at save, so
+// no read-back or prefill ever presents it as the user's own
+// words). Absent both, there is no provenance to claim.
+function facilityWeekendStated(f){if(!f)return false;if(f.weekendDaysSource)return f.weekendDaysSource==='stated';return Array.isArray(f.weekendDays)&&f.weekendDays.length>0}
+// Does anything in these rules price weekends DIFFERENTLY? Only
+// then can a weekend definition move money: a weekend-specific
+// call flat, a per-code weekend amount, or a 1st call priced
+// from the hourly split (firstCallPay computes the weekend day
+// from the call rate, so its price turns on which days count).
+function facilityWeekendMatters(f){
+  if(!f)return false;
+  if(rateOrNull(f.weekendRate24)!=null||rateOrNull(f.weekendRateSecond)!=null)return true;
+  const defs=facilityCodeDefs(f);let has24=false;
+  for(const d of Object.values(defs)){if(!d)continue;if(d.weekendPay!=null)return true;if(d.canonicalType==='24-hour call')has24=true}
+  if(has24&&rateOrNull(f.hourlyCall1st)!=null)return true;
+  return false;
+}
+function describeWeekendMatters(parsed,fac){
+  const merged={};
+  if(fac)for(const k of RATE_FIELDS)merged[k]=fac[k];
+  if(parsed&&parsed.rates)for(const k of Object.keys(parsed.rates))if(parsed.rates[k]!=null)merged[k]=parsed.rates[k];
+  if(rateOrNull(merged.weekendRate24)!=null||rateOrNull(merged.weekendRateSecond)!=null)return true;
+  const defs=(parsed&&parsed.defs)||{};let has24=false;
+  for(const d of Object.values(defs)){if(!d)continue;if(d.weekendPay!=null)return true;if(d.canonicalType==='24-hour call')has24=true}
+  if(has24&&rateOrNull(merged.hourlyCall1st)!=null)return true;
+  return false;
+}
 function facilityPayFor(f,type,date){if(!f)return 0;const hourly=rateOrNull(f.hourlyRate),hours8=rateOrNull(f.paidHours8)||8;if(/24-hour/i.test(type)){const weekend=date?isFacilityWeekend(f,date):false;if(weekend){const wknd24=rateOrNull(f.weekendRate24);if(wknd24!=null)return wknd24}const flat=rateOrNull(f.rate24);if(flat!=null)return flat;const h=rateOrNull(f.hourlyCall1st);if(h==null)return 0;const fc=firstCallPay(h,hourly,weekend);return fc?fc.pay:0;}if(/second/i.test(type)){const weekend=date?isFacilityWeekend(f,date):false;if(weekend){const wknd=rateOrNull(f.weekendRateSecond);if(wknd!=null)return wknd}const flat=rateOrNull(f.rateSecond);if(flat!=null)return flat;const base=rateOrNull(f.rate8)!=null?rateOrNull(f.rate8):(hourly!=null?hourly*hours8:null);const bonus=rateOrNull(f.callBonus);return (base!=null&&bonus!=null)?base+bonus:0}if(/10-hour/i.test(type)){const flat=rateOrNull(f.rate10);return flat!=null?flat:(hourly!=null?hourly*10:0)}if(/12-hour/i.test(type)){const flat=rateOrNull(f.rate12);return flat!=null?flat:(hourly!=null?hourly*12:0)}if(/8-hour/i.test(type)){const flat=rateOrNull(f.rate8);return flat!=null?flat:(hourly!=null?hourly*hours8:0)}return 0}
 // Price every still-unpriced shift for this facility from its (new or
 // edited) pay rule. Returns how many were priced. Called when a
@@ -3724,6 +3758,25 @@ function describeCodeBlocks(text,codes){
     let seg=rawSeg,acc=segCodes(seg);
     if(!acc.length&&current==null&&/\$/.test(rawSeg)){lead+=rawSeg+' ';continue}
     if(lead){seg=lead+rawSeg;acc=segCodes(seg);lead=''}
+    // A code restated as the first words of its own definition
+    // is not a second subject (Nov 11, 2026, v122): "12=12 hr
+    // shifts" matched the code TWICE — the space in "12 hr"
+    // let the restatement stand as its own mention, the chunk
+    // split there, and the phrase came out as "hr shifts",
+    // which reads as nothing. ("8=8hr" survived only because
+    // "8hr" cannot re-match.) When the gap between two mentions
+    // of the SAME code is nothing but separators, the second
+    // mention is the definition restating the code — collapse
+    // it so the phrase survives whole.
+    if(acc.length>1){
+      const kept=[acc[0]];
+      for(let i=1;i<acc.length;i++){
+        const prev=kept[kept.length-1];
+        if(acc[i].code===prev.code&&/^[\s=:\-–—.]*$/.test(seg.slice(prev.end,acc[i].start)))continue;
+        kept.push(acc[i]);
+      }
+      acc=kept;
+    }
     if(!acc.length){if(current)addChunk(current,seg,null);continue}
     for(let i=0;i<acc.length;i++){
       const mn=acc[i];
@@ -3742,6 +3795,21 @@ function describeCodeBlocks(text,codes){
     for(let i=0;i+1<acc.length;i++){
       const rel=seg.slice(acc[i].end,acc[i+1].start);
       if(/(?:=|\bsame\s+as\b|\bidentical\s+to\b|\bditto\b|\blike\b)/i.test(rel)&&!pendingRefs[acc[i].code])pendingRefs[acc[i].code]=acc[i+1].code;
+      // A subject LIST shares one definition (Nov 11, 2026,
+      // v122): "5* and 5**=10hr shifts" names two codes joined
+      // by a bare conjunction, with the assignment after the
+      // second — the first code is a subject of the same
+      // statement, not a bystander. The slicing hands the
+      // definition to the code it follows, so record the first
+      // code as pointing at the second and let the inheritance
+      // pass below share the read — the same machinery "same
+      // as" uses. Scoped to a bare conjunction followed by an
+      // assignment, so an incidental "and" between unrelated
+      // statements binds nothing.
+      if(!pendingRefs[acc[i].code]&&/^\s*(?:and|&|,)\s*$/i.test(rel)){
+        const afterNext=seg.slice(acc[i+1].end,i+2<acc.length?acc[i+2].start:seg.length);
+        if(/^\s*[=:]/.test(afterNext))pendingRefs[acc[i].code]=acc[i+1].code;
+      }
     }
     // Subject binding (Nov 10, 2026, v113): a statement can name
     // TWO codes — "5* = same as 5**: 10 hour shift, $250/hr" —
@@ -4057,7 +4125,11 @@ function describeParseLocal(text,fac,codes){
     }else if(!c.shiftOnly||blk||codeHit||stmtLabel)unanswered.push(c.code);
   }
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
-  return {rates,defs,weekendDays,unanswered,question};
+  // weekendStated (Nov 11, 2026, v122): whether the TEXT ITSELF
+  // stated a weekend definition. weekendDays is null when it did
+  // not — the read-back and the save provenance key on this, so
+  // an unstated weekend is never dressed up as the user's rule.
+  return {rates,defs,weekendDays,weekendStated:!!(weekendDays&&weekendDays.length),unanswered,question};
 }
 // The follow-up question under a describe read-back (Nov 10,
 // 2026, v113): the LOCAL question names the codes the text did
@@ -4107,8 +4179,19 @@ function describeSummaryText(facName,parsed,fac){
   if(!hasDefCt('Second call')&&(parsed.rates.rateSecond!=null||parsed.rates.weekendRateSecond!=null||parsed.rates.callBonus!=null)){const parts=[];if(eff.rateSecond!=null)parts.push(moneyShort(eff.rateSecond)+' on weekdays');if(eff.weekendRateSecond!=null)parts.push(moneyShort(eff.weekendRateSecond)+' on weekends');if(!parts.length&&eff.callBonus!=null)parts.push('the day rate plus a '+moneyShort(eff.callBonus)+' overnight bonus');if(parts.length)bits.push('2nd call: '+parts.join(', ')+'.')}
   if(!hasDefCt('24-hour call')&&(parsed.rates.rate24!=null||parsed.rates.weekendRate24!=null)){const parts=[];if(eff.rate24!=null)parts.push(moneyShort(eff.rate24)+' on weekdays');if(eff.weekendRate24!=null)parts.push(moneyShort(eff.weekendRate24)+' on weekends');if(parts.length)bits.push('1st call: '+parts.join(', ')+'.')}
   if(!Object.keys(parsed.defs||{}).length&&eff.hourlyRate!=null)bits.push('Day shifts pay '+moneyShort(eff.hourlyRate)+'/hr'+(eff.paidHours8!=null?' and are paid for '+eff.paidHours8+' hours':'')+'.');
-  const wd=parsed.weekendDays&&parsed.weekendDays.length?parsed.weekendDays:facilityWeekendDays(fac||{weekendDays:null});
-  bits.push('Weekend means '+wd.slice().sort((a,b)=>((a+6)%7)-((b+6)%7)).map(d=>WEEKDAY_NAMES[d]).join(' and ')+'.');
+  // The weekend line obeys the same rule as every other line
+  // (Nov 11, 2026, v122): stated = fact; unstated-but-material
+  // = a labeled default the user can override with a sentence;
+  // unstated-and-immaterial = silence. The old code appended
+  // "Weekend means Saturday and Sunday." unconditionally, from
+  // the pricer's built-in default — asserting, as the user's
+  // own rule, a definition a CAMC user never wrote (his words:
+  // "I didn't include weekend includes Saturday and Sunday for
+  // CAMC"). A weekend the user stated EARLIER and saved still
+  // reads as fact: it is his captured rule, not a default.
+  const statedDays=(parsed.weekendDays&&parsed.weekendDays.length)?parsed.weekendDays:(facilityWeekendStated(fac)?facilityWeekendDays(fac):null);
+  if(statedDays)bits.push('Weekend means '+weekendDayListLabel(statedDays)+'.');
+  else if(describeWeekendMatters(parsed,fac))bits.push('You didn\'t say which days count as the weekend — I\'ll use '+weekendDayListLabel(facilityWeekendDays(fac||{weekendDays:null}))+' unless you tell me otherwise.');
   if(parsed.unanswered&&parsed.unanswered.length)bits.push('I still don\'t know about: '+parsed.unanswered.map(c=>'“'+c+'”').join(', ')+'.');
   return bits.join(' ');
 }
@@ -4143,7 +4226,18 @@ function describePrefillText(fac,codes){
     }
   }
   if(!dayDone&&hr!=null&&!codeList.length)bits.push('Day shifts pay '+moneyShort(hr)+'/hr.');
-  bits.push('Weekend is '+weekendDaysText(fac)+'.');
+  // The prefill is the user's words box wearing their saved
+  // rules — it must not write an unstated weekend into the box
+  // as if summarizing what they said (Nov 11, 2026, v122). A
+  // stated weekend is restated as theirs; a defaulted one is
+  // labeled as a default (and the sentence invites the fix —
+  // stating it in the box makes it stated); when nothing at
+  // this facility prices weekends differently, the weekend
+  // cannot move any price and the prefill says nothing.
+  if(facilityWeekendMatters(fac)){
+    if(facilityWeekendStated(fac))bits.push('Weekend is '+weekendDaysText(fac)+'.');
+    else bits.push('You didn\'t say which days count as the weekend — '+weekendDaysText(fac)+' are being used unless you say otherwise.');
+  }
   return bits.join(' ');
 }
 // Saving described rules: stated rates land on the facility card
@@ -4155,7 +4249,15 @@ function describePrefillText(fac,codes){
 function applyDescribedRules(fac,parsed){
   if(!fac||!parsed)return 0;
   for(const k of Object.keys(parsed.rates||{})){const n=rateOrNull(parsed.rates[k]);if(n!=null)fac[k]=String(n)}
-  if(parsed.weekendDays&&parsed.weekendDays.length)fac.weekendDays=parsed.weekendDays.slice();
+  // Weekend provenance (Nov 11, 2026, v122): stated words save
+  // the definition AS STATED; weekend-priced rules with no
+  // stated definition save the working default marked as
+  // defaulted, so no later surface presents it as the user's
+  // own words. A previously stated definition is never
+  // downgraded by a silent re-describe — silence touches
+  // nothing unstated, per this function's standing rule.
+  if(parsed.weekendDays&&parsed.weekendDays.length){fac.weekendDays=parsed.weekendDays.slice();fac.weekendDaysSource='stated'}
+  else if(describeWeekendMatters(parsed,fac)&&!facilityWeekendStated(fac))fac.weekendDaysSource='default';
   fac.codeMap=facilityCodeDefs(fac);
   for(const [code,d] of Object.entries(parsed.defs||{})){
     const key=normalizeCodeKey(code)||code;
