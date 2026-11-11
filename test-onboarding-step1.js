@@ -2,7 +2,8 @@
 // branch muse/credentialing). Run: node test-onboarding-step1.js
 //
 // Covers, without any live API call (fetch is stubbed; no network):
-//   * Step 1 collects, in one place on the Account tab: account
+//   * Step 1 collects, in one place on the Account tab's CREATE form
+//     (v126 split: sign-in is its own email + password form): account
 //     (email + password), name as it appears on the schedule AND on
 //     licenses (one field, that label), employment type (W-2 / 1099 /
 //     both), and an optional monthly income goal with a Skip option.
@@ -79,8 +80,14 @@ const t = (name, cond) => {
 const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 
 // ---------- Step 1 form: all four fields, in one place ----------
+// v126 (Nov 11, 2026) expectation change: the signed-out Account tab
+// split into a sign-in form (email + password only, the default) and a
+// create form. Step 1's fields live on the CREATE form now — this
+// section opens it first (cloudAuthMode = 'create'); the field
+// assertions below are unchanged.
 run(`
   cloudSession = null;
+  cloudAuthMode = 'create';
   db.settings.scheduleName = 'C. Martin';
   db.settings.employmentType = '1099';
   db.settings.monthlyIncomeGoal = 40000;
