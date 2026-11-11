@@ -110,6 +110,13 @@ let liveSyncApplePick = null; // { appleId, password, calendars: [{url, name}] }
 // (isDedicated) and excluded from the picker — it is the calendar the
 // app keeps behind the scenes, never a calendar the user picks.
 let liveSyncAppleCalendars = [];
+// Source picker state (v120), every provider: the account's calendars
+// in the picker's unified shape ({ ref, name, isDedicated } — ref is
+// the CalDAV URL for Apple, the calendar id for Google/Outlook), and
+// which providers are mid-"Change" (picker open with current picks
+// pre-ticked).
+let liveSyncCalendarsByProvider = {};
+let liveSyncSourceEdit = {};
 let liveSyncPushTimer = null;
 
 function liveSyncStateLoad() {
@@ -118,9 +125,9 @@ function liveSyncStateLoad() {
     // repairImport survives a reload: it is a one-shot request, not a
     // completed action, so losing it to a refresh (or to a sync that
     // timed out before the server answered) must not burn the repair.
-    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null, repairImport: v.repairImport === true, shiftSync: (v.shiftSync && typeof v.shiftSync === 'object') ? v.shiftSync : {} };
+    if (v && typeof v === 'object') return { pending: Array.isArray(v.pending) ? v.pending : [], tombstones: Array.isArray(v.tombstones) ? v.tombstones : [], lastImport: (v.lastImport && typeof v.lastImport === 'object') ? v.lastImport : null, repairImport: v.repairImport === true, shiftSync: (v.shiftSync && typeof v.shiftSync === 'object') ? v.shiftSync : {}, sourceLocal: (v.sourceLocal && typeof v.sourceLocal === 'object') ? v.sourceLocal : {} };
   } catch (e) {}
-  return { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {} };
+  return { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {}, sourceLocal: {} };
 }
 let liveSyncState = liveSyncStateLoad();
 function liveSyncStateSave() {
@@ -202,6 +209,54 @@ async function liveSyncPost(name, body) {
 }
 function liveSyncConnectedProviders() {
   return Object.keys(liveSyncConnections).filter((p) => liveSyncConnections[p].status === 'connected');
+}
+// --- Import sources (v120): which calendars this provider pulls from.
+// The server stores the pick (source_calendars / source_choice,
+// migration 014; legacy single source mirrored from the first entry).
+// Until the server can store it (migration not run), a pick the
+// server rejected with migration_014_required is remembered on this
+// device (liveSyncState.sourceLocal) so the required step is still
+// done — the server copy wins whenever it exists.
+function liveSyncSources(conn) {
+  if (!conn) return [];
+  if (Array.isArray(conn.sourceCalendars) && conn.sourceCalendars.length) {
+    return conn.sourceCalendars.map((c) => ({ ref: String((c && (c.ref || c.url || c.id)) || ''), name: String((c && c.name) || '') })).filter((c) => c.ref);
+  }
+  if (conn.sourceCalendarUrl) return [{ ref: conn.sourceCalendarUrl, name: conn.sourceCalendarName || conn.sourceCalendarUrl }];
+  return [];
+}
+function liveSyncLocalSourceChoice(provider) {
+  const l = liveSyncState.sourceLocal && liveSyncState.sourceLocal[provider];
+  return l && typeof l === 'object' ? l : null;
+}
+function liveSyncEffectiveSources(provider) {
+  const conn = liveSyncConnections[provider];
+  const fromServer = liveSyncSources(conn);
+  if (fromServer.length) return fromServer;
+  if (conn && conn.sourceChoice === 'none') return [];
+  const local = liveSyncLocalSourceChoice(provider);
+  if (local && local.choice === 'chosen' && Array.isArray(local.calendars)) return local.calendars;
+  return [];
+}
+function liveSyncSourceChoiceMade(provider) {
+  const conn = liveSyncConnections[provider];
+  if (!conn) return false;
+  if (liveSyncSources(conn).length) return true;
+  if (conn.sourceChoice === 'chosen' || conn.sourceChoice === 'none') return true;
+  return !!liveSyncLocalSourceChoice(provider);
+}
+// Connected but the required pick was never made: nothing is pulled
+// in for this provider until the user ticks a calendar (or chooses
+// "app calendar only"). A reconnect resets the server pick, so this
+// is also the post-wipe state Caleb hit on Nov 11, 2026.
+function liveSyncSourcePending(provider) {
+  const conn = liveSyncConnections[provider];
+  return !!(conn && conn.status === 'connected' && !liveSyncSourceChoiceMade(provider));
+}
+function liveSyncSourceSummary(provider) {
+  const srcs = liveSyncEffectiveSources(provider);
+  if (!srcs.length) return 'App calendar only';
+  return srcs.map((s) => s.name || s.ref).join(' + ');
 }
 function liveSyncLabel(provider) {
   return provider === 'google' ? 'Google Calendar' : provider === 'outlook' ? 'Outlook' : 'Apple Calendar';
@@ -293,6 +348,21 @@ async function liveSyncFetchAppleCalendars() {
     const data = await liveSyncGet('sync-calendar', 'apple-calendars');
     liveSyncAppleCalendars = Array.isArray(data.calendars) ? data.calendars : [];
   } catch (e) { liveSyncAppleCalendars = []; }
+  liveSyncCalendarsByProvider.apple = liveSyncAppleCalendars.map((c) => ({ ref: c.url, name: c.name || 'Unnamed calendar', isDedicated: !!c.isDedicated }));
+}
+async function liveSyncFetchCalendars(provider) {
+  if (provider === 'apple') { await liveSyncFetchAppleCalendars(); return; }
+  const conn = liveSyncConnections[provider];
+  if (!conn || conn.status !== 'connected') { liveSyncCalendarsByProvider[provider] = []; return; }
+  try {
+    const data = await liveSyncPost('sync-calendar', { action: 'calendars', provider });
+    liveSyncCalendarsByProvider[provider] = Array.isArray(data.calendars) ? data.calendars : [];
+  } catch (e) { liveSyncCalendarsByProvider[provider] = liveSyncCalendarsByProvider[provider] || []; }
+}
+async function liveSyncFetchAllCalendars() {
+  for (const p of ['google', 'outlook', 'apple']) {
+    if (liveSyncConnections[p] && liveSyncConnections[p].status === 'connected') await liveSyncFetchCalendars(p);
+  }
 }
 
 function liveSyncFacilitiesPayload() {
@@ -446,7 +516,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, skippedSuggested: data.imported.skippedSuggested || 0, suggestions: Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [], newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, skippedSuggested: data.imported.skippedSuggested || 0, perSource: Array.isArray(data.imported.perSource) ? data.imported.perSource : [], suggestions: Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [], newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
     // Facility suggestions (ask-first): merge the server's held
     // hospitals into db.facilitySuggestions — counted, dated, and
     // dismissable — without creating any facility. A dismissal survives
@@ -557,10 +627,27 @@ async function liveSyncNow(provider, silent) {
           if (imp.skippedLegacy) skipBits.push(imp.skippedLegacy + ' skipped until migration 005 runs');
           if (imp.repaired) skipBits.push(imp.repaired + ' re-imported after a missed sync');
           if (imp.skippedSuggested) skipBits.push(imp.skippedSuggested + ' held for a new-hospital suggestion');
-          msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
+          if (Array.isArray(imp.perSource) && imp.perSource.length) {
+            // Plain per-source truth (v120): what each picked
+            // calendar held and what came in from it. A zero is said
+            // LOUDLY, with the way out — never folded into a green
+            // "Connected" the way Caleb's empty pull was on Nov 11,
+            // 2026.
+            imp.perSource.forEach((ps) => {
+              if (ps.error) msg += ' Import from “' + ps.name + '” failed (' + ps.error + ') — the app-calendar sync above still ran; try Sync now again.';
+              else if (!ps.seen) msg += ' Saw 0 events in “' + ps.name + '” — if your shifts live in a different calendar, tap Change on the ' + liveSyncLabel(provider) + ' card and pick the right one.';
+              else msg += ' Synced “' + ps.name + '”: saw ' + ps.seen + ' events, imported ' + ps.created + ' shift(s)' + (ps.updated ? ', ' + ps.updated + ' updated' : '') + (ps.duplicates ? ', ' + ps.duplicates + ' already here' : '') + '.';
+            });
+            if (skipBits.length) msg += ' Skipped: ' + skipBits.join(', ') + '.';
+          } else {
+            msg += ' Imported ' + imp.created + ' shift(s) from “' + imp.sourceCalendarName + '”' + (imp.updated ? ', ' + imp.updated + ' updated' : '') + (imp.duplicates ? ', ' + imp.duplicates + ' already here' : '') + (typeof imp.seen === 'number' ? ' (' + imp.seen + ' event(s) seen, ' + (imp.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : '') + ')' : (imp.skipped ? ' (' + imp.skipped + ' event(s) skipped)' : '')) + '.';
+          }
           if (imp.unpriced) msg += ' ' + imp.unpriced + ' imported shift(s) have no pay rule yet — set the rate on the Facilities tab and the next sync prices them.';
           if (applied.suggestions && applied.suggestions.length) msg += ' We noticed shifts at ' + applied.suggestions.join(', ') + ' in your calendar. Add it as a facility? Sync your calendar, upload a contract, or manually enter the facility\'s hourly rate — see the Facilities tab.';
         }
+      }
+      if ((!data.imported || typeof data.imported !== 'object') && liveSyncSourcePending(provider)) {
+        msg += ' No work calendar is picked yet, so only the app’s own calendar was synced — pick the calendar your shifts live in on the ' + liveSyncLabel(provider) + ' card to pull them in.';
       }
       alert(msg);
     }
@@ -609,7 +696,8 @@ function liveSyncSchedulePush() {
 // say so honestly while still completing the in-app delete. Only the
 // Apple import source pairs shifts with source events today —
 // Google/Outlook connections have no import source, so this is never
-// offered for them.
+// offered for them: no Google/Outlook source-event delete path is
+// built, even though their import sources exist now.
 async function liveSyncDeleteSourceEvent(provider, shiftId) {
   try {
     const data = await liveSyncPost('sync-calendar', { action: 'delete-source-event', provider, shiftId });
@@ -692,7 +780,7 @@ async function liveSyncAppleConnect() {
     await liveSyncFetchAppleCalendars();
     await liveSyncFetchLog();
     render();
-    alert('Apple Calendar connected. Now pick your work calendar below and tap Sync now — shifts are pulled from that calendar only.');
+    alert('Apple Calendar connected. One more step: pick the calendar your shifts live in below — your shifts are pulled from that calendar only.');
   } catch (e) {
     // iCloud refused to create the app-owned calendar through CalDAV:
     // offer the user's existing calendars instead of failing the whole
@@ -739,51 +827,155 @@ async function liveSyncApplePickUse() {
     alert('Could not connect to that calendar: ' + e.message + '. Nothing was stored.');
   }
 }
+// The source picker (v120) — ONE component for every provider, shown
+// on the connected card whenever the pick is missing (required step,
+// card stays expanded) and again when the user taps Change (current
+// picks pre-ticked). Neutral by rule: on a first pick NOTHING is
+// pre-ticked — the user ticks the calendar their shifts live in, or
+// explicitly chooses "App calendar only". The dedicated CRNA Hub
+// calendar is listed but disabled and labelled — the app writes
+// there; it is never a source.
+function liveSyncSourcePickerHTML(provider) {
+  const cals = liveSyncCalendarsByProvider[provider] || [];
+  const editing = !!liveSyncSourceEdit[provider];
+  const preTick = editing ? liveSyncEffectiveSources(provider).map((s) => s.ref) : [];
+  let list;
+  if (!cals.length) {
+    list = '<p class="muted">Your calendars could not be listed yet.</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-calendars" data-id="' + provider + '">Load my calendars</button></div>';
+  } else {
+    list = '<div class="form-grid">' + cals.map((c) => {
+      if (c.isDedicated) return '<label class="muted"><input type="checkbox" disabled> ' + escapeHTML(c.name || 'CRNA Hub') + ' — CRNA Hub — the app writes here — not a source</label>';
+      return '<label><input type="checkbox" class="live-source-pick" data-provider="' + provider + '" value="' + escapeHTML(c.ref) + '"' + (preTick.includes(c.ref) ? ' checked' : '') + '> ' + escapeHTML(c.name || 'Unnamed calendar') + '</label>';
+    }).join('') + '</div>';
+  }
+  return '<div style="margin-top:10px"><div class="item-title">Pick the calendar your shifts live in</div><div class="muted">We’ll pull your shifts from the calendar(s) you tick — and nowhere else. Nothing is ever written to them.</div>' + list + '<div class="item-actions"><button type="button" class="tiny" data-action="live-source-save" data-id="' + provider + '">Save &amp; sync now</button><button type="button" class="tiny secondary" data-action="live-source-none" data-id="' + provider + '">App calendar only — no work calendar</button>' + (editing ? '<button type="button" class="tiny secondary" data-action="live-source-cancel" data-id="' + provider + '">Cancel</button>' : '') + '</div></div>';
+}
+
+// The persistent "what the last import did" line, every provider:
+// per-source plain truth when the server sent it (including a loud
+// zero), else the legacy aggregate line. The repair offer rides
+// along whenever the last import skipped shifts as deleted/legacy.
+function liveSyncLastImportHTML(provider) {
+  const li = liveSyncState.lastImport;
+  if (!li || li.provider !== provider) {
+    if (liveSyncSourceChoiceMade(provider) && liveSyncEffectiveSources(provider).length) {
+      return '<p class="muted">Work calendar: “' + escapeHTML(liveSyncSourceSummary(provider)) + '”. No import has run yet — tap “Sync now”.</p>';
+    }
+    return '';
+  }
+  const skipBits = [];
+  if (li.skippedNotShift) skipBits.push(li.skippedNotShift + ' not shifts');
+  if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
+  if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' waiting to be re-imported');
+  if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
+  if (li.unpriced) skipBits.push(li.unpriced + ' unpriced — set the pay rule on the Facilities tab');
+  if (li.skippedSuggested) skipBits.push(li.skippedSuggested + ' held — new hospital suggestion, see Facilities tab');
+  if (li.suggestions && li.suggestions.length) skipBits.push('suggested: ' + li.suggestions.map((x) => x.name || x).join(', '));
+  let line;
+  if (li.error) {
+    line = 'failed (' + escapeHTML(li.error) + ')';
+  } else if (Array.isArray(li.perSource) && li.perSource.length) {
+    line = li.perSource.map((ps) => {
+      if (ps.error) return 'import from “' + escapeHTML(ps.name || '') + '” failed (' + escapeHTML(ps.error) + ')';
+      if (!ps.seen) return 'saw 0 events in “' + escapeHTML(ps.name || '') + '” — if your shifts live in a different calendar, tap Change and pick the right one';
+      return 'synced “' + escapeHTML(ps.name || '') + '”: saw ' + ps.seen + ' events, imported ' + ps.created + ' shift(s)' + (ps.updated ? ', ' + ps.updated + ' updated' : '') + (ps.duplicates ? ', ' + ps.duplicates + ' already here' : '');
+    }).join('; ');
+    if (skipBits.length) line += ' (' + skipBits.join(', ') + ' skipped)';
+  } else {
+    line = 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''));
+  }
+  let html = '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + line + '.</p>';
+  // An import that skipped shifts usually means an earlier sync
+  // paired them without ever delivering them. Offer the explicit
+  // repair whenever anything was skipped as deleted/legacy (not
+  // only when nothing was created — a partial import like 12
+  // created / 219 skipped still needs it).
+  if (!li.error && ((li.skippedDeleted || 0) > 0 || (li.skippedLegacy || 0) > 0 || (li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0))) {
+    html += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-repair-import" data-id="' + provider + '">Re-import missing shifts</button></div><p class="muted">Missing shifts? This pulls them in again — shifts you deleted on purpose stay deleted.</p>';
+  }
+  return html;
+}
+
+// Save the ticked source calendar(s), then sync immediately so the
+// result ("Synced 'Caleb Work Schedule': saw N events, imported M
+// shifts") is visible at once. Changing the pick re-runs the same
+// save, and the sync that follows is a full pull of the newly chosen
+// calendar(s) (source reads are always full scans server-side).
+async function liveSyncSourceSave(provider) {
+  const cals = liveSyncCalendarsByProvider[provider] || [];
+  const boxes = document.querySelectorAll('input.live-source-pick[data-provider="' + provider + '"]:checked');
+  const picked = Array.prototype.map.call(boxes, (b) => { const c = cals.find((x) => x.ref === b.value); return { ref: b.value, name: c ? (c.name || b.value) : b.value }; });
+  if (!picked.length) { alert('Tick the calendar your shifts live in first — or choose “App calendar only” if you don’t have a work calendar.'); return; }
+  try {
+    await liveSyncPost('sync-calendar', { action: 'set-source-calendars', provider, choice: 'chosen', calendars: picked });
+    if (liveSyncState.sourceLocal) delete liveSyncState.sourceLocal[provider];
+    liveSyncStateSave();
+  } catch (e) {
+    if (e.message === 'migration_014_required' || e.message === 'migration_004_required') {
+      // Pre-migration server: remember the pick on this device so the
+      // required step is still done; the account stores it once the
+      // owner runs migration 014. Said out loud, never silent.
+      liveSyncState.sourceLocal = liveSyncState.sourceLocal || {};
+      liveSyncState.sourceLocal[provider] = { choice: 'chosen', calendars: picked };
+      liveSyncStateSave();
+      alert('Saved on this device. The app owner still needs to run migration 014 (supabase-schema-014.sql) before the pick is stored in your account — syncing now.');
+    } else if (e.message === 'source_is_dedicated_calendar') {
+      alert('That is the app’s own calendar — pick your work calendar instead.');
+      render();
+      return;
+    } else {
+      alert('Could not save that work calendar: ' + e.message + '. Nothing was changed.');
+      render();
+      return;
+    }
+  }
+  liveSyncSourceEdit[provider] = false;
+  await liveSyncFetchStatus();
+  render();
+  await liveSyncNow(provider, false);
+}
+
+// "App calendar only" is a real answer, not a skipped step: it is
+// saved (server-side when it can be, on-device until migration 014
+// runs) and the card goes back to resting with "Pulling from: App
+// calendar only" until the user taps Change.
+async function liveSyncSourceNone(provider) {
+  try {
+    await liveSyncPost('sync-calendar', { action: 'set-source-calendars', provider, choice: 'none', calendars: [] });
+    if (liveSyncState.sourceLocal) delete liveSyncState.sourceLocal[provider];
+    liveSyncStateSave();
+  } catch (e) {
+    if (e.message === 'migration_014_required' || e.message === 'migration_004_required') {
+      liveSyncState.sourceLocal = liveSyncState.sourceLocal || {};
+      liveSyncState.sourceLocal[provider] = { choice: 'none' };
+      liveSyncStateSave();
+    } else {
+      alert('Could not save that choice: ' + e.message + '. Nothing was changed.');
+      render();
+      return;
+    }
+  }
+  liveSyncSourceEdit[provider] = false;
+  await liveSyncFetchStatus();
+  render();
+  alert(liveSyncLabel(provider) + ' sync will use the app’s own calendar only. You can pick a work calendar any time with Change.');
+}
+
 // Explicit repair for shifts lost to an earlier undelivered sync:
 // the server clears stale import records (paired shifts that never
 // reached this device) and pulls them in fresh on this sync. Rows
 // flagged as user-deleted are never cleared. Until migration 005 runs
 // this can also bring back an imported shift the user deleted here —
 // delete it again afterwards if it is not wanted.
-async function liveSyncRepairImport() {
-  if (!confirm('Re-import missing shifts from “' + (liveSyncConnections.apple && liveSyncConnections.apple.sourceCalendarName ? liveSyncConnections.apple.sourceCalendarName : 'your work calendar') + '”? Shifts that were paired by an earlier sync but never arrived will be pulled in again. Shifts you deleted on purpose stay deleted.')) return;
+async function liveSyncRepairImport(provider) {
+  provider = provider || 'apple';
+  const conn = liveSyncConnections[provider];
+  if (!confirm('Re-import missing shifts from “' + (conn && conn.sourceCalendarName ? conn.sourceCalendarName : 'your work calendar') + '”? Shifts that were paired by an earlier sync but never arrived will be pulled in again. Shifts you deleted on purpose stay deleted.')) return;
   liveSyncState.repairImport = true;
   liveSyncStateSave();
-  await liveSyncNow('apple', false);
+  await liveSyncNow(provider, false);
 }
-// Save the Apple work calendar picked in the connected Apple card,
-// then sync immediately so the result ("imported N shifts from …")
-// is visible at once instead of waiting for the next app open. Only
-// the calendar URL + name are sent; the password is never involved
-// here. In the final model this picker IS the connection: the user
-// picks the existing calendar their shifts live in, and the app pulls
-// from that calendar only.
-async function liveSyncAppleSourceSave() {
-  const sel = document.getElementById('f_liveAppleSource');
-  const calendarUrl = sel ? sel.value : '';
-  const picked = liveSyncAppleCalendars.find((c) => c.url === calendarUrl);
-  const calendarName = picked ? (picked.name || '') : '';
-  try {
-    await liveSyncPost('sync-calendar', { action: 'set-apple-source-calendar', calendarUrl, calendarName });
-    await liveSyncFetchStatus();
-    await liveSyncFetchAppleCalendars();
-    render();
-    if (!calendarUrl) {
-      alert('Work calendar cleared — Apple sync now uses the app’s own calendar only.');
-      return;
-    }
-    await liveSyncNow('apple', false);
-  } catch (e) {
-    render();
-    if (e.message === 'migration_004_required') {
-      alert('The app owner still needs to run migration 004 (supabase-schema-004.sql) in the Supabase SQL Editor before a work calendar can be saved. Sync itself is unaffected — it still uses the app’s own calendar.');
-    } else if (e.message === 'source_is_dedicated_calendar') {
-      alert('That is the app’s own calendar — pick your work calendar instead.');
-    } else {
-      alert('Could not save that work calendar: ' + e.message + '. Nothing was changed.');
-    }
-  }
-}
+
 async function liveSyncResolvePending(entry, decision) {
   const parts = String(entry || '').split('|');
   const provider = parts[0], shiftId = parts[1];
@@ -856,10 +1048,15 @@ function liveSyncAction(action, entry) {
   if (action === 'live-apple-pick') return liveSyncApplePickUse();
   if (action === 'live-apple-pick-cancel') { liveSyncApplePick = null; return render(); }
   if (action === 'live-apple-calendars') { liveSyncFetchAppleCalendars().then(() => render()); return; }
-  if (action === 'live-apple-source-save') return liveSyncAppleSourceSave();
-  if (action === 'live-apple-repair-import') return liveSyncRepairImport();
+  if (action === 'live-calendars') { liveSyncFetchCalendars(entry).then(() => render()); return; }
+  if (action === 'live-source-save') return liveSyncSourceSave(entry);
+  if (action === 'live-source-none') return liveSyncSourceNone(entry);
+  if (action === 'live-source-change') { liveSyncSourceEdit[entry] = true; liveSyncFetchCalendars(entry).then(() => render()); return; }
+  if (action === 'live-source-cancel') { liveSyncSourceEdit[entry] = false; return render(); }
+  if (action === 'live-repair-import') return liveSyncRepairImport(entry);
+  if (action === 'live-apple-repair-import') return liveSyncRepairImport('apple');
   if (action === 'live-refresh') {
-    liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchAppleCalendars()).then(() => liveSyncFetchLog()).then(() => render());
+    liveSyncFetchConfig().then(() => liveSyncFetchStatus()).then(() => liveSyncFetchAllCalendars()).then(() => liveSyncFetchLog()).then(() => render());
     return;
   }
   if (action === 'live-confirm-delete') return liveSyncResolvePending(entry, 'delete');
@@ -885,59 +1082,29 @@ function liveSyncProviderCard(provider) {
   }
   if (conn && conn.status === 'connected') {
     let card = '<div class="item"><div class="item-title">' + label + ' — <span class="pill">Connected</span></div><div class="muted">Last sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + ' · Auto-delete: ' + (conn.autoDelete ? 'ON' : 'OFF') + '</div><div class="item-actions"><button type="button" class="tiny" data-action="live-sync-now" data-id="' + provider + '">' + (liveSyncBusy === provider ? 'Syncing…' : 'Sync now') + '</button><button type="button" class="tiny secondary" data-action="live-auto-delete" data-id="' + provider + '">' + (conn.autoDelete ? 'Turn auto-delete off' : 'Turn auto-delete on') + '</button><button type="button" class="tiny secondary" data-action="live-disconnect" data-id="' + provider + '">Disconnect</button></div>';
-    if (provider === 'apple') {
-      // Work calendar (final model): the user picks the ONE existing
-      // calendar their shifts already live in — e.g. "Caleb Work
-      // Schedule" — and each sync pulls from that calendar only.
-      // Read-only pull: events are recognised as shifts from the
-      // Facilities list (name or abbreviation, in the title or the
-      // location — even just the facility name) and from other
-      // facility-like shift titles; anything else is skipped, and
-      // nothing is ever written back. A shift whose facility has no pay
-      // rule yet imports unpriced — set the rule on the Facilities tab
-      // and the next sync prices it; adding a facility also re-scans
-      // events that were skipped before it existed.
-      const current = conn.sourceCalendarUrl || '';
-      const importable = liveSyncAppleCalendars.filter((c) => !c.isDedicated);
-      let picker;
-      if (!liveSyncAppleCalendars.length) {
-        picker = '<p class="muted">Your iCloud calendars could not be listed yet.</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-calendars">Load my calendars</button></div>';
-      } else if (!importable.length) {
-        picker = '<p class="muted">No other iCloud calendar was found.</p>';
-      } else {
-        const opts = '<option value="">No work calendar — app calendar only</option>' + importable.map((c) => '<option value="' + escapeHTML(c.url) + '"' + (c.url === current ? ' selected' : '') + '>' + escapeHTML(c.name || 'Unnamed calendar') + '</option>').join('');
-        picker = '<div class="form-grid"><div class="field"><label for="f_liveAppleSource">Your work calendar</label><select id="f_liveAppleSource">' + opts + '</select></div></div><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-source-save">Save work calendar &amp; sync now</button></div>';
+    if (liveSyncSourcePending(provider) || liveSyncSourceEdit[provider]) {
+      // REQUIRED STEP (v120): until the user ticks a work calendar
+      // (or explicitly chooses "app calendar only"), the card stays
+      // EXPANDED with the picker in front of them — never collapsed,
+      // never skippable. This is the step Caleb never saw on Nov 11,
+      // 2026: connected, green, last-sync stamped — and silently
+      // pulling from nothing, because the picker sat inside a
+      // collapsed card behind a select he never opened. Changing the
+      // pick (Change) reopens the same picker, same component.
+      if (liveSyncSourcePending(provider)) {
+        card += '<p class="hint"><strong>One more step:</strong> pick the calendar your shifts live in. Until you do, ' + label + ' sync only uses the app’s own calendar — none of your shifts are pulled in.</p>';
       }
-      card += '<div style="margin-top:10px"><div class="item-title">Your work calendar</div><div class="muted">Pick the calendar your shifts live in — we’ll pull from that one only.</div>' + picker + '</div>';
-      const li = liveSyncState.lastImport;
-      if (li && li.provider === 'apple') {
-        const skipBits = [];
-        if (li.skippedNotShift) skipBits.push(li.skippedNotShift + ' not shifts');
-        if (li.skippedDeleted) skipBits.push(li.skippedDeleted + ' you deleted');
-        if (li.skippedLegacy) skipBits.push(li.skippedLegacy + ' waiting to be re-imported');
-        if (li.repaired) skipBits.push(li.repaired + ' re-imported after a missed sync');
-        if (li.unpriced) skipBits.push(li.unpriced + ' unpriced — set the pay rule on the Facilities tab');
-        if (li.skippedSuggested) skipBits.push(li.skippedSuggested + ' held — new hospital suggestion, see Facilities tab');
-        if (li.suggestions && li.suggestions.length) skipBits.push('suggested: ' + li.suggestions.map((x) => x.name || x).join(', '));
-        card += '<p class="muted">Last import' + (li.at ? ' (' + escapeHTML(liveSyncWhen(li.at)) + ')' : '') + ': ' + (li.error ? 'failed (' + escapeHTML(li.error) + ')' : 'imported ' + li.created + ' shift(s) from “' + escapeHTML(li.sourceName || '') + '”' + (li.updated ? ', ' + li.updated + ' updated' : '') + (li.duplicates ? ', ' + li.duplicates + ' already here' : '') + (typeof li.seen === 'number' ? ' (' + li.seen + ' event(s) seen, ' + (li.parsed || 0) + ' looked like shifts' + (skipBits.length ? ', ' + skipBits.join(', ') + ' skipped' : (li.skipped ? ', ' + li.skipped + ' skipped' : '')) + ')' : (li.skipped ? ', ' + li.skipped + ' event(s) skipped (not shifts)' : ''))) + '.</p>';
-        // An import that skipped shifts usually means an earlier sync
-        // paired them without ever delivering them. Offer the explicit
-        // repair whenever anything was skipped as deleted/legacy (not
-        // only when nothing was created — a partial import like 12
-        // created / 219 skipped still needs it).
-        if (!li.error && ((li.skippedDeleted || 0) > 0 || (li.skippedLegacy || 0) > 0 || (li.created === 0 && (li.skipped || 0) > 0 && (li.parsed || 0) > 0))) {
-          card += '<div class="item-actions"><button type="button" class="tiny secondary" data-action="live-apple-repair-import">Re-import missing shifts</button></div><p class="muted">Missing shifts? This pulls them in again — shifts you deleted on purpose stay deleted.</p>';
-        }
-      } else if (current) {
-        card += '<p class="muted">Work calendar: “' + escapeHTML(conn.sourceCalendarName || current) + '”. No import has run yet — tap “Sync now”.</p>';
-      }
+      card += liveSyncSourcePickerHTML(provider);
+      card += liveSyncLastImportHTML(provider);
+      return card + '</div>';
     }
-    // A connected provider's card collapses to a one-line summary
-    // (Nov 6, 2026): provider · Connected · last sync. Tap to expand
-    // for the controls (Sync now, auto-delete, Disconnect, work
-    // calendar picker). Session state only — the <details> re-renders
-    // collapsed, which is the point.
-    return '<details class="collapse-sub sync-provider"><summary class="collapse-head"><span class="collapse-title">' + label + ' · Connected · Last sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + '</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary>' + card + '</div></details>';
+    // Pick made: the card rests collapsed (Nov 6, 2026), but the
+    // one-line summary now always says what we pull from, and the
+    // expanded card leads its source section with the same line plus
+    // Change.
+    card += '<div style="margin-top:10px"><div class="item-title">Your work calendar</div><p class="muted">Pulling from: ' + escapeHTML(liveSyncSourceSummary(provider)) + '</p><div class="item-actions"><button type="button" class="tiny secondary" data-action="live-source-change" data-id="' + provider + '">Change</button></div></div>';
+    card += liveSyncLastImportHTML(provider);
+    return '<details class="collapse-sub sync-provider"><summary class="collapse-head"><span class="collapse-title">' + label + ' · Connected · Pulling from: ' + escapeHTML(liveSyncSourceSummary(provider)) + ' · Last sync: ' + escapeHTML(liveSyncWhen(conn.lastSyncedAt)) + '</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary>' + card + '</div></details>';
   }
   if (provider === 'apple') {
     if (liveSyncApplePick && liveSyncApplePick.calendars.length) {
@@ -1034,6 +1201,7 @@ function liveSyncPanelHTML() {
 // the connected provider's summary card inside carries the status.
 function liveSyncPanelOpen() {
   if (typeof onboardStep !== 'undefined' && onboardStep === 2) return true;
+  if (liveSyncConnectedProviders().some((p) => liveSyncSourcePending(p))) return true;
   if (liveSyncState.pending.length) return true;
   if (liveSyncChosenProviders().some((p) => liveSyncConnections[p] && liveSyncConnections[p].status === 'needs_reauth')) return true;
   return liveSyncConnectedProviders().length === 0;
@@ -1047,7 +1215,7 @@ async function liveSyncInit() {
     const failed = params.get('calendar_error');
     if (connected || failed) {
       window.history.replaceState({}, '', window.location.pathname);
-      if (connected) alert(liveSyncLabel(connected) + ' connected — live sync is on.');
+      if (connected) alert(liveSyncLabel(connected) + ' connected — live sync is on. One more step: pick the calendar your shifts live in (see the sync panel).');
       if (failed) alert('Calendar connection failed: ' + failed + '. Nothing was stored. Try Connect again.');
     }
   } catch (e) {}
@@ -1055,7 +1223,7 @@ async function liveSyncInit() {
   if (typeof cloudSession === 'undefined' || !cloudSession) return;
   await liveSyncFetchConfig();
   await liveSyncFetchStatus();
-  await liveSyncFetchAppleCalendars();
+  await liveSyncFetchAllCalendars();
   await liveSyncFetchLog();
   const connected = liveSyncConnectedProviders();
   if (connected.length) {
@@ -1077,7 +1245,7 @@ async function liveSyncInit() {
 // not the user's data.
 function liveSyncResetDeviceState() {
   if (liveSyncPushTimer) { try { clearTimeout(liveSyncPushTimer); } catch (e) {} liveSyncPushTimer = null; }
-  liveSyncState = { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {} };
+  liveSyncState = { pending: [], tombstones: [], lastImport: null, repairImport: false, shiftSync: {}, sourceLocal: {} };
   try { localStorage.removeItem('crna-hub-live-sync'); } catch (e) {}
   liveSyncConnections = {};
   liveSyncLog = [];
@@ -1086,6 +1254,8 @@ function liveSyncResetDeviceState() {
   liveSyncShowOthers = false;
   liveSyncApplePick = null;
   liveSyncAppleCalendars = [];
+  liveSyncCalendarsByProvider = {};
+  liveSyncSourceEdit = {};
 }
 
 // Expose the one entry point app.js hooks call after shift changes.

@@ -89,10 +89,10 @@ t('Apple connected card: only compact status labels remain',
   !apple.includes('Shifts you add or edit here go to'));
 t('no stale "Saved shifts" reference anywhere in the sync panel',
   !panel.includes('Saved shifts') && !apple.includes('Saved shifts'));
-t('work calendar: one condensed line above the picker',
+t('work calendar: card names what it pulls from + Change (v120 picker)',
   apple.includes('Your work calendar') &&
-  apple.includes('Pick the calendar your shifts live in — we’ll pull from that one only.') &&
-  apple.includes('Save work calendar &amp; sync now') &&
+  apple.includes('Pulling from: Caleb Work Schedule') &&
+  apple.includes('data-action="live-source-change"') &&
   !apple.includes('recognises events') && !apple.includes('held, not imported') &&
   !apple.includes('abbreviations and pay rule'));
 t('panel intro is one condensed line',

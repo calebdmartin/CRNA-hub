@@ -181,6 +181,48 @@ export async function sbPatch(
   if (!r.ok) throw new Error(`db_write_failed:${table}`);
 }
 
+// Upsert a calendar connection for a (RE)CONNECT, clearing every
+// piece of incremental/source state a previous connection — possibly
+// for a different account, or from before a start-over wipe — left
+// on the row: sync tokens, delta links, the source-calendar choice.
+// A reconnect is a fresh start: the next sync is a full pull and the
+// user picks the source calendar(s) again in the required picker
+// step. PostgREST merge-upserts preserve unspecified columns, so the
+// resets must be spelled out — the original connect handlers omitted
+// them, which is how a wiped account's reconnect inherited a stale
+// token and imported nothing (Nov 11, 2026). The cascade degrades
+// gracefully on databases missing the later columns (migration 004's
+// source columns, then migration 014's multi-source columns).
+export async function upsertFreshConnection(
+  row: Record<string, unknown>,
+): Promise<void> {
+  const full = {
+    ...row,
+    sync_token: null,
+    delta_link: null,
+    source_calendar_url: null,
+    source_calendar_name: null,
+    source_calendars: null,
+    source_choice: null,
+  };
+  try {
+    await sbUpsert("calendar_connections", full, "user_id,provider");
+    return;
+  } catch (_e) { /* fall through to the pre-014 shape */ }
+  const base = {
+    ...row,
+    sync_token: null,
+    delta_link: null,
+    source_calendar_url: null,
+    source_calendar_name: null,
+  };
+  try {
+    await sbUpsert("calendar_connections", base, "user_id,provider");
+    return;
+  } catch (_e) { /* fall through to the row as given */ }
+  await sbUpsert("calendar_connections", row, "user_id,provider");
+}
+
 // --- AES-GCM encryption for stored provider credentials ---
 
 function encryptionKeyBytes(): Uint8Array {
@@ -834,11 +876,43 @@ export function decideStaleImportRow(opts: {
   tombstoned: boolean;
   keyExistsLocally: boolean;
   flagsSupported: boolean;
+  // The account sent ZERO local shifts with this sync (fresh setup,
+  // or a start-over wipe followed by a reconnect). A stale pairing
+  // then cannot be a shift the user deleted from THIS account state —
+  // the whole local set is gone, and the only durable deletion
+  // evidence (the deleted_locally flag / a tombstone in this sync)
+  // has already been checked above. Without this, a surviving
+  // sync token + import map made the first post-wipe sync import
+  // nothing while reporting success (Nov 11, 2026).
+  accountEmpty?: boolean;
 }): "skip-deleted" | "skip-legacy" | "repair-create" | "repair-pair" {
   if (opts.deletedLocally === true || opts.tombstoned) return "skip-deleted";
+  if (opts.accountEmpty) {
+    return opts.keyExistsLocally ? "repair-pair" : "repair-create";
+  }
   if (!opts.flagsSupported) return "skip-legacy";
   if (opts.keyExistsLocally) return "repair-pair";
   return "repair-create";
+}
+
+// The connection a sync must actually fetch with. When the browser
+// sends ZERO local shifts (fresh setup / post-wipe reconnect), any
+// stored incremental state — a Google sync token, an Outlook delta
+// link, an Apple sync token — describes a local state that no longer
+// exists: fetching with it returns an empty delta and the sync
+// "succeeds" while importing nothing (Nov 11, 2026). In that case the
+// fetch must be a FULL pull: same connection, tokens stripped. With
+// any local shift present, the connection is returned untouched and
+// incremental sync proceeds exactly as before.
+export function effectiveConnForSync<T extends Record<string, unknown>>(
+  conn: T,
+  localShiftCount: number,
+): { conn: T; fullPull: boolean } {
+  if (localShiftCount > 0) return { conn, fullPull: false };
+  return {
+    conn: { ...conn, sync_token: null, delta_link: null },
+    fullPull: true,
+  };
 }
 
 // Pure per-event classification for the Apple import loop: what one
@@ -866,6 +940,7 @@ export function decideImportEvent(opts: {
   tombstoned: boolean;
   keyExistsLocally: boolean;
   flagsSupported: boolean;
+  accountEmpty?: boolean;
 }): ImportEventDecision {
   if (!opts.parsed) return "skip-not-shift";
   if (opts.localExists) return "already-here";
@@ -875,6 +950,7 @@ export function decideImportEvent(opts: {
       tombstoned: opts.tombstoned,
       keyExistsLocally: opts.keyExistsLocally,
       flagsSupported: opts.flagsSupported,
+      accountEmpty: opts.accountEmpty,
     });
   }
   if (opts.keyExistsLocally) return "duplicate";

@@ -224,6 +224,7 @@ import {
   authUserId,
   chunkArray,
   decideImportEvent,
+  effectiveConnForSync,
   FacilitySuggestion,
   findFallbackLocalShift,
   groupFacilitySuggestions,
@@ -247,6 +248,7 @@ import {
   sbPatch,
   sbUpsert,
   sbUpsertMany,
+  upsertFreshConnection,
   shiftDescription,
   shiftSyncStateFor,
   shiftTitle,
@@ -661,6 +663,141 @@ async function fetchAppleSourceEvents(
   };
 }
 
+// --- Import sources: the picked calendars, every provider (v120) ---
+
+// The connection's picked import sources, normalized: migration 014's
+// source_calendars array when present, else the legacy single source
+// (migration 004) — for every provider, not just Apple. The dedicated
+// CRNA Hub calendar is filtered out wherever it appears: it is the
+// push target, and its events are this app's own shifts.
+function connectionSources(conn: Conn): { ref: string; name: string }[] {
+  const out: { ref: string; name: string }[] = [];
+  const push = (ref: unknown, name: unknown) => {
+    const r = String(ref ?? "").trim();
+    if (!r || out.some((s) => s.ref === r)) return;
+    out.push({ ref: r, name: String(name ?? "").trim() || r });
+  };
+  const arr = conn.source_calendars;
+  if (Array.isArray(arr)) {
+    for (const c of arr) {
+      if (c && typeof c === "object") {
+        const o = c as Record<string, unknown>;
+        push(o.ref ?? o.url ?? o.id, o.name);
+      }
+    }
+  }
+  if (!out.length) push(conn.source_calendar_url, conn.source_calendar_name);
+  const dedicated = String(conn.calendar_id ?? "").trim();
+  const norm = (u: string) => u.replace(/\/$/, "");
+  return out.filter((s) => !dedicated || norm(s.ref) !== norm(dedicated));
+}
+
+// Fetch one picked source calendar's events, per provider. Source
+// reads are always FULL scans of a wide window (12 months back, 2
+// years forward) — an import source has no incremental state to go
+// stale, and a missed source event must never read as a deletion.
+const SOURCE_WINDOW = () => {
+  const from = new Date();
+  from.setMonth(from.getMonth() - 12);
+  const to = new Date();
+  to.setFullYear(to.getFullYear() + 2);
+  return { from: from.toISOString(), to: to.toISOString() };
+};
+
+async function fetchGoogleSourceEvents(
+  accessToken: string,
+  calendarId: string,
+): Promise<ProviderEvent[]> {
+  const { from, to } = SOURCE_WINDOW();
+  const base = `${GOOGLE_API}/calendars/${encodeURIComponent(calendarId)}/events`;
+  const events: ProviderEvent[] = [];
+  let pageToken: string | null = null;
+  for (let pages = 0; pages < 20; pages++) {
+    let url = `${base}?timeMin=${encodeURIComponent(from)}&timeMax=${encodeURIComponent(to)}&showDeleted=false&singleEvents=true&maxResults=2500`;
+    if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
+    const r = await googleFetch(url, accessToken);
+    if (!r.ok) throw new Error("google_source_fetch_failed");
+    const data = await r.json();
+    for (const ev of data.items ?? []) {
+      const desc = String(ev.description ?? "");
+      const parsed = parseDescription(desc);
+      const { facility, type } = parseTitle(String(ev.summary ?? ""));
+      const ext = ev.extendedProperties?.private ?? {};
+      events.push({
+        providerEventId: String(ev.id),
+        date: eventDateOf(ev.start ?? {}),
+        facility,
+        type: parsed.type || type,
+        pay: parsed.pay,
+        note: parsed.note,
+        shiftId: ext.crnaHubShiftId ?? parsed.shiftId,
+        updatedAt: ev.updated ?? null,
+        cancelled: ev.status === "cancelled",
+        rawUpdatedAt: ev.updated ?? null,
+        summary: String(ev.summary ?? ""),
+        location: typeof ev.location === "string" ? ev.location : undefined,
+      });
+    }
+    pageToken = data.nextPageToken ?? null;
+    if (!pageToken) break;
+  }
+  return events;
+}
+
+async function fetchOutlookSourceEvents(
+  accessToken: string,
+  calendarId: string,
+): Promise<ProviderEvent[]> {
+  const { from, to } = SOURCE_WINDOW();
+  let url: string | null =
+    `${GRAPH_API}/me/calendars/${encodeURIComponent(calendarId)}/calendarView?startDateTime=${encodeURIComponent(from)}&endDateTime=${encodeURIComponent(to)}&$select=subject,body,start,end,location,isAllDay,lastModifiedDateTime,seriesMasterId&$top=500`;
+  const events: ProviderEvent[] = [];
+  for (let pages = 0; pages < 20 && url; pages++) {
+    const r = await graphFetch(url, accessToken);
+    if (!r.ok) throw new Error("outlook_source_fetch_failed");
+    const data = await r.json();
+    for (const ev of data.value ?? []) {
+      const bodyText = stripHtml(ev.body?.content ?? "");
+      const parsed = parseDescription(bodyText);
+      const { facility, type } = parseTitle(String(ev.subject ?? ""));
+      events.push({
+        providerEventId: String(ev.id),
+        date: eventDateOf({
+          dateTime: ev.start?.dateTime,
+          date: ev.isAllDay ? (ev.start?.dateTime ?? "").slice(0, 10) : undefined,
+        }),
+        facility,
+        type: parsed.type || type,
+        pay: parsed.pay,
+        note: parsed.note,
+        shiftId: parsed.shiftId,
+        updatedAt: ev.lastModifiedDateTime ?? null,
+        cancelled: false,
+        rawUpdatedAt: ev.lastModifiedDateTime ?? null,
+        summary: String(ev.subject ?? ""),
+        location: ev.location?.displayName ? String(ev.location.displayName) : undefined,
+      });
+    }
+    url = data["@odata.nextLink"] ? String(data["@odata.nextLink"]) : null;
+  }
+  return events;
+}
+
+async function fetchSourceEvents(
+  provider: string,
+  conn: Conn,
+  accessToken: string,
+  ref: string,
+): Promise<{ events: ProviderEvent[]; fetchMethod: string }> {
+  if (provider === "google") {
+    return { events: await fetchGoogleSourceEvents(accessToken, ref), fetchMethod: "list" };
+  }
+  if (provider === "outlook") {
+    return { events: await fetchOutlookSourceEvents(accessToken, ref), fetchMethod: "calendarView" };
+  }
+  return await fetchAppleSourceEvents(conn, ref);
+}
+
 // --- Sync ------------------------------------------------------------------
 
 interface SyncBody {
@@ -720,6 +857,17 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     mapByShift.set(String(m.shift_id), m as Conn);
   }
 
+  // Fresh setup / post-wipe (v120): when the browser sends ZERO
+  // local shifts, stored incremental state (a Google sync token, an
+  // Outlook delta link, an Apple sync token) describes a local state
+  // that no longer exists — fetching with it returns an empty delta
+  // and the sync "succeeds" while importing nothing. Strip the tokens
+  // for this fetch (full pull); step 4 persists the fresh tokens the
+  // provider returns, as usual. The same flag tells the import loop
+  // below that stale pairings repair instead of skipping.
+  const accountEmpty = localShifts.length === 0;
+  const fetchConn = effectiveConnForSync(conn, localShifts.length).conn;
+
   // Provider access + fetch.
   let fetched: Fetched;
   let tokenRow: Conn = conn;
@@ -727,19 +875,19 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   let calendarId = String(conn.calendar_id ?? "");
   try {
     if (provider === "google") {
-      const res = await fetchGoogle(conn);
+      const res = await fetchGoogle(fetchConn);
       fetched = res.fetched;
       tokenRow = res.tokenRow;
       accessToken = (await googleAccessToken(tokenRow)).accessToken;
       calendarId = await ensureGoogleCalendar(accessToken, tokenRow);
     } else if (provider === "outlook") {
-      const res = await fetchOutlook(conn);
+      const res = await fetchOutlook(fetchConn);
       fetched = res.fetched;
       tokenRow = res.tokenRow;
       accessToken = (await outlookAccessToken(tokenRow)).accessToken;
       calendarId = await ensureOutlookCalendar(accessToken, tokenRow);
     } else {
-      fetched = await fetchApple(conn);
+      fetched = await fetchApple(fetchConn);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "sync_failed";
@@ -771,20 +919,21 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
   const syncedShiftIds = new Set<string>(mapByShift.keys());
   const pendingDeletionIds = new Set<string>();
 
-  // Apple import source, if the user picked one. The columns come from
-  // migration 004; until the owner runs supabase-schema-004.sql they are
-  // simply absent from the row, so this is unset and the sync behaves
-  // exactly as before. The dedicated calendar can never be its own
-  // import source (a stale stored value is ignored, not acted on).
-  const normUrl = (u: string) => String(u ?? "").replace(/\/$/, "");
-  const sourceCalendarUrl = provider === "apple"
-    ? String(conn.source_calendar_url ?? "").trim()
-    : "";
-  const sourceCalendarName = provider === "apple"
-    ? String(conn.source_calendar_name ?? "").trim()
-    : "";
-  const hasSource = provider === "apple" && !!sourceCalendarUrl &&
-    normUrl(sourceCalendarUrl) !== normUrl(String(conn.calendar_id ?? ""));
+  // Import sources: the calendar(s) the user picked in the required
+  // source step of the connect flow. Before v120 only Apple had one
+  // (migration 004's single source); v120 generalizes: multi-source
+  // choices live in source_calendars (migration 014), the legacy
+  // single source still works for every provider, and Google/Outlook
+  // import from their picked calendars exactly like Apple. Until the
+  // owner runs the migrations the columns are simply absent from the
+  // row and this is empty — sync behaves as before. The dedicated
+  // CRNA Hub calendar can never be its own import source (it is the
+  // push target; its events are this app's own shifts) — a stale
+  // stored value is ignored, not acted on (see connectionSources).
+  const importSources = connectionSources(conn);
+  const sourceCalendarUrl = importSources.length ? importSources[0].ref : "";
+  const sourceCalendarName = importSources.length ? importSources[0].name : "";
+  const hasSource = importSources.length > 0;
   let imported: {
     sourceCalendarName: string;
     created: number;
@@ -821,6 +970,19 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     suggestions: FacilitySuggestion[];
     skippedSuggested: number;
     newFacilities: string[];
+    // Per-source tallies (v120): what each picked calendar
+    // contributed — seen/parsed/created/updated/duplicates — or the
+    // fetch error. The client states these plainly after every sync,
+    // including a loud zero.
+    perSource: {
+      name: string;
+      seen: number;
+      parsed: number;
+      created: number;
+      updated: number;
+      duplicates: number;
+      error: string | null;
+    }[];
   } | null = null;
 
   const dropMap = async (shiftId: string) => {
@@ -1077,15 +1239,20 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     counts.created++;
   }
 
-  // 2b. Apple import source: pull work shifts from the calendar the
-  // user picked (e.g. "Caleb Work Schedule"). Read-only — nothing here
-  // ever writes to the source calendar, and a source event that
+  // 2b. Import sources: pull work shifts from the calendar(s) the
+  // user picked (e.g. "Caleb Work Schedule"). Read-only — nothing
+  // here ever writes to a source calendar, and a source event that
   // disappears is never treated as a deletion. Runs after the
   // dedicated-calendar loop so its dedupe keys also cover shifts the
-  // dedicated loop just created in this same sync.
+  // dedicated loop just created in this same sync. The decision body
+  // runs once per source: import-map rows carry their own
+  // source_calendar_url, and the dedupe helper reads providerChanges
+  // live, so a shift appearing in two picked calendars still lands
+  // once. Per-source tallies go to imported.perSource so the client
+  // can state exactly what each calendar contributed (v120).
   if (hasSource) {
     imported = {
-      sourceCalendarName: sourceCalendarName || sourceCalendarUrl,
+      sourceCalendarName: importSources.map((s) => s.name || s.ref).join(" + "),
       created: 0,
       updated: 0,
       skipped: 0,
@@ -1102,19 +1269,39 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       suggestions: [],
       skippedSuggested: 0,
       newFacilities: [],
+      perSource: [],
     };
-    let sourceEvents: ProviderEvent[] = [];
-    try {
-      const res = await fetchAppleSourceEvents(conn, sourceCalendarUrl);
-      sourceEvents = res.events;
-      imported.fetchMethod = res.fetchMethod;
-      imported.seen = sourceEvents.length;
-    } catch {
-      // A source read failure must not fail the dedicated-calendar sync
-      // that already succeeded above; it is reported, not hidden.
-      imported.error = "source_fetch_failed";
-    }
-    if (!imported.error) {
+    const suggestedEventsAll: { facility: string; date: string; title: string; location: string }[] = [];
+    for (const srcDef of importSources) {
+      const sourceCalendarUrl = srcDef.ref;
+      const beforeSrc = {
+        parsed: imported.parsed,
+        created: imported.created,
+        updated: imported.updated,
+        duplicates: imported.duplicates,
+      };
+      let sourceEvents: ProviderEvent[] = [];
+      let srcError: string | null = null;
+      try {
+        const res = await fetchSourceEvents(provider, conn, accessToken, srcDef.ref);
+        sourceEvents = res.events;
+        if (!imported.fetchMethod) imported.fetchMethod = res.fetchMethod;
+        imported.seen += sourceEvents.length;
+      } catch {
+        // A source read failure must not fail the dedicated-calendar
+        // sync that already succeeded above; it is reported per
+        // source, not hidden.
+        srcError = "source_fetch_failed";
+      }
+      if (srcError) {
+        imported.perSource.push({
+          name: srcDef.name || srcDef.ref,
+          seen: 0, parsed: 0, created: 0, updated: 0, duplicates: 0,
+          error: srcError,
+        });
+        continue;
+      }
+      {
       const importRows = await getImportMapRows(userId, provider);
       // Migration 005 flags exist only if a returned row carries them
       // (select=* returns every column). With no rows there is nothing
@@ -1242,6 +1429,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
             ? !!findImportDupe(ev.date, parsed.facility, parsed.type)
             : false,
           flagsSupported: hasImportFlags,
+          accountEmpty,
         });
         if (decision === "skip-not-shift") {
           // Not a work shift (personal event, holiday, reminder…):
@@ -1479,11 +1667,29 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
         imported.created++;
         if (!pay) imported.unpriced++;
       }
-      imported.suggestions = groupFacilitySuggestions(suggestedEvents);
+      suggestedEventsAll.push(...suggestedEvents);
+      imported.suggestions = groupFacilitySuggestions(suggestedEventsAll);
       imported.newFacilities = imported.suggestions.map((x) => x.name);
-      // One flush for every import-map write this sync (see the note
-      // above importSaves): deletes first, then the bulk upsert.
+      // One flush for every import-map write this source produced
+      // (see the note above importSaves): deletes first, then the
+      // bulk upsert.
       await flushImportMapWrites(importSaves, importDeletes, userId, provider);
+      }
+      imported.perSource.push({
+        name: srcDef.name || srcDef.ref,
+        seen: sourceEvents.length,
+        parsed: imported.parsed - beforeSrc.parsed,
+        created: imported.created - beforeSrc.created,
+        updated: imported.updated - beforeSrc.updated,
+        duplicates: imported.duplicates - beforeSrc.duplicates,
+        error: null,
+      });
+    }
+    if (
+      imported.perSource.length > 0 &&
+      imported.perSource.every((p) => p.error)
+    ) {
+      imported.error = "source_fetch_failed";
     }
   }
 
@@ -1649,7 +1855,11 @@ async function handleConnectApple(userId: string, body: Record<string, unknown>)
     return err("apple_dav_failed", 502);
   }
   const existing = await getConnection(userId, "apple");
-  await sbUpsert("calendar_connections", {
+  // A (re)connect starts fresh (v120): upsertFreshConnection clears
+  // any surviving sync token / source choice from a previous
+  // connection or a pre-wipe row, so the next sync is a full pull
+  // and the required source picker runs again.
+  await upsertFreshConnection({
     user_id: userId,
     provider: "apple",
     provider_account: appleId,
@@ -1657,7 +1867,7 @@ async function handleConnectApple(userId: string, body: Record<string, unknown>)
     calendar_id: calendarUrl,
     status: "connected",
     auto_delete: existing?.auto_delete === true,
-  }, "user_id,provider");
+  });
   await writeSyncLog(userId, "apple", "connect", {}, null);
   return json({ ok: true, provider: "apple" });
 }
@@ -1739,6 +1949,11 @@ async function handleSetAppleSourceCalendar(
     } catch {
       return err("migration_004_required", 503);
     }
+    await sbPatch(
+      "calendar_connections",
+      `user_id=eq.${encodeURIComponent(userId)}&provider=eq.apple`,
+      { source_calendars: null, source_choice: "none" },
+    ).catch(() => {});
     return json({ ok: true, provider: "apple", sourceCalendarUrl: null, sourceCalendarName: null });
   }
   if (!/^https:\/\/[A-Za-z0-9-]+\.icloud\.com\//.test(calendarUrl)) {
@@ -1762,6 +1977,14 @@ async function handleSetAppleSourceCalendar(
       // rejected. Say so plainly instead of a generic write failure.
       return err("migration_004_required", 503);
     }
+    await sbPatch(
+      "calendar_connections",
+      `user_id=eq.${encodeURIComponent(userId)}&provider=eq.apple`,
+      {
+        source_calendars: [{ ref: verified, name: calendarName || null }],
+        source_choice: "chosen",
+      },
+    ).catch(() => {});
     return json({
       ok: true,
       provider: "apple",
@@ -1774,6 +1997,174 @@ async function handleSetAppleSourceCalendar(
     if (msg === "apple_calendar_not_found") return err("apple_calendar_not_found", 400);
     return err("apple_dav_failed", 502);
   }
+}
+
+// List the account's calendars for ANY provider (v120) — the data
+// behind the required source picker. Unified shape:
+// { ref, name, isDedicated } — ref is the provider's own identifier
+// (CalDAV URL for Apple, calendar id for Google/Outlook); the
+// dedicated CRNA Hub calendar is flagged so the client can label it
+// "the app writes here — not a source" and leave it unticked.
+interface SourceCalendarOption {
+  ref: string;
+  name: string;
+  isDedicated: boolean;
+}
+
+async function listProviderCalendars(
+  userId: string,
+  provider: Provider,
+): Promise<SourceCalendarOption[]> {
+  const conn = await getConnection(userId, provider);
+  if (!conn || conn.status !== "connected") throw new Error("not_connected");
+  const dedicated = String(conn.calendar_id ?? "").replace(/\/$/, "");
+  if (provider === "apple") {
+    const appleId = String(conn.provider_account ?? "");
+    const password = await decryptSecret(String(conn.encrypted_password ?? ""));
+    const { calendars } = await discoverAppleCalendars(appleId, password);
+    return calendars.map((c) => ({
+      ref: c.url,
+      name: c.name ?? "Unnamed calendar",
+      isDedicated: c.url.replace(/\/$/, "") === dedicated,
+    }));
+  }
+  if (provider === "google") {
+    const { accessToken } = await googleAccessToken(conn);
+    const r = await googleFetch(
+      `${GOOGLE_API}/users/me/calendarList?maxResults=250`,
+      accessToken,
+    );
+    if (!r.ok) throw new Error("google_fetch_failed");
+    const data = await r.json();
+    return (data.items ?? []).map((c: Record<string, unknown>) => ({
+      ref: String(c.id ?? ""),
+      name: String(c.summary ?? c.id ?? "Unnamed calendar"),
+      isDedicated: String(c.id ?? "") === String(conn.calendar_id ?? ""),
+    })).filter((c: SourceCalendarOption) => !!c.ref);
+  }
+  const { accessToken } = await outlookAccessToken(conn);
+  const r = await graphFetch(
+    `${GRAPH_API}/me/calendars?$select=id,name&$top=200`,
+    accessToken,
+  );
+  if (!r.ok) throw new Error("outlook_fetch_failed");
+  const data = await r.json();
+  return (data.value ?? []).map((c: Record<string, unknown>) => ({
+    ref: String(c.id ?? ""),
+    name: String(c.name ?? c.id ?? "Unnamed calendar"),
+    isDedicated: String(c.id ?? "") === String(conn.calendar_id ?? ""),
+  })).filter((c: SourceCalendarOption) => !!c.ref);
+}
+
+async function handleCalendars(userId: string, provider: Provider): Promise<Response> {
+  try {
+    const calendars = await listProviderCalendars(userId, provider);
+    return json({ ok: true, provider, calendars });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (msg === "not_connected") return err("not_connected", 409);
+    if (msg === "apple_auth_failed" || msg.endsWith("refresh_failed")) {
+      return err("needs_reauth", 401);
+    }
+    return err("calendar_list_failed", 502);
+  }
+}
+
+// Set (or explicitly decline) the import-source calendar(s) for any
+// provider (v120) — the save behind the required picker. Every ref
+// is verified against the account's real calendar list before
+// anything is stored, and the dedicated CRNA Hub calendar can never
+// become a source. The choice is stored in migration 014's
+// source_calendars/source_choice and mirrored into the legacy single
+// source columns (first entry) so older code paths keep working.
+// choice "none" is a real, remembered answer ("app calendar only"),
+// distinct from never having been asked.
+async function handleSetSourceCalendars(
+  userId: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const provider = body.provider;
+  if (!isProvider(provider)) return err("unknown_provider", 400);
+  const conn = await getConnection(userId, provider);
+  if (!conn || conn.status !== "connected") return err("not_connected", 409);
+  const choice = body.choice === "none" ? "none" : "chosen";
+  let calendars: { ref: string; name: string }[] = [];
+  if (choice === "chosen") {
+    const raw = Array.isArray(body.calendars) ? body.calendars : [];
+    calendars = raw
+      .map((c) => {
+        const o = (c ?? {}) as Record<string, unknown>;
+        return {
+          ref: String(o.ref ?? o.url ?? o.id ?? "").trim(),
+          name: String(o.name ?? "").trim(),
+        };
+      })
+      .filter((c) => !!c.ref);
+    // The picker requires a tick: "chosen" with nothing ticked is a
+    // client bug, never a silent empty source.
+    if (!calendars.length) return err("source_calendar_required", 400);
+    let options: SourceCalendarOption[];
+    try {
+      options = await listProviderCalendars(userId, provider);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg === "apple_auth_failed" || msg.endsWith("refresh_failed")) {
+        return err("needs_reauth", 401);
+      }
+      return err("calendar_list_failed", 502);
+    }
+    const byRef = new Map(options.map((o) => [o.ref.replace(/\/$/, ""), o]));
+    const verified: { ref: string; name: string }[] = [];
+    for (const c of calendars) {
+      const opt = byRef.get(c.ref.replace(/\/$/, ""));
+      if (!opt) return err("source_calendar_not_found", 400);
+      if (opt.isDedicated) return err("source_is_dedicated_calendar", 400);
+      verified.push({ ref: opt.ref, name: c.name || opt.name });
+    }
+    calendars = verified;
+  }
+  const first = calendars[0] ?? null;
+  const full = {
+    source_calendars: calendars.length ? calendars : null,
+    source_choice: choice,
+    source_calendar_url: first ? first.ref : null,
+    source_calendar_name: first ? first.name : null,
+  };
+  try {
+    await sbPatch(
+      "calendar_connections",
+      `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
+      full,
+    );
+  } catch {
+    // Migration 014 not run yet: a single Apple source (or clearing)
+    // still fits the legacy migration-004 columns. Anything richer
+    // says so plainly instead of failing silently.
+    if (provider === "apple" && calendars.length <= 1) {
+      try {
+        await sbPatch(
+          "calendar_connections",
+          `user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`,
+          {
+            source_calendar_url: full.source_calendar_url,
+            source_calendar_name: full.source_calendar_name,
+          },
+        );
+      } catch {
+        return err("migration_004_required", 503);
+      }
+    } else {
+      return err("migration_014_required", 503);
+    }
+  }
+  return json({
+    ok: true,
+    provider,
+    sourceCalendars: calendars,
+    sourceChoice: choice,
+    sourceCalendarUrl: full.source_calendar_url,
+    sourceCalendarName: full.source_calendar_name,
+  });
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -1814,12 +2205,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
             lastSyncedAt: r.last_synced_at ?? null,
             sourceCalendarUrl: (r.source_calendar_url as string | null) ?? null,
             sourceCalendarName: (r.source_calendar_name as string | null) ?? null,
+            sourceCalendars: Array.isArray(r.source_calendars)
+              ? r.source_calendars
+              : null,
+            sourceChoice: (r.source_choice as string | null) ?? null,
           })),
         });
       }
       if (action === "apple-calendars") {
         return await handleAppleCalendars(userId);
       }
+
       if (action === "log") {
         const rows = await sbGet(
           "sync_log",
@@ -1839,6 +2235,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
       if (body.action === "set-apple-source-calendar") {
         return await handleSetAppleSourceCalendar(userId, body);
+      }
+      if (body.action === "set-source-calendars") {
+        return await handleSetSourceCalendars(userId, body);
+      }
+      if (body.action === "calendars" && isProvider(body.provider)) {
+        return await handleCalendars(userId, body.provider);
       }
       if (body.action === "disconnect" && isProvider(body.provider)) {
         return await handleDisconnect(userId, body.provider);
@@ -1899,9 +2301,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
         // row is dropped after a successful delete (the shift is
         // already deleted locally, and its tombstone flags any
         // surviving row deleted_locally at the next sync anyway).
-        // Only the Apple import source exists today: Google/Outlook
-        // connections sync only the app-owned calendar and pair no
-        // source events, so there is nothing to delete for them.
+        // The delete-from-source choice is Apple-only today: no
+        // Google/Outlook source-event delete path is built, so there
+        // is nothing to delete for them here.
         if (body.provider !== "apple") return err("source_delete_unsupported", 400);
         const conn = await getConnection(userId, body.provider);
         if (!conn) return err("not_connected", 400);

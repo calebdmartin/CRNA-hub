@@ -28,6 +28,7 @@ import {
   chunkArray,
   decideImportEvent,
   decideStaleImportRow,
+  effectiveConnForSync,
   findFallbackLocalShift,
   groupFacilitySuggestions,
   heldEventBucket,
@@ -793,4 +794,59 @@ Deno.test("synthetic other user: invented facilities and rates price end-to-end,
   // The same titles with NO saved rule price nothing at all.
   assertEquals(parseWorkShiftEvent("RGH 8", "", "2026-11-09", [])?.pay, "");
   assertEquals(parseWorkShiftEvent("RGH 8", "", "2026-11-09", [])?.facilityKnown, false);
+});
+
+Deno.test("v120: empty local set makes a stale pairing repair, never skip — even without migration-005 flags", () => {
+  // Caleb's Nov 11, 2026 scenario at the decision level: the wipe
+  // erased every local shift; a stale import row survives. The sync
+  // must repair (re-create), not skip-legacy/skip-deleted.
+  assertEquals(
+    decideStaleImportRow({ deletedLocally: false, tombstoned: false, keyExistsLocally: false, flagsSupported: false, accountEmpty: true }),
+    "repair-create",
+  );
+  assertEquals(
+    decideStaleImportRow({ deletedLocally: false, tombstoned: false, keyExistsLocally: true, flagsSupported: false, accountEmpty: true }),
+    "repair-pair",
+  );
+  // Durable deletion evidence still wins on an empty account.
+  assertEquals(
+    decideStaleImportRow({ deletedLocally: true, tombstoned: false, keyExistsLocally: false, flagsSupported: false, accountEmpty: true }),
+    "skip-deleted",
+  );
+  assertEquals(
+    decideStaleImportRow({ deletedLocally: false, tombstoned: true, keyExistsLocally: false, flagsSupported: true, accountEmpty: true }),
+    "skip-deleted",
+  );
+  // Non-empty accounts keep the legacy behavior exactly.
+  assertEquals(
+    decideStaleImportRow({ deletedLocally: false, tombstoned: false, keyExistsLocally: false, flagsSupported: false }),
+    "skip-legacy",
+  );
+  // End-to-end through decideImportEvent.
+  assertEquals(
+    decideImportEvent({ parsed: true, localExists: false, importRow: { deleted_locally: false }, tombstoned: false, keyExistsLocally: false, flagsSupported: false, accountEmpty: true }),
+    "repair-create",
+  );
+  assertEquals(
+    decideImportEvent({ parsed: true, localExists: false, importRow: { deleted_locally: true }, tombstoned: false, keyExistsLocally: false, flagsSupported: true, accountEmpty: true }),
+    "skip-deleted",
+  );
+});
+
+Deno.test("v120: a sync with zero local shifts fetches with a full-pull connection (tokens stripped)", () => {
+  const conn = { provider: "google", sync_token: "tok-2", delta_link: "dl-9", calendar_id: "cal-1", refresh_token_enc: "enc" };
+  const full = effectiveConnForSync(conn, 0);
+  assertEquals(full.fullPull, true);
+  assertEquals(full.conn.sync_token, null);
+  assertEquals(full.conn.delta_link, null);
+  // Nothing else about the connection changes: credentials, the
+  // dedicated calendar and the provider all survive.
+  assertEquals(full.conn.calendar_id, "cal-1");
+  assertEquals(full.conn.refresh_token_enc, "enc");
+  // The stored row object itself is not mutated.
+  assertEquals(conn.sync_token, "tok-2");
+  // With any local shift present the connection is used as-is.
+  const inc = effectiveConnForSync(conn, 3);
+  assertEquals(inc.fullPull, false);
+  assertEquals(inc.conn.sync_token, "tok-2");
 });

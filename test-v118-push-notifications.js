@@ -111,7 +111,7 @@ const VAPID_PUB = (() => {
 
 (async () => {
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-  t('sw: cache bumped to v118', swSrc.includes("crna-hub-shell-v119"));
+  t('sw: cache bumped to v118', swSrc.includes("crna-hub-shell-v120"));
   t('sw: push handler shows the notification', swSrc.includes("addEventListener('push'") && swSrc.includes('showNotification'));
   t('sw: notificationclick deep-links', swSrc.includes("addEventListener('notificationclick'") && swSrc.includes('navigate'));
   const fnSrc = fs.readFileSync(R + 'api/fn.js', 'utf8');
@@ -135,8 +135,11 @@ const VAPID_PUB = (() => {
   w.run(`actions('push-type-toggle', 'cert')`);
   t('types: toggle cert off persists', w.run(`pushTypeOn('cert')`) === false && w.run(`db.settings.pushTypes.cert`) === false);
   t('types: other types untouched by the toggle', w.run(`pushTypeOn('qgenda')`) === true);
-  // enabled state renders toggles + test + turn off
-  w.run(`pushLocalSet({ enabled: true, subId: 'push-x', endpoint: 'https://push.example.com/sub/device-1' }); pushStatusMsg = '';`);
+  // enabled state renders toggles + test + turn off (v120: the panel
+  // shows "on" only with a server-confirmed subscription — here the
+  // confirmed state is set directly; the reconcile flow itself is
+  // pinned in test-v120-push-fixes.js)
+  w.run(`pushLocalSet({ enabled: true, subId: 'push-x', endpoint: 'https://push.example.com/sub/device-1' }); pushStatusMsg = ''; pushServerCheck = { state: 'on', subId: 'push-x', at: Date.now() };`);
   panel = w.run(`notificationsPanelHTML()`);
   t('panel: enabled state shows per-type toggles', panel.includes('data-action="push-type-toggle"') && panel.includes('Certification &amp; license expirations') && panel.includes('QGenda link needs a refresh') && panel.includes('Portal check needs your sign-in') && panel.includes('Calendar sync needs reconnecting') && panel.includes('Empty calendar'));
   t('panel: test notification button', panel.includes('data-action="push-test"'));
@@ -152,18 +155,18 @@ const VAPID_PUB = (() => {
   w.run(`db = empty(); db.settings.scheduleName = 'Caleb Martin'; persist();
     cloudSession = { user_id: 'u-1', access_token: 'tok' };
     window.__sbPosted = [];
-    sbReq = async (p, m, b) => { window.__sbPosted.push({ p, m, b }); return {}; };
+    sbReq = async (p, m, b) => { window.__sbPosted.push({ p, m, b }); if (m === 'GET') { const post = window.__sbPosted.filter(x => x.m === 'POST').pop(); return post ? [{ id: post.b.id, endpoint: post.b.endpoint }] : []; } return {}; };
     liveSyncPost = async (fn, body) => ({ ok: true, configured: true, vapidPublicKey: '${VAPID_PUB}' });`);
   await w.run(`pushEnable()`);
   await drain();
-  const posts1 = w.run(`window.__sbPosted.filter(x => x.p.includes('push_subscriptions'))`);
+  const posts1 = w.run(`window.__sbPosted.filter(x => x.p.includes('push_subscriptions') && x.m === 'POST')`);
   t('enable: one subscription row registered', posts1.length === 1, J(posts1));
   t('enable: row carries endpoint + keys + tz', posts1.length === 1 && posts1[0].b.endpoint === 'https://push.example.com/sub/device-1' && posts1[0].b.keys.p256dh === 'BPfake' && typeof posts1[0].b.tz === 'string');
   t('enable: local device state marked on', w.run(`pushLocalState().enabled`) === true);
   const firstId = posts1.length ? posts1[0].b.id : '';
   await w.run(`pushEnable()`);
   await drain();
-  const posts2 = w.run(`window.__sbPosted.filter(x => x.p.includes('push_subscriptions'))`);
+  const posts2 = w.run(`window.__sbPosted.filter(x => x.p.includes('push_subscriptions') && x.m === 'POST')`);
   t('enable: re-enabling upserts the SAME row id (one per device)', posts2.length === 2 && posts2[1].b.id === firstId && firstId !== '', J(posts2.map((x) => x.b.id)));
   // test notification goes through the real send path (function call)
   let testFn = null;

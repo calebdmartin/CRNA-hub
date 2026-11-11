@@ -156,7 +156,7 @@ function segments(html) {
   const conn = segments(sandbox.__conn);
   t('connected: live sync panel rests collapsed, provider summary inside',
     sandbox.__conn.includes('<details class="panel collapse-panel" id="live-sync-panel">') &&
-    conn.live.includes('Apple Calendar · Connected · Last sync:') &&
+    conn.live.includes('Apple Calendar · Connected · Pulling from: Caleb Work Schedule · Last sync:') &&
     conn.live.includes('Use a different calendar service') &&
     !conn.live.includes('Connect Google Calendar'));
   t('connected: upload panel rests collapsed too, controls intact inside',
@@ -205,7 +205,7 @@ function segments(html) {
     sandbox.__step2.includes('<details class="panel collapse-panel" id="live-sync-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v119'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v120'));
 
   console.log(failures === 0 ? 'sync-panels-split test done: all passed' : 'sync-panels-split test done: FAILURES=' + failures);
 })();

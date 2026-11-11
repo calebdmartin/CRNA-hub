@@ -30,6 +30,7 @@ import {
   sbGet,
   sbInsert,
   sbUpsert,
+  upsertFreshConnection,
 } from "../_shared/calendar.ts";
 import {
   ensureGoogleCalendar,
@@ -149,7 +150,11 @@ async function handleCallback(url: URL): Promise<Response> {
   if (existing?.calendar_id) conn.calendar_id = existing.calendar_id;
   const { accessToken } = await googleAccessToken(conn);
   conn.calendar_id = await ensureGoogleCalendar(accessToken, conn);
-  await sbUpsert("calendar_connections", conn, "user_id,provider");
+  // A (re)connect starts fresh (v120): clear any surviving sync
+  // token / delta link / source choice from a previous connection or
+  // a pre-wipe row, so the next sync is a full pull and the required
+  // source picker runs again.
+  await upsertFreshConnection(conn);
   const dest = back("?calendar_connected=google");
   return dest ? Response.redirect(dest, 302) : successPage("Google Calendar");
 }

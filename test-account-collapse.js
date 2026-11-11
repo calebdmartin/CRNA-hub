@@ -227,7 +227,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
   `);
   t('connected provider collapses to provider · Connected · last sync, controls inside',
     sandbox.__panelChosen.includes('<details class="collapse-sub sync-provider">') &&
-    sandbox.__panelChosen.includes('Apple Calendar · Connected · Last sync:') &&
+    sandbox.__panelChosen.includes('Apple Calendar · Connected · Pulling from: Caleb Work Schedule · Last sync:') &&
     sandbox.__panelChosen.includes('Sync now') &&
     sandbox.__panelChosen.includes('Disconnect'));
   t('unchosen providers’ connect prompts hidden once one is chosen',
@@ -295,7 +295,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     sandbox.__schedBusy.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v119'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v120'));
 
   console.log(failures === 0 ? 'account-collapse test done: all passed' : 'account-collapse test done: FAILURES=' + failures);
 })();

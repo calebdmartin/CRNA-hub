@@ -170,13 +170,22 @@ const HOLZER = `{ id: 'f-holzer', name: 'Holzer', aliases: '', address: '', rate
     !sandbox.__panel.includes('“CRNA Hub” calendar'));
   t('panel names no preview stand-in anywhere (Nov 6 sweep)',
     !sandbox.__panel.includes('Preview stand-in') && !sandbox.__panel.includes('preview-standin'));
-  t('Apple card has the work-calendar picker, not an "import source" picker',
-    sandbox.__appleCard.includes('Your work calendar') &&
-    sandbox.__appleCard.includes('Save work calendar &amp; sync now') &&
+  t('Apple card shows Pulling from + Change once a work calendar is picked, not an "import source" picker (v120)',
+    sandbox.__appleCard.includes('Pulling from: Caleb Work Schedule') &&
+    sandbox.__appleCard.includes('data-action="live-source-change"') &&
     !sandbox.__appleCard.includes('Import shifts from'));
-  t('work-calendar picker lists the work calendar and excludes the app-owned one',
-    sandbox.__appleCard.includes('Caleb Work Schedule') &&
-    !sandbox.__appleCard.includes('<option value="cal-app"'));
+  run(`
+    liveSyncCalendarsByProvider = { apple: liveSyncAppleCalendars.map((c) => ({ ref: c.url, name: c.name, isDedicated: c.isDedicated })) };
+    liveSyncSourceEdit = { apple: true };
+    globalThis.__appleCardEdit = liveSyncProviderCard('apple');
+    liveSyncSourceEdit = {};
+  `);
+  t('work-calendar picker (via Change) lists the work calendar and keeps the app-owned one untickable (v120)',
+    sandbox.__appleCardEdit.includes('Save &amp; sync now') &&
+    sandbox.__appleCardEdit.includes('Caleb Work Schedule') &&
+    sandbox.__appleCardEdit.includes('the app writes here — not a source') &&
+    sandbox.__appleCardEdit.includes('type="checkbox" disabled') &&
+    !sandbox.__appleCardEdit.includes('value="cal-app"'));
   t('connected card shows only compact status labels: last sync + auto-delete on/off',
     sandbox.__appleCard.includes('Last sync:') && sandbox.__appleCard.includes('Auto-delete: OFF') &&
     !sandbox.__appleCard.includes('Saved shifts') && !sandbox.__appleCard.includes('never written to'));

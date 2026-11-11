@@ -14,7 +14,11 @@
 //   credential/calendar tables from migrations 001–006, plus the
 //   record tables migrations 007–012 added for full cloud sync —
 //   sbReq routes those sync calls through this proxy too, and the
-//   testing start-over wipe deletes through it), and
+//   testing start-over wipe deletes through it — plus the push tables
+//   migration 013 added: push_subscriptions, which the app writes when
+//   a device turns push on, and push_sent_log, which the client never
+//   reads or writes in normal use but the start-over wipe deletes
+//   through this same path), and
 //   /storage/v1/object/certification-documents/<user-path> for the one
 //   private certification bucket. Everything else is rejected with 400.
 // - Only the project's PUBLISHABLE key is used (the same public client key
@@ -48,6 +52,8 @@ const REST_TABLES = new Set([
   'pay_stubs',
   'vehicles',
   'user_settings',
+  'push_subscriptions',
+  'push_sent_log',
 ]);
 
 const METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);

@@ -55,7 +55,7 @@ const SUPABASE_URL = 'https://xgoghgihfhtnyevgapyp.supabase.co';
 const PUBLISHABLE_KEY = 'sb_publishable_jA1PXQMusABD53uoqtoBBg_mTNVDgDX';
 
 const FUNCTIONS = {
-  'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'disconnect', 'set-auto-delete', 'resolve-deletion', 'delete-source-event']),
+  'sync-calendar': new Set(['config', 'status', 'log', 'apple-calendars', 'calendars', 'sync', 'connect-apple', 'set-apple-source-calendar', 'set-source-calendars', 'disconnect', 'set-auto-delete', 'resolve-deletion', 'delete-source-event']),
   'google-auth': new Set(['start']),
   'outlook-auth': new Set(['start']),
   // Portal connections (Credentials tab): NBCRNA public verification,

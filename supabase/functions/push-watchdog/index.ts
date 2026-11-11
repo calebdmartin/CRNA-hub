@@ -139,16 +139,29 @@ function nextMonthOf(todayStr: string) {
 }
 
 // Sends one notification to all of a user's subscriptions, pruning
-// subscriptions the push service says are gone. Returns true when at
-// least one push service accepted a message.
+// subscriptions the push service says are gone (404/410 — the prune
+// itself is unchanged). Returns the overall outcome AND one result
+// per subscription ({ id, status, pruned, delivered }) so callers —
+// above all the `test` action — can tell the user exactly what
+// happened to THEIR device instead of a bare yes/no: a pruned
+// subscription used to vanish silently, leaving the app claiming
+// push was on for a device the push service no longer knows.
+interface DeliverResult {
+  id: string;
+  status: number | null; // push-service HTTP status; null = request threw
+  pruned: boolean;
+  delivered: boolean;
+}
 async function deliver(
   subs: SubRow[],
   note: { title: string; body: string; url: string; triggerKey: string },
   vapid: { publicKey: string; privateKey: string; subject: string },
   appBase: string,
-): Promise<boolean> {
+): Promise<{ delivered: boolean; results: DeliverResult[] }> {
   let delivered = false;
+  const results: DeliverResult[] = [];
   for (const sub of subs) {
+    const r: DeliverResult = { id: String(sub.id), status: null, pruned: false, delivered: false };
     try {
       const status = await sendWebPush(sub, {
         title: note.title,
@@ -156,17 +169,21 @@ async function deliver(
         url: appBase + note.url,
         tag: note.triggerKey,
       }, vapid);
+      r.status = status;
       if (status === 404 || status === 410) {
+        r.pruned = true;
         await sbDelete(
           "push_subscriptions",
           "id=eq." + encodeURIComponent(sub.id),
         ).catch(() => {});
       } else if (status >= 200 && status < 300) {
+        r.delivered = true;
         delivered = true;
       }
     } catch (_e) { /* one bad endpoint never blocks the others */ }
+    results.push(r);
   }
-  return delivered;
+  return { delivered, results };
 }
 
 async function evaluateOneUser(
@@ -229,7 +246,7 @@ async function evaluateOneUser(
     } catch (_e) {
       continue; // already logged by an earlier/overlapping run
     }
-    const ok = await deliver(subs, note, vapid, appBase);
+    const { delivered: ok } = await deliver(subs, note, vapid, appBase);
     if (ok) {
       sent++;
     } else {
@@ -280,13 +297,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return err("push_not_enabled", 503);
     }
     if (!subs.length) return err("no_subscription", 400);
-    const ok = await deliver(subs, {
+    const { delivered: ok, results } = await deliver(subs, {
       title: "CRNA Hub",
       body: "Test notification — push is working. We'll only message you when something needs your attention.",
       url: "?go=account",
       triggerKey: "test|" + Date.now(),
     }, vapid, appBase);
-    return json({ ok: true, delivered: ok, subscriptions: subs.length });
+    // Per-subscription results: the client matches its own device by
+    // id and can say precisely what happened — delivered, rejected
+    // with a status, or pruned (404/410: the push service says this
+    // device's subscription is gone).
+    return json({ ok: true, delivered: ok, subscriptions: subs.length, results });
   }
 
   if (action === "evaluate") {

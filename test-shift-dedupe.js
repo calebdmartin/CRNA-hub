@@ -82,7 +82,7 @@ t('wiring: approvals + CSV + contract + manual add enter via addShiftDeduped',
 t('wiring: cloud merge collapses + tombstones absorbed ids; boot runs the pass',
   appSrc.includes("healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }") &&
   appSrc.includes('const bootDedupe=dedupeShiftsInPlace()'));
-t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v119'));
+t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v120'));
 
 // ---------- Setup: Holzer saved as a facility ----------
 run(`
