@@ -458,7 +458,23 @@ function paystubFacilityKey(raw){const f=raw?facilityByNameOrAlias(raw):null;ret
 function paystubShiftClaimTier(stub,x){
   const fk=shiftFacilityKeyOf(x);
   const sf=String(stub.facility||'').trim();
-  if(sf)return paystubFacilityKey(sf)===fk?1:0;
+  if(sf){
+    // Identity before strings (Nov 10, 2026, v111): when both the
+    // stub's facility text and the shift's facility text resolve
+    // to a saved facility — exactly OR by the one tolerant variant
+    // rule — the claim is decided by facility identity, so a stub
+    // naming "Holzer" claims the shifts of the facility saved as
+    // "HOLZ" (live bug: the keys "holzer"/"holz" never equalled,
+    // the tier came back 0, and every paycheck for the period
+    // reported "no shifts recorded"). Resolved to two DIFFERENT
+    // facilities is a hard no — a stub never claims another
+    // facility's shifts, which keeps two payers at one hospital
+    // distinct. Unresolved text keeps the legacy key comparison.
+    const sFac=facilityByNameOrVariant(sf);
+    const xFac=x&&x.facility?facilityByNameOrVariant(x.facility):null;
+    if(sFac&&xFac)return sFac.id===xFac.id?1:0;
+    return paystubFacilityKey(sf)===fk?1:0;
+  }
   const ak=normFacilityName(stub.agency||'').replace(/\s+/g,' ');
   if(ak&&fk&&(ak===fk||(ak.length>=3&&fk.length>=3&&(ak.includes(fk)||fk.includes(ak)))))return 2;
   return 3;
@@ -504,7 +520,7 @@ function paystubShiftClaimTier(stub,x){
 function paystubNameKey(v){return String(v||'').trim().toLowerCase().replace(/\s+/g,' ')}
 function paystubFacilityOf(rec){
   if(!rec)return null;
-  try{return facilityByNameOrAlias(String(rec.facility||'').trim())||facilityByNameOrAlias(String(rec.agency||'').trim())||null}catch(e){return null}
+  try{return facilityByNameOrAlias(String(rec.facility||'').trim())||facilityByNameOrVariant(String(rec.facility||'').trim())||facilityByNameOrAlias(String(rec.agency||'').trim())||facilityByNameOrVariant(String(rec.agency||'').trim())||null}catch(e){return null}
 }
 function paystubPaydaysCongruent(a,b){
   const e=String(a.payDate)<=String(b.payDate)?a:b,l=e===a?b:a;
@@ -641,6 +657,29 @@ function shiftPayIsDerived(f,x){
 function repairShiftPaysForFacility(f){
   const out={priced:0,updated:0};
   if(!f)return out;
+  // Misread-flat heal (Nov 10, 2026, v111): a card saved by the
+  // bad parse can carry the paid-hours figure AS a flat day rate
+  // (rate8 '8.5' beside paidHours8 '8.5'). The flat outranks the
+  // hourly rule in every pricing path, so the shifts below would
+  // restamp at $8.50 forever — the parse-side screen can only
+  // stop NEW cards. The signature is exact: the flat's value IS
+  // a paid-hours figure on this card (the facility's paidHours8
+  // or a day code's own paid-hours answer) AND it is below the
+  // hourly rate — no genuine per-shift flat looks like that.
+  // Clearing exactly that signature lets the corrected rules
+  // (hourly x paid hours) price the derived stamps below; a
+  // user-typed per-shift total is a stored shift amount, not a
+  // card field, and is never touched here.
+  {
+    const phNums=new Set();
+    const fph=rateOrNull(f.paidHours8);if(fph!=null)phNums.add(fph);
+    for(const d of Object.values(facilityCodeDefs(f)||{})){const dp=d?rateOrNull(d.paidHours):null;if(dp!=null)phNums.add(dp)}
+    const hrF=rateOrNull(f.hourlyRate);
+    if(phNums.size)for(const k of ['rate8','rate10','rate12']){
+      const v=rateOrNull(f[k]);
+      if(v!=null&&phNums.has(v)&&(hrF==null||v<hrF)){f[k]='';f.updatedAt=new Date().toISOString()}
+    }
+  }
   for(const x of (db.shifts||[])){
     if(!x||!x.facility)continue;
     const match=facilityByNameOrAlias(x.facility);if(!match||match.id!==f.id)continue;
@@ -2508,6 +2547,22 @@ function facilityAliases(f){return String((f&&f.aliases)||'').split(',').map(s=>
 // all — the short name on his shifts vs the full name on the record.
 function facilityNameKey(v){return String(v||'').toLowerCase().replace(/[’‘]/g,"'").replace(/'/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim()}
 function facilityByNameOrAlias(name){const k=facilityNameKey(name);if(!k)return null;return (db.facilities||[]).find(f=>facilityNameKey(f.name)===k||facilityAliases(f).some(a=>facilityNameKey(a)===k))||null}
+// Tolerant identity (Nov 10, 2026, v111): exact name/alias first;
+// otherwise, when EXACTLY ONE saved facility is a close name
+// variant of the text (the prefix rule healFacilityIdentities
+// uses — "HOLZ" the feed's short code vs "Holzer" the full name
+// a pay stub states), that facility. Ambiguity resolves to null:
+// two candidate facilities means the name is genuinely someone
+// else's, and guessing would put money on the wrong facility.
+// Records that NAME a facility (pay stubs above all) resolve
+// through this, so a payer's schedule claims its facility's
+// shifts whichever of the facility's names the document used.
+function facilityByNameOrVariant(name){
+  const exact=facilityByNameOrAlias(name);if(exact)return exact;
+  if(!String(name||'').trim())return null;
+  const cands=(db.facilities||[]).filter(f=>f&&facilityNameVariantOf(f.name,name)||(f&&facilityAliases(f).some(a=>facilityNameVariantOf(a,name))));
+  return cands.length===1?cands[0]:null;
+}
 // Resolution for a record that names a facility (a shift or a mileage
 // trip): a stored facility link wins when present, then name/alias.
 function facilityForRecord(rec){if(rec&&rec.facilityId){const byId=(db.facilities||[]).find(f=>f.id===rec.facilityId);if(byId)return byId}return facilityByNameOrAlias(rec&&rec.facility)}
@@ -2981,7 +3036,7 @@ function parseWeekendDaysText(text){
   let days=null;
   const defM=t.match(/weekends?\s+(?:is|are|means?|counts? as)\s+([^.;\n]{3,60})/);
   if(defM){const found=weekendDayNums(defM[1]);if(found.length)days=found}
-  const incM=t.match(/weekends?\s+(?:also\s+)?(?:includes?|including|starts?\s+on)\s+([^.;\n]{3,40})/);
+  const incM=t.match(/weekends?\s+(?:only\s+)?(?:also\s+)?(?:includes?|including|starts?\s+on)\s+([^.;\n]{3,40})/);
   if(incM){const found=weekendDayNums(incM[1]);if(found.length)days=[...new Set([...(days||[0,6]),...found])]}
   const wdM=t.match(/\b(sundays?|saturdays?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|sun|sat|mon|tue|tues|wed|thu|thur|thurs|fri)\b[^.;\n]{0,24}?\b(?:is|counts? as|treated as|considered)\s+a\s+weekday/);
   if(wdM){const n=WEEKDAY_ALIASES[wdM[1]];if(n!=null){days=(days||[0,6]).filter(d=>d!==n);if(!days.length)days=null}}
@@ -3031,7 +3086,18 @@ function describeCallAmounts(text,n){
 // facility's codes, names or amounts: the code list is whatever
 // the schedule being clarified actually carries.
 function describeCodeBlocks(text,codes){
-  const t=String(text||'');
+  // Decimals are not clause boundaries (Nov 10, 2026, v111):
+  // cutting "paid for 8.5 hours" at the '.' orphaned the "5
+  // hours" tail onto whatever code came next and left the
+  // paid-hours figure unreadable as a unit — live, the number
+  // resurfaced as an $8.50 flat rate on the 8-hour code. Digit
+  // '.' digit is protected while clauses are cut and restored
+  // in addChunk. A "/" set off by spaces is a clause boundary
+  // too: Caleb writes his statements separated by " / " on one
+  // line, and without the cut a carry-forward clause ("Weekday=
+  // $4,800 weekend $4,200") sweeps into the NEXT named code's
+  // chunk and donates its amounts to it.
+  const t=String(text||'').replace(/(\d)\.(\d)/g,'$1\u0001$2');
   const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const escRx=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const forms=[];
@@ -3052,11 +3118,13 @@ function describeCodeBlocks(text,codes){
   const scopeRx=/\b(weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i;
   const out={};
   const addChunk=(code,chunk,after)=>{
+    chunk=String(chunk||'').replace(/\u0001/g,'.');
+    if(after!=null)after=String(after).replace(/\u0001/g,'.');
     const e=out[code]||(out[code]={phrase:'',amounts:[],text:''});
-    e.text=(e.text?e.text+' ':'')+String(chunk||'');
+    e.text=(e.text?e.text+' ':'')+chunk;
     if(!e.phrase){
       let p=String(after!=null?after:chunk||'').replace(/^[\s=:\-–—.()]+/,'').replace(/^(?:is|means|called|pays?|at)\s+/i,'');
-      p=p.split(/\b(?:weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i)[0].split(/[.;\n$,]/)[0].trim().replace(/\s+/g,' ').replace(/[\s\-–—:]+$/,'');
+      p=p.split(/\b(?:weekends?|wknds?|weekdays?|wkdys?|weeknights?|wknights?)\b/i)[0].split(/[.;\n$,]/)[0].trim().replace(/\s+/g,' ').replace(/[\s\-–—:\/]+$/,'');
       if(p)e.phrase=p;
     }
     if(!amountsHourly(chunk)){
@@ -3067,13 +3135,30 @@ function describeCodeBlocks(text,codes){
     }
   };
   const amountsHourly=chunk=>/\b(?:hourly|per\s+hour|an\s+hour|\/\s*h(?:ou)?r\b)/i.test(String(chunk||''));
-  let current=null;
-  for(const seg of t.split(/[.;\n;]+/)){
-    if(!seg.trim())continue;
+  const segCodes=seg=>{
     const ms=[];
     for(const f of forms){let m;f.rx.lastIndex=0;while((m=f.rx.exec(seg))!==null){ms.push({code:f.code,start:m.index,end:m.index+m[0].length,len:m[0].length});if(m.index===f.rx.lastIndex)f.rx.lastIndex++}}
     ms.sort((a,b)=>a.start-b.start||b.len-a.len);
     const acc=[];let cov=-1;for(const mn of ms){if(mn.start<cov)continue;acc.push(mn);cov=mn.end}
+    return acc;
+  };
+  let current=null,lead='';
+  for(const rawSeg of t.split(/[.;\n;]+|\s+\/\s+/)){
+    if(!rawSeg.trim())continue;
+    // A clause naming no code carries FORWARD to the most
+    // recently named one — but a clause before ANY code has been
+    // named can only be a lead-in for the statement that follows
+    // ("$4,800 weekdays / $4,200 weekends for Call 1" — the "/"
+    // cut must not orphan the weekday amount from its code), so
+    // leading code-less clauses are held and prepended to the
+    // first code-naming clause instead of being dropped. Only
+    // amount-bearing clauses are held: a definition sentence
+    // ("Weekend is Friday and Saturday") carries no money, is
+    // read at text level elsewhere, and its stray day keywords
+    // would poison the nearest-amount scoping if prepended.
+    let seg=rawSeg,acc=segCodes(seg);
+    if(!acc.length&&current==null&&/\$/.test(rawSeg)){lead+=rawSeg+' ';continue}
+    if(lead){seg=lead+rawSeg;acc=segCodes(seg);lead=''}
     if(!acc.length){if(current)addChunk(current,seg,null);continue}
     for(let i=0;i<acc.length;i++){
       const mn=acc[i];
@@ -3107,9 +3192,53 @@ function describeCodeBlocks(text,codes){
     e.noPay=noPay||zeroAmt;e.dayOff=dayOff;
     if(e.hasAmounts){if(e.noPay&&!paidStmt)e.conflict=true}
     else if(e.noPay||dayOff)e.unpaid=true;
+    // Paid hours stated in THIS code's own statement (Nov 10,
+    // 2026, v111): they belong to this code alone. The text's
+    // first paid-hours figure also lands in the facility-level
+    // paidHours8 via the generic extraction, and that field used
+    // to be stamped onto EVERY day code's definition — a 10-hour
+    // code inherited the 8-hour shift's 8.5 and priced $2,125.
+    // A code that states its own ("paid for 10.5 hours") keeps
+    // its own; a code that states none gets none from here.
+    const phM=(e.text||'').match(/paid\s+(?:for\s+)?(\d+(?:\.\d+)?)\s*hours?\b/i)||(e.text||'').match(/(\d+(?:\.\d+)?)\s*paid\s*hours?\b/i);
+    e.paidHours=phM?Number(phM[1]):null;
     delete e.text;
   }
   return out;
+}
+// Misread day flats (Nov 10, 2026, v111): a flat DAY rate in a
+// words parse is only ever as trustworthy as its statement. The
+// generic extractors (and the AI rule read that merges over this
+// parse) can borrow a nearby NUMBER and file it as a per-shift
+// flat — live, "paid for 8.5 hours" came back as an $8.50 rate8
+// flat, and a flat outranks the hourly rule everywhere, so the
+// misread silently priced every 8-hour shift at $8.50. When the
+// text states NO per-day/flat phrasing at all, a day flat is
+// dropped when it is recognisably not a per-shift amount: it
+// equals the paid-hours figure, it equals the shift's own hour
+// count, it is smaller than the hourly rate (no facility pays
+// less for a whole shift than for one hour), or its value is an
+// amount the text ties to a DIFFERENT code (a call split, another
+// code's stated pay) and no code of this flat's own type states
+// it. Genuine flats survive untouched: they arrive with per-day
+// phrasing ("$2,000 per day", "flat"), or stand as their own
+// code's stated amount.
+function describeSanitizeRates(rates,text,blocks,codes){
+  if(!rates||/(?:per\s+day|a\s+day|daily|per\s+shift|flat)/i.test(String(text||'')))return;
+  const ph=rateOrNull(rates.paidHours8),hr=rateOrNull(rates.hourlyRate);
+  const other=new Set();
+  for(const k of ['rate24','weekendRate24','rateSecond','weekendRateSecond','callBonus']){const v=rateOrNull(rates[k]);if(v!=null)other.add(v)}
+  const own={rate8:new Set(),rate10:new Set(),rate12:new Set()};
+  for(const c of (codes||[])){
+    const b=blocks&&blocks[c.code];if(!b)continue;
+    const bt=canonicalTypeOf(b.phrase||'')||c.ctype||'';
+    const key=/8-hour/.test(bt)?'rate8':/10-hour/.test(bt)?'rate10':/12-hour/.test(bt)?'rate12':'';
+    for(const v of [b.wd,b.we]){if(v==null)continue;if(key)own[key].add(v);else other.add(v)}
+  }
+  for(const k of ['rate8','rate10','rate12']){
+    const v=rateOrNull(rates[k]);if(v==null)continue;
+    if((ph!=null&&v===ph)||v===Number(k.slice(4))||(hr!=null&&v<hr)||(other.has(v)&&!own[k].has(v)))delete rates[k];
+  }
 }
 function describeParseLocal(text,fac,codes){
   const t=String(text||'');
@@ -3141,6 +3270,7 @@ function describeParseLocal(text,fac,codes){
     if(bt==='24-hour call'){if(blk.wd!=null)rates.rate24=blk.wd;if(blk.we!=null)rates.weekendRate24=blk.we}
     else if(bt==='Second call'){if(blk.wd!=null)rates.rateSecond=blk.wd;if(blk.we!=null)rates.weekendRateSecond=blk.we}
   }
+  describeSanitizeRates(rates,t,blocks,codes);
   const weekendDays=parseWeekendDaysText(t);
   const low=' '+t.toLowerCase()+' ';
   const eff={};for(const k of ['hourlyRate','paidHours8','rate8','rate10','rate12','rate24','weekendRate24','hourlyCall1st','rateSecond','weekendRateSecond','callBonus']){const v=rates[k]!=null?rates[k]:(fac?rateOrNull(fac[k]):null);if(v!=null)eff[k]=v}
@@ -3207,7 +3337,15 @@ function describeParseLocal(text,fac,codes){
       ||!!(blk&&(blk.wd!=null||blk.we!=null));
     if(hit&&covers){
       const isDay=!!ct&&/hour/.test(ct)&&!/call/i.test(ct);
-      const newDef={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):null};
+      // Paid hours are PER-CODE knowledge (Nov 10, 2026, v111):
+      // the figure in this code's own statement wins; the
+      // facility-level paidHours8 is BY DEFINITION the 8-hour
+      // shift's paid hours, so it may only fill an 8-hour code's
+      // definition — stamping it onto a 10-hour code priced that
+      // code at the 8-hour product ($250 x 8.5 = $2,125 on a
+      // 10-hour day that states no paid hours of its own).
+      const blkPh=blk?rateOrNull(blk.paidHours):null;
+      const newDef={label:stmtLabel||(existing&&existing.label)||ct||c.code,hours:defHours,canonicalType:ct,paidHours:isDay?(blkPh!=null?blkPh:(ct==='8-hour day'?(rateOrNull(rates.paidHours8)!=null?rateOrNull(rates.paidHours8):(existing?rateOrNull(existing.paidHours):null)):(existing?rateOrNull(existing.paidHours):null))):null};
       // Amounts stated for a code whose type has no facility
       // split fields (a night call, a flat day code) stay ON the
       // definition — they are this code's own clarified pay.
@@ -3234,7 +3372,7 @@ function describeSummaryText(facName,parsed,fac){
       if(!parts.length&&eff.hourlyCall1st!=null&&eff.hourlyRate!=null){const fcW=firstCallPay(eff.hourlyCall1st,eff.hourlyRate,false),fcE=firstCallPay(eff.hourlyCall1st,eff.hourlyRate,true);if(fcW&&fcE)parts.push(moneyShort(fcW.pay)+' on weekdays',moneyShort(fcE.pay)+' on weekends')}
       bits.push('“'+code+'” (1st call): '+(parts.length?parts.join(', '):'priced from the rates below')+'.');
     }else if(ct){
-      const flat=flatFor(ct),hr=eff.hourlyRate,ph=rateOrNull(d.paidHours)!=null?rateOrNull(d.paidHours):(eff.paidHours8!=null?eff.paidHours8:rateOrNull(d.hours));
+      const flat=flatFor(ct),hr=eff.hourlyRate,ph=rateOrNull(d.paidHours)!=null?rateOrNull(d.paidHours):(/8-hour/.test(ct)&&eff.paidHours8!=null?eff.paidHours8:rateOrNull(d.hours));
       if(flat!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(flat)+' per shift.');
       else if(hr!=null&&ph!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(hr)+'/hr × '+ph+' paid hours = '+moneyShort(hr*ph)+'.');
       else if(hr!=null)bits.push('“'+code+'” ('+ct+'): '+moneyShort(hr)+'/hr.');
@@ -3303,6 +3441,17 @@ function applyDescribedRules(fac,parsed){
     const merged={...ex,label:d.label||ex.label||code,hours:d.hours!=null&&String(d.hours)!==''?String(d.hours):(ex.hours||''),rulesConfirmed:true,viaWords:true};
     const ct=d.canonicalType||ex.canonicalType||'';if(ct)merged.canonicalType=ct;
     if(d.paidHours!=null&&rateOrNull(d.paidHours)!=null)merged.paidHours=String(rateOrNull(d.paidHours));
+    // A words-created definition whose newest confirmed words
+    // state NO paid hours for the code keeps none (Nov 10, 2026,
+    // v111): the buggy parse stamped the 8-hour figure onto a
+    // 10-hour code's definition, and merely overwriting stated
+    // fields would leave that residue pricing $2,125 forever —
+    // the words are this definition's editing surface, so what
+    // they no longer say, they retract. Scoped to viaWords
+    // definitions (the only ones a words parse can have poisoned);
+    // field-captured definitions are untouched, and a code whose
+    // own statement names paid hours always restates them above.
+    else if(ex.viaWords)delete merged.paidHours;
     if(d.weekdayPay!=null&&rateOrNull(d.weekdayPay)!=null)merged.weekdayPay=String(rateOrNull(d.weekdayPay));
     if(d.weekendPay!=null&&rateOrNull(d.weekendPay)!=null)merged.weekendPay=String(rateOrNull(d.weekendPay));
     // The unpaid marker (Nov 10, 2026) persists like any other
@@ -3346,6 +3495,14 @@ async function submitDescribe(key){
           const coverOf=r=>{const vals=new Set(Object.values(r).map(v=>rateOrNull(v)).filter(v=>v!=null));return statedAmts.filter(a=>vals.has(a)).length};
           if(coverOf(merged)>=coverOf(parsed.rates))parsed.rates=merged;
           else for(const k of Object.keys(merged))if(parsed.rates[k]==null)parsed.rates[k]=merged[k];
+          // The coverage check above only counts stated $ amounts
+          // — it cannot see a NON-amount the AI files as money
+          // (live, Nov 10, 2026: the rule read returned the "8.5"
+          // of "paid for 8.5 hours" as an 8-hour flat rate, the
+          // merge adopted it, and the read-back priced 8-hour
+          // shifts at $8.50). The same misread screen the local
+          // parse runs therefore runs on the merged rates too.
+          describeSanitizeRates(parsed.rates,text,null,ctx.codes||[]);
           if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=String(data.rule.clarifying_question);
         }
       }catch(aiErr){/* the deterministic parse stands on its own */}
@@ -3613,7 +3770,7 @@ function importPaySchedTarget(preview,kind){
   // the manual fields never double-save on top of it.
   if(preview.paySchedStubSaved)return null;
   const ctx=importPaySchedCtx(preview,kind);if(!ctx)return null;
-  if(paystubForAgency(ctx.agency))return null;
+  if(paySchedCoveredCtx(ctx))return null;
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return null;
   preview._paySchedAgency=ctx.agency;
   return ctx;
@@ -3666,6 +3823,12 @@ function applyImportPaySched(preview,kind){
   const d=preview.paySchedDraft||{};
   const agency=String(d.agency||ctx.agency||'').trim();if(!agency)return null;
   if(paystubForAgency(agency))return null;
+  // The draft still carrying the import's own agency name means
+  // the section's identity is the import's facility — a schedule
+  // already covering that facility (under any of its names)
+  // blocks a duplicate save. A deliberately renamed agency is a
+  // different payer and is governed by the exact check above.
+  if(paySchedAgencyKey(agency)===paySchedAgencyKey(ctx.agency)&&paySchedCoveredCtx(ctx))return null;
   const frequency=normalizePayFrequency(d.frequency);const payDate=psValidISO(d.payDate);
   if(!frequency||!payDate)return null;
   const rec={id:id(),agency,facility:String(d.facility||ctx.facility||'').trim(),frequency,periodStart:psValidISO(d.periodStart),periodEnd:psValidISO(d.periodEnd),payDate,gross:'',net:'',source:'import',fileName:'',updatedAt:new Date().toISOString()};
@@ -3693,8 +3856,29 @@ let facPaySchedDrafts={};
 function payStubCoversFacility(f){
   if(!f)return false;
   const names=[f.name,...facilityAliases(f)].map(n=>normFacilityName(String(n||''))).filter(Boolean);
-  if(!names.length)return false;
-  return (db.payStubs||[]).some(p=>[p.agency,p.facility].some(v=>{const n=normFacilityName(String(v||''));return !!n&&names.includes(n)}));
+  if(names.length&&(db.payStubs||[]).some(p=>[p.agency,p.facility].some(v=>{const n=normFacilityName(String(v||''));return !!n&&names.includes(n)})))return true;
+  // Tolerant identity (Nov 10, 2026, v111): a record that names
+  // this facility by a close variant of its name ("Holzer" for
+  // the facility saved as "HOLZ") covers it too — the card must
+  // not offer a second schedule under the line that already
+  // shows the first. Resolution goes through paystubFacilityOf
+  // (the same identity the claiming path uses); a record that
+  // resolves nowhere covers nothing here.
+  return (db.payStubs||[]).some(p=>{const pf=paystubFacilityOf(p);return !!pf&&pf.id===f.id});
+}
+// Does an effective pay schedule already exist for an import's
+// agency/facility? The exact agency string is only one of the
+// names a schedule can live under — the same payer's records may
+// sit under the payer's own name with the facility stated in a
+// different one of its names (v111: "Premier Anesthesia Group,
+// PC" / facility "Holzer" for the facility saved as "HOLZ"), and
+// re-offering the setup there would stack a duplicate record
+// the unification then has to absorb.
+function paySchedCoveredCtx(ctx){
+  if(!ctx)return false;
+  if(paystubForAgency(ctx.agency))return true;
+  const f=facilityByNameOrVariant(ctx.facility||ctx.agency);
+  return !!(f&&payStubCoversFacility(f));
 }
 function facilityHasShifts(f){
   if(!f)return false;
@@ -3718,7 +3902,7 @@ function importPaySchedHint(preview,kind,saved){
   if(saved)return '';
   if(preview&&preview.paySchedStubSaved)return '';
   const ctx=importPaySchedCtx(preview,kind);if(!ctx)return '';
-  if(paystubForAgency(ctx.agency))return '';
+  if(paySchedCoveredCtx(ctx))return '';
   if(importPaySchedDismissed()[paySchedAgencyKey(ctx.agency)])return '';
   return ` No pay schedule for ${ctx.agency} yet — add one any time on its card on the Facilities tab and its paychecks will show on your calendar.`;
 }

@@ -193,7 +193,7 @@ const t = (name, cond) => {
     !appSrc.includes(`exportCsv('crna-hub-mileage.csv'`) && !appSrc.includes('crna-hub-mileage.csv'));
   t('export-mileage now opens the picker', appSrc.includes(`action==='export-mileage'){mileageExportInit();mileageExportOpen=true`));
   t('download goes through the selection', appSrc.includes('mileageExportDownload()'));
-  t('service worker cache bumped to v67', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v110'));
+  t('service worker cache bumped to v67', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v111'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();
