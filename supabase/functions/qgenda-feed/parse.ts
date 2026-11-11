@@ -50,7 +50,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 7;
+export const QGENDA_PARSER_VERSION = 8;
 
 export interface QgendaShift {
   date: string;

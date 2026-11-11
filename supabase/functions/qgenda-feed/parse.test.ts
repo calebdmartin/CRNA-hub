@@ -624,7 +624,7 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 7);
+  assertEquals(QGENDA_PARSER_VERSION, 8);
 });
 
 Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
