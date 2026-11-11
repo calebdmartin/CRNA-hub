@@ -3371,6 +3371,29 @@ function describeSanitizeRates(rates,text,blocks,codes){
 }
 function describeParseLocal(text,fac,codes){
   const t=String(text||'');
+  // Code-universe augmentation (Nov 10, 2026, v114): when a
+  // facility is in hand, its known codes (saved definitions
+  // UNION the codes on its saved shifts — facilityDescribeCodes)
+  // join the caller's list, so a code the caller did not list
+  // but the facility carries can still be read when the text
+  // names it. Codes that exist ONLY as shift codes (no saved
+  // definition — facilityDescribeCodes marks them shiftOnly)
+  // are mention-gated in the unanswered list below, however
+  // they arrived: they are asked about only when the text
+  // actually names them — an unmentioned code the facility
+  // happens to carry must not invent a question (confusion
+  // budget). Defined codes and caller-listed import codes keep
+  // the existing semantics (on an import, every listed code is
+  // on the schedule being imported, so each is asked about).
+  const codeList=(codes||[]).slice();
+  if(fac){
+    const callerKeys=new Set(codeList.map(c=>normalizeCodeKey(c&&c.code)));
+    for(const e of facilityDescribeCodes(fac)){
+      const k=normalizeCodeKey(e.code);
+      if(!k||callerKeys.has(k))continue;
+      callerKeys.add(k);codeList.push(e);
+    }
+  }
   const ex=contractExtractRates(t);
   const rates={};
   const put=(k,v)=>{const n=rateOrNull(v);if(n!=null)rates[k]=n};
@@ -3392,19 +3415,19 @@ function describeParseLocal(text,fac,codes){
   // Code statements are the most specific signal in the text —
   // amounts the user tied to a code they NAMED land on that
   // code's rate fields ahead of the generic extraction above.
-  const blocks=describeCodeBlocks(t,codes);
-  for(const c of (codes||[])){
+  const blocks=describeCodeBlocks(t,codeList);
+  for(const c of codeList){
     const blk=blocks[c.code];if(!blk||(blk.wd==null&&blk.we==null))continue;
     const bt=canonicalTypeOf(blk.phrase)||c.ctype||'';
     if(bt==='24-hour call'){if(blk.wd!=null)rates.rate24=blk.wd;if(blk.we!=null)rates.weekendRate24=blk.we}
     else if(bt==='Second call'){if(blk.wd!=null)rates.rateSecond=blk.wd;if(blk.we!=null)rates.weekendRateSecond=blk.we}
   }
-  describeSanitizeRates(rates,t,blocks,codes);
+  describeSanitizeRates(rates,t,blocks,codeList);
   const weekendDays=parseWeekendDaysText(t);
   const low=' '+t.toLowerCase()+' ';
   const eff={};for(const k of ['hourlyRate','paidHours8','rate8','rate10','rate12','rate24','weekendRate24','hourlyCall1st','rateSecond','weekendRateSecond','callBonus']){const v=rates[k]!=null?rates[k]:(fac?rateOrNull(fac[k]):null);if(v!=null)eff[k]=v}
   const defs={},unanswered=[];
-  for(const c of (codes||[])){
+  for(const c of codeList){
     const existing=fac?codeDefFor(fac,c.code):null;
     const codeStr=String(c.code||'').toLowerCase();
     const codeHit=codeStr.trim().length>=3&&low.includes(codeStr);
@@ -3509,7 +3532,7 @@ function describeParseLocal(text,fac,codes){
       // definition — they are this code's own clarified pay.
       if(blk&&(blk.wd!=null||blk.we!=null)&&ct!=='Second call'&&ct!=='24-hour call'){if(blk.wd!=null)newDef.weekdayPay=blk.wd;if(blk.we!=null)newDef.weekendPay=blk.we}
       defs[c.code]=newDef;
-    }else unanswered.push(c.code);
+    }else if(!c.shiftOnly||blk||codeHit||stmtLabel)unanswered.push(c.code);
   }
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
   return {rates,defs,weekendDays,unanswered,question};
@@ -3693,11 +3716,35 @@ async function submitDescribe(key){
           // shifts at $8.50). The same misread screen the local
           // parse runs therefore runs on the merged rates too.
           describeSanitizeRates(parsed.rates,text,null,ctx.codes||[]);
+          // Code-level UNION of the two readings (Nov 10,
+          // 2026, v114): the rates merge above can only add or
+          // refine facility rates — definitions are recomputed
+          // once with the merged rates standing behind the
+          // parse, and the two definition sets are unioned with
+          // the LOCAL reading winning per code. A code the
+          // local parse resolved can therefore never be lost
+          // to the merge, and a code only the merged (AI-
+          // supplied) rates can price resolves too, instead of
+          // staying "still don't know" over rates the app is
+          // about to save anyway. A code resolved by NEITHER
+          // reading stays unanswered — named, asked about,
+          // never silently dropped.
+          {
+            const localDefs=parsed.defs,localUnanswered=parsed.unanswered.slice();
+            const overlay=ctx.fac?{...ctx.fac}:{codeMap:{}};
+            for(const k of Object.keys(parsed.rates))overlay[k]=String(parsed.rates[k]);
+            const re=describeParseLocal(text,overlay,ctx.codes||[]);
+            const unionDefs={...re.defs};
+            for(const k of Object.keys(localDefs))unionDefs[k]=localDefs[k];
+            parsed.defs=unionDefs;
+            parsed.unanswered=(ctx.codes||[]).map(c=>c.code).filter(code=>!(code in unionDefs)&&(localUnanswered.includes(code)||re.unanswered.includes(code)));
+            parsed.question=parsed.unanswered.length?('One thing I couldn\'t tell from that: what '+(parsed.unanswered.length===1?'is':'are')+' '+parsed.unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(parsed.unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
+          }
           if(data.rule.clarifying_question&&parsed.unanswered.length)parsed.question=describeFollowUpQuestion(parsed.question,data.rule.clarifying_question);
         }
       }catch(aiErr){/* the deterministic parse stands on its own */}
     }
-    if(!Object.keys(parsed.rates).length&&!Object.keys(parsed.defs).length&&!parsed.weekendDays){
+    if(!Object.keys(parsed.rates).length&&!Object.keys(parsed.defs).length&&!parsed.weekendDays&&!(parsed.unanswered&&parsed.unanswered.length)){
       st.error='I couldn\'t pull any rates from that — try plainer sentences, e.g. “Day shifts pay $200/hr and I\'m paid for 8 hours. Call 2 is $2,400 on weekdays, $1,800 on weekends.” Nothing was saved.';
       st.parsed=null;
     }else{st.parsed=parsed;st.confirmed=false}
@@ -3774,7 +3821,34 @@ function dashboardRulesHealHTML(){
 }
 function facilityDescribeCodes(fac){
   const defs=facilityCodeDefs(fac||{});
-  return Object.keys(defs).map(code=>({code,ctype:String(defs[code].canonicalType||'').trim()||canonicalTypeOf(defs[code].label||''),hours:defs[code].hours||''}));
+  const out=Object.keys(defs).map(code=>({code,ctype:String(defs[code].canonicalType||'').trim()||canonicalTypeOf(defs[code].label||''),hours:defs[code].hours||''}));
+  // The code universe is the saved definitions UNION the codes
+  // the facility's saved shifts actually carry (Nov 10, 2026,
+  // v114): a code can sit on the calendar with NO definition —
+  // that is exactly what an unresolved code looks like (the
+  // import gate could not price it, so nothing was ever saved
+  // for it). Listing only definition keys made such a code
+  // invisible to the words parse on this card: it got no block,
+  // no definition, and — unanswered being built from the same
+  // list — not even a "still don't know" line. Live, CAMC's
+  // "5*" (Dec 2/4 shifts, no def) vanished from the read-back
+  // while "5**" and "7" resolved. Shift codes join the list
+  // verbatim (asterisks and all), deduped against the defined
+  // keys by the same tolerant key the def lookup uses.
+  if(fac&&fac.id){
+    const seen=new Set(out.map(c=>normalizeCodeKey(c.code)));
+    let shifts=[];try{shifts=db.shifts||[]}catch(e){}
+    for(const x of shifts){
+      const code=String((x&&x.code)||'').trim();if(!code)continue;
+      const k=normalizeCodeKey(code);if(!k||seen.has(k))continue;
+      let owner=null;try{owner=facilityForRecord(x)}catch(e){}
+      if(!owner||owner.id!==fac.id)continue;
+      seen.add(k);
+      const xt=String(x.type||'').trim();
+      out.push({code,ctype:xt&&xt!==code?canonicalTypeOf(xt):'',hours:'',shiftOnly:true});
+    }
+  }
+  return out;
 }
 function applyImportDescribed(preview,target){
   // The import approve path's rate save. Nov 9, 2026: only a

@@ -244,7 +244,7 @@ const mkPC = (id, pay, payUnit, incomplete) => ({ id, date: '2026-11-09', facili
 }
 
 // ---------- 9. Version pin ----------
-t('sw: cache bumped to v107', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v113'));
+t('sw: cache bumped to v107', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v114'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);

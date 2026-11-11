@@ -173,7 +173,15 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   // paid hours, Call 1's unstated split) — Call 2's split was
   // already saved, so it is not re-asked; his sentence restates it
   // anyway and the rates still land.
-  t('words: the parse answers the asked codes, nothing left over', run(`window.__parsed.unanswered.length`) === 0 && run(`Object.keys(window.__parsed.defs).length`) === 2, JSON.stringify(run(`window.__parsed.unanswered`)) + ' defs=' + run(`Object.keys(window.__parsed.defs).length`));
+  // v114 expectation change (stated, not silent): the parse's
+  // code universe is now the facility's known codes, not just
+  // the caller's list — the words NAME Call 2, so its definition
+  // is rebuilt too (defs = 3, not 2). The caller-list-only
+  // universe was the v114 defect itself: on the facility card
+  // it silently dropped CAMC's "5*" (shifts, no saved def) from
+  // the read-back entirely. What the prompt ASKS (unanswered)
+  // is unchanged: still 0 here, and Call 2 is not re-asked.
+  t('words: the parse answers the asked codes, nothing left over', run(`window.__parsed.unanswered.length`) === 0 && run(`Object.keys(window.__parsed.defs).length`) === 3, JSON.stringify(run(`window.__parsed.unanswered`)) + ' defs=' + run(`Object.keys(window.__parsed.defs).length`));
   t('words: the parse reads paid hours 8.5 and both call splits', run(`window.__parsed.rates.paidHours8`) === 8.5 && run(`window.__parsed.rates.rateSecond`) === 3000 && run(`window.__parsed.rates.weekendRateSecond`) === 2000 && run(`window.__parsed.rates.rate24`) === 4800 && run(`window.__parsed.rates.weekendRate24`) === 4200, JSON.stringify(run(`window.__parsed.rates`)));
   t('words: the weekend definition parses to Sat/Sun for his facility', JSON.stringify(run(`window.__parsed.weekendDays`)) === '[0,6]');
   const summary = run(`describeSummaryText('Holzer', window.__parsed, db.facilities[0])`);
