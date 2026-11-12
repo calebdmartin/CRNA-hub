@@ -103,10 +103,16 @@ const SETTLED = `
     settled.includes('State Licenses · 1 on file · next expiry Jun 30, 2027') &&
     settled.includes('Certification documents · 1 on file · next expires Jan 1, 2028') &&
     /Portal monitoring · checked /.test(settled));
+  // (v147 rewrite — the State Licenses card is per-state now: the
+  // ONE generic "Connect State Licenses" button is gone; the settled
+  // fixture's West Virginia license renders its own Connect, aimed
+  // at the WV board portal.)
   t('all controls still present inside the panels',
     settled.includes('Connect NBCRNA — open portal') &&
     settled.includes('Connect AANA — open portal') &&
-    settled.includes('Connect State Licenses — open portal') &&
+    settled.includes('Connect West Virginia — open portal') &&
+    !settled.includes('Connect State Licenses — open portal') &&
+    settled.includes('id="licStatePicker"') &&
     (settled.match(/I signed in — check it/g) || []).length >= 3 &&
     settled.includes('Pause monitoring') && settled.includes('Cadence') &&
     settled.includes('id="cert-documents"') && settled.includes('Certification type') &&
@@ -183,7 +189,7 @@ const SETTLED = `
     appSrc.includes("collapsePanelHTML('cert-documents'") &&
     appSrc.includes("'credentials-'+portalKey+'-panel'"));
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v146'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v147'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();

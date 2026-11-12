@@ -156,7 +156,10 @@ const tick = () => new Promise(r => setTimeout(r, 5));
     const cut = seg.indexOf('<details>');
     const primary = cut < 0 ? seg : seg.slice(0, cut);
     const backup = cut < 0 ? '' : seg.slice(cut);
-    t(`card ${key}: primary path is Connect → "I'm signed in — read it now" (request action present, no guided-check actions)`,
+    // (v147: licenses is exempted here — its primary path is per
+    // state and an empty card has no state rows; the seeded pin
+    // right after this loop covers it.)
+    if (key !== 'licenses') t(`card ${key}: primary path is Connect → "I'm signed in — read it now" (request action present, no guided-check actions)`,
       primary.includes(`data-portal-connect="${key}"`) &&
       primary.includes(`data-action="portal-read-request" data-id="${key}"`) &&
       !primary.includes('assistant-portal-check') && !primary.includes('portal-return'));
@@ -166,6 +169,22 @@ const tick = () => new Promise(r => setTimeout(r, 5));
       backup.includes('Or add it another way') && backup.includes('assistant-portal-check') &&
       backup.includes('user-entered, not verified'));
   }
+  // (v147 rewrite — the licenses primary path is per state: with a
+  // license on file, that state's own row carries Connect → read
+  // it now, keyed to the state; nothing guided-check on it.)
+  run(`
+    db.licenses = [{ id: 'l1', state: 'West Virginia', type: 'APRN', status: 'Active', number: '103459', expiry: '2027-06-30', reminders: '90,60,30,7' }];
+    globalThis.__pageLic = credentialsPage();
+    db.licenses = [];
+  `);
+  const segLic = cardSeg(sandbox.__pageLic, 'licenses', null);
+  const cutLic = segLic.indexOf('<details>');
+  const primaryLic = cutLic < 0 ? segLic : segLic.slice(0, cutLic);
+  t('card licenses (per-state): primary path is the state\u2019s Connect → "I\u2019m signed in — read it now"',
+    primaryLic.includes('data-portal-connect="licenses"') &&
+    primaryLic.includes('data-portal-state="West Virginia"') &&
+    primaryLic.includes('data-action="portal-read-request" data-id="licenses" data-date="West Virginia"') &&
+    !primaryLic.includes('assistant-portal-check') && !primaryLic.includes('portal-return'));
   t('source audit: the old primary-path screenshot instruction is gone from the app',
     !appSrc.includes('sign in, then screenshot') && !appSrc.includes('One tap brings you back and starts your check'));
   run(`

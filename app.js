@@ -2428,6 +2428,94 @@ function portalAgentPath(source,state){
   if(source==='licenses')return String(state||'').toLowerCase().startsWith('oh')?PORTAL_AGENT_PATHS.ohio:PORTAL_AGENT_PATHS.wv;
   return null;
 }
+// --- State boards (v147, Nov 12, 2026) ---
+// Caleb's ask: "the state board sign in needs a state selector so
+// it knows what state portal to redirect the user to" — and "make
+// sure it's all 50 states" (+ DC). There is no single state-board
+// portal: every state board runs its own. This table is DATA —
+// board name + the board's official site (for WV and Ohio, the
+// exact lookup routes already used for Caleb's own records:
+// wvrn.boardsofnursing.org for WV, Ohio eLicense for Ohio). The
+// State Licenses card renders one row per state the user holds (or
+// adds), and that state's Connect opens THIS url — never a generic
+// one. Portal connections key per state (portal_connections.state);
+// the filing door and monitor keys keep source 'licenses' + state.
+const STATE_BOARDS=[
+  {state:'Alabama',code:'AL',board:'Alabama Board of Nursing',url:'https://www.abn.alabama.gov/'},
+  {state:'Alaska',code:'AK',board:'Alaska Board of Nursing',url:'https://www.commerce.alaska.gov/web/portals/5/'},
+  {state:'Arizona',code:'AZ',board:'Arizona State Board of Nursing',url:'https://www.azbn.gov/'},
+  {state:'Arkansas',code:'AR',board:'Arkansas State Board of Nursing',url:'https://www.arsbn.org/'},
+  {state:'California',code:'CA',board:'California Board of Registered Nursing',url:'https://www.rn.ca.gov/'},
+  {state:'Colorado',code:'CO',board:'Colorado State Board of Nursing',url:'https://dpo.colorado.gov/Nursing'},
+  {state:'Connecticut',code:'CT',board:'Connecticut Board of Examiners for Nursing',url:'https://portal.ct.gov/dph'},
+  {state:'Delaware',code:'DE',board:'Delaware Board of Nursing',url:'https://dpr.delaware.gov/boards/nursing/'},
+  {state:'District of Columbia',code:'DC',board:'DC Board of Nursing',url:'https://dchealth.dc.gov/service/board-nursing'},
+  {state:'Florida',code:'FL',board:'Florida Board of Nursing',url:'https://floridasnursing.gov/'},
+  {state:'Georgia',code:'GA',board:'Georgia Board of Nursing',url:'https://sos.ga.gov/georgia-board-nursing'},
+  {state:'Hawaii',code:'HI',board:'Hawaii Board of Nursing',url:'https://cca.hawaii.gov/pvl/boards/nursing/'},
+  {state:'Idaho',code:'ID',board:'Idaho Board of Nursing',url:'https://dopl.idaho.gov/'},
+  {state:'Illinois',code:'IL',board:'Illinois Board of Nursing',url:'https://idfpr.illinois.gov/profs/nursing.html'},
+  {state:'Indiana',code:'IN',board:'Indiana State Board of Nursing',url:'https://www.in.gov/pla/professions/nursing-home/nursing-board/'},
+  {state:'Iowa',code:'IA',board:'Iowa Board of Nursing',url:'https://nursing.iowa.gov/'},
+  {state:'Kansas',code:'KS',board:'Kansas State Board of Nursing',url:'https://ksbn.kansas.gov/'},
+  {state:'Kentucky',code:'KY',board:'Kentucky Board of Nursing',url:'https://kbn.ky.gov/'},
+  {state:'Louisiana',code:'LA',board:'Louisiana State Board of Nursing',url:'https://www.lsbn.state.la.us/'},
+  {state:'Maine',code:'ME',board:'Maine State Board of Nursing',url:'https://www.maine.gov/boardofnursing/'},
+  {state:'Maryland',code:'MD',board:'Maryland Board of Nursing',url:'https://mbon.maryland.gov/'},
+  {state:'Massachusetts',code:'MA',board:'Massachusetts Board of Registration in Nursing',url:'https://www.mass.gov/orgs/board-of-registration-in-nursing'},
+  {state:'Michigan',code:'MI',board:'Michigan Board of Nursing',url:'https://www.michigan.gov/lara/bureau-list/bpl/health/hp-lic-health-prof/nursing'},
+  {state:'Minnesota',code:'MN',board:'Minnesota Board of Nursing',url:'https://mn.gov/boards/nursing/'},
+  {state:'Mississippi',code:'MS',board:'Mississippi Board of Nursing',url:'https://www.msbn.ms.gov/'},
+  {state:'Missouri',code:'MO',board:'Missouri State Board of Nursing',url:'https://www.pr.mo.gov/nursing.asp'},
+  {state:'Montana',code:'MT',board:'Montana Board of Nursing',url:'https://boards.bsd.dli.mt.gov/nursing'},
+  {state:'Nebraska',code:'NE',board:'Nebraska Nurse Licensing (DHHS)',url:'https://dhhs.ne.gov/licensure/Pages/Nursing.aspx'},
+  {state:'Nevada',code:'NV',board:'Nevada State Board of Nursing',url:'https://nevadanursingboard.org/'},
+  {state:'New Hampshire',code:'NH',board:'New Hampshire Board of Nursing',url:'https://www.oplc.nh.gov/board-nursing'},
+  {state:'New Jersey',code:'NJ',board:'New Jersey Board of Nursing',url:'https://www.njconsumeraffairs.gov/nur/'},
+  {state:'New Mexico',code:'NM',board:'New Mexico Board of Nursing',url:'https://www.bon.nm.gov/'},
+  {state:'New York',code:'NY',board:'New York State Board for Nursing',url:'https://www.op.nysed.gov/professions/registered-nurses'},
+  {state:'North Carolina',code:'NC',board:'North Carolina Board of Nursing',url:'https://www.ncbon.com/'},
+  {state:'North Dakota',code:'ND',board:'North Dakota Board of Nursing',url:'https://www.ndbon.org/'},
+  {state:'Ohio',code:'OH',board:'Ohio Board of Nursing',url:'https://elicense.ohio.gov/oh_verifylicense'},
+  {state:'Oklahoma',code:'OK',board:'Oklahoma Board of Nursing',url:'https://oklahoma.gov/nursing.html'},
+  {state:'Oregon',code:'OR',board:'Oregon State Board of Nursing',url:'https://www.oregon.gov/osbn/'},
+  {state:'Pennsylvania',code:'PA',board:'Pennsylvania State Board of Nursing',url:'https://www.dos.pa.gov/ProfessionalLicensing/BoardsCommissions/Nursing/Pages/default.aspx'},
+  {state:'Rhode Island',code:'RI',board:'Rhode Island Board of Nurse Registration and Nursing Education',url:'https://health.ri.gov/licenses/detail.php?id=202'},
+  {state:'South Carolina',code:'SC',board:'South Carolina Board of Nursing',url:'https://llr.sc.gov/nurse/'},
+  {state:'South Dakota',code:'SD',board:'South Dakota Board of Nursing',url:'https://doh.sd.gov/boards/nursing/'},
+  {state:'Tennessee',code:'TN',board:'Tennessee Board of Nursing',url:'https://www.tn.gov/health/health-program-areas/board-of-nursing.html'},
+  {state:'Texas',code:'TX',board:'Texas Board of Nursing',url:'https://www.bon.texas.gov/'},
+  {state:'Utah',code:'UT',board:'Utah Board of Nursing',url:'https://dopl.utah.gov/nursing/'},
+  {state:'Vermont',code:'VT',board:'Vermont Board of Nursing',url:'https://sos.vermont.gov/nursing/'},
+  {state:'Virginia',code:'VA',board:'Virginia Board of Nursing',url:'https://www.dhp.virginia.gov/Boards/Nursing/'},
+  {state:'Washington',code:'WA',board:'Washington State Board of Nursing',url:'https://nursing.wa.gov/'},
+  {state:'West Virginia',code:'WV',board:'West Virginia Board of Nursing',url:'https://wvrn.boardsofnursing.org/licenselookup'},
+  {state:'Wisconsin',code:'WI',board:'Wisconsin Board of Nursing',url:'https://dsps.wi.gov/pages/BoardsCouncils/Nursing/default.aspx'},
+  {state:'Wyoming',code:'WY',board:'Wyoming State Board of Nursing',url:'https://wsbn.wyo.gov/'}
+];
+// A state as the app names it: full name ('West Virginia') from a
+// full name in any case, or from a 2-letter code ('WV'). '' when the
+// value names no US state.
+function stateNameOf(s){
+  const v=String(s||'').trim();if(!v)return '';
+  const hit=STATE_BOARDS.find(b=>b.state.toLowerCase()===v.toLowerCase()||b.code===v.toUpperCase());
+  return hit?hit.state:'';
+}
+function stateBoard(state){const n=stateNameOf(state);return n?STATE_BOARDS.find(b=>b.state===n):null}
+// States the user added from the picker (no license record needed):
+// they live in settings, so they ride the normal settings sync and
+// the start-over wipe clears them like everything else.
+function licenseStatesAdded(){const s=db.settings&&db.settings.licStates;return Array.isArray(s)?s.map(stateNameOf).filter(Boolean):[]}
+// Every state the Licenses card shows a row for: a license record,
+// a portal connection, or an explicit add — alphabetical, deduped.
+function licenseStatesShown(){
+  const out=[];const push=(s)=>{const n=stateNameOf(s)||String(s||'').trim();if(n&&!out.includes(n))out.push(n)};
+  (db.licenses||[]).forEach(x=>push(x.state));
+  (cloudPortals||[]).forEach(r=>{if(r&&r.portal==='state_board')push(r.state)});
+  licenseStatesAdded().forEach(push);
+  return out.sort((a,b)=>a.localeCompare(b));
+}
+function licenseStatesAvailable(){const shown=licenseStatesShown();return US_STATES.filter(s=>!shown.includes(s))}
 const PORTAL_LOOKUP_LINKS={
   licenses:'<p class="muted">Official lookups: <a href="https://wvrn.boardsofnursing.org/licenselookup" target="_blank" rel="noopener">WV Board License Lookup</a> (West Virginia RN + APRN) · <a href="https://elicense.ohio.gov/oh_verifylicense" target="_blank" rel="noopener">Ohio eLicense</a> (Ohio licenses) · <a href="https://www.nursys.com/" target="_blank" rel="noopener">Nursys</a> (RN licenses in other states only — it does not verify APRN licenses).</p>'
 };
@@ -3100,7 +3188,7 @@ function captureMileageLogDraft(){
     mileageFormDraft={forEditId:mileageFormRenderedFor||'',values:Object.fromEntries(new FormData(form)),open:!!(panel&&panel.open)};
   }catch(_){}
 }
-function render(){ captureMileageLogDraft(); captureCloudAuthDraft(); captureFeaturesPanelState(); capturePaystubCardPanelState(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e)));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const docFormEl=$('docForm');if(docFormEl&&typeof docFormEl.querySelector==='function'){const dtsel=docFormEl.querySelector('select[name="type"]');const dow=document.getElementById('docOtherWrap');if(dtsel&&dow&&typeof dtsel.addEventListener==='function')dtsel.addEventListener('change',()=>{dow.hidden=dtsel.value!=='Other'});}const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);document.querySelectorAll('form.paystubCardForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubCard(e,fm.dataset.fac)));document.querySelectorAll('form.paystubImportForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubImport(e,fm.dataset.kind)));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.importConflictOverride').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:schedulePreview;if(!p)return;p.conflictOverrides=p.conflictOverrides||{};p.conflictOverrides[el.dataset.key]=!!el.checked}));
+function render(){ captureMileageLogDraft(); captureCloudAuthDraft(); captureFeaturesPanelState(); capturePaystubCardPanelState(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e,a.dataset.portalState||'')));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const docFormEl=$('docForm');if(docFormEl&&typeof docFormEl.querySelector==='function'){const dtsel=docFormEl.querySelector('select[name="type"]');const dow=document.getElementById('docOtherWrap');if(dtsel&&dow&&typeof dtsel.addEventListener==='function')dtsel.addEventListener('change',()=>{dow.hidden=dtsel.value!=='Other'});}const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);if(tab==='Account'||tab==='Facilities')qgendaStatusRefresh();const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);document.querySelectorAll('form.paystubCardForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubCard(e,fm.dataset.fac)));document.querySelectorAll('form.paystubImportForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubImport(e,fm.dataset.kind)));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.importConflictOverride').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:schedulePreview;if(!p)return;p.conflictOverrides=p.conflictOverrides||{};p.conflictOverrides[el.dataset.key]=!!el.checked}));
 document.querySelectorAll('.previewPayUnit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.payUnit=el.value==='hourly'?'hourly':'daily';render()}}));
 document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.clarifyCodeWeekday').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekdayPay=el.value}}));document.querySelectorAll('.clarifyCodeWeekend').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekendPay=el.value}}));document.querySelectorAll('.clarifyCodePaidHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.paidHours=el.value}}));document.querySelectorAll('.describeText').forEach(el=>el.addEventListener('change',()=>{const st=describeState(el.dataset.key);if(st){st.text=el.value;st.parsed=null;st.confirmed=false;st.error=''}}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
@@ -7056,6 +7144,79 @@ async function downloadDocument(entryId) {
   } catch (err) { alert('Download failed: ' + err.message); }
 }
 
+// --- Per-state Licenses card (v147, Nov 12, 2026) ---
+// Caleb: "the state board sign in needs a state selector so it
+// knows what state portal to redirect the user to" — all 50 + DC.
+// The old card had ONE generic "Connect State Licenses" button
+// pointing at Nursys; a board sign-in cannot work that way. Now:
+// one row per state the user holds or adds, each with its own
+// Connect (that state's board portal), its own session state, and
+// its own "I'm signed in — read it now"; an "Add a state" picker
+// with every state not yet shown. Adding a state creates its
+// portal connection (cloudUpsertPortals) so its actions work at
+// once; a state with no license records can be removed again —
+// a state WITH records keeps the record UI (Manual entry, below).
+function portalStateAdd(state) {
+  const name = stateNameOf(state); if (!name) return;
+  if (licenseStatesShown().includes(name)) { render(); return; }
+  db.settings = (db.settings && typeof db.settings === 'object') ? db.settings : {};
+  const cur = Array.isArray(db.settings.licStates) ? db.settings.licStates.slice() : [];
+  if (!cur.includes(name)) cur.push(name);
+  db.settings.licStates = cur;
+  persist();
+  render();
+  if (typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
+    (async () => { try { await cloudUpsertPortals(); await portalRefreshStatus(); if (typeof cloudUploadSynced === 'function') await cloudUploadSynced(); } catch (e) {} render(); })();
+  }
+}
+function portalStateRemove(state) {
+  const name = stateNameOf(state) || String(state || '').trim(); if (!name) return;
+  if ((db.licenses || []).some(x => (stateNameOf(x.state) || String(x.state || '').trim()) === name)) return; // records keep their state
+  db.settings = (db.settings && typeof db.settings === 'object') ? db.settings : {};
+  db.settings.licStates = (Array.isArray(db.settings.licStates) ? db.settings.licStates : []).filter(s => stateNameOf(s) !== name);
+  delete portalReadRequests['licenses:' + name];
+  portalDepartureClear('licenses', name);
+  db.portalMonitoring = (db.portalMonitoring || []).filter(m => !(m.source === 'licenses' && (stateNameOf(m.state) || String(m.state || '').trim()) === name));
+  const row = portalRowFor('licenses', name);
+  if (row) {
+    cloudPortals = (cloudPortals || []).filter(r => r !== row);
+    if (row.id && typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
+      (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'DELETE'); } catch (e) {} })();
+    }
+  }
+  persist();
+  render();
+}
+function stateLicenseRowHTML(state) {
+  const board = stateBoard(state);
+  const url = board ? board.url : ((PORTAL_CHECK_SOURCES.licenses || {}).url || 'https://www.nursys.com/');
+  const flowId = 'licenses:' + state;
+  const st = cloudPortalState('licenses', state);
+  const sess = portalReadState('licenses', state);
+  const sessLine = sess.sessionState === 'live' ? ' · Session live' : sess.sessionState === 'needs_signin' ? ' · Needs your sign-in' : '';
+  const connectLabel = sess.sessionState === 'needs_signin' ? ('Sign in to refresh — ' + state) : ('Connect ' + state + ' — open portal');
+  const recs = (db.licenses || []).filter(x => (stateNameOf(x.state) || String(x.state || '').trim()) === state);
+  const strips = recs.map(x => credentialInfoStrip(licenseStripFacts(x), x.reminders)).join('');
+  const opened = !!portalOpened[flowId];
+  return `<div class="item"><p><strong>${escapeHTML(state)}</strong>${board ? ` <span class="muted">${escapeHTML(board.board)}</span>` : ''}</p><p><strong>Status: ${escapeHTML(st.label)}${sessLine}</strong>${st.detail ? ` — ${escapeHTML(st.detail)}` : ''}</p>${strips}${sess.readRequestedAt ? `<p class="hint">Read requested — we’ll read it from your signed-in session shortly.</p>` : ''}<p class="muted">Sign in on the board’s own page: <a href="${url}" target="_blank" rel="noopener">${escapeHTML(url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</a>. We never ask for your portal password.</p>${opened ? `<p><strong>Signed in over there?</strong> Tap “I’m signed in — read it now” and we’ll read it from your signed-in session.</p>` : ''}<div class="toolbar"><a class="button" href="${url}" target="_blank" rel="noopener" data-portal-connect="licenses" data-portal-state="${escapeHTML(state)}">${escapeHTML(connectLabel)}</a><button type="button" data-action="portal-read-request" data-id="licenses" data-date="${escapeHTML(state)}">I’m signed in — read it now</button><a class="button secondary" href="${url}" target="_blank" rel="noopener">Open in Safari</a>${recs.length ? '' : `<button type="button" class="secondary" data-action="portal-state-remove" data-id="${escapeHTML(state)}">Remove</button>`}</div>${portalLeaveSheet === flowId ? `<div class="item"><p><strong>One sec — the portal opens outside CRNA Hub.</strong></p><p class="muted">Over there: sign in on the portal’s own page, then come back here and tap “I’m signed in — read it now”.</p><p class="muted">CRNA Hub stays right here — come back to this tab and your check picks up where you left off.</p><div class="toolbar"><button type="button" data-action="portal-leave-go" data-id="licenses" data-date="${escapeHTML(state)}">Take me to ${escapeHTML(state)}</button><button type="button" class="secondary" data-action="portal-leave-cancel">Not now</button></div></div>` : ''}</div>`;
+}
+function stateLicensesCardHTML() {
+  const shown = licenseStatesShown();
+  const avail = licenseStatesAvailable();
+  const summary = db.licenses.length ? (db.licenses.length + ' on file' + (() => { const e = db.licenses.map(x => x.expiry).filter(Boolean).sort()[0]; return e ? (' · next expiry ' + fmt(e)) : ''; })()) : '';
+  const licManual = db.licenses.length ? db.licenses.length + ' license record(s) on file — entered by hand, not verified.' : 'No license records on file yet.';
+  const dueAny = ensurePortalMonitoring().some(m => m.source === 'licenses' && monitorPromptVisible(m, localDate(new Date())));
+  const checkActive = !!(portalCheck && portalCheck.source === 'licenses');
+  const anyOpened = Object.keys(portalOpened || {}).some(k => k === 'licenses' || k.indexOf('licenses:') === 0);
+  const open = !!(!shown.length || dueAny || checkActive || anyOpened || String(portalLeaveSheet || '').indexOf('licenses') === 0);
+  const rows = shown.map(stateLicenseRowHTML).join('');
+  const picker = avail.length
+    ? `<div class="item"><p><strong>Add a state</strong></p><div class="form-grid"><div class="field"><label for="licStatePicker">State</label><select id="licStatePicker" name="licState">${avail.map(s => `<option value="${escapeHTML(s)}">${escapeHTML(s)}</option>`).join('')}</select></div></div><div class="toolbar"><button type="button" data-action="portal-state-add">Add state</button></div></div>`
+    : '<p class="muted">All 50 states + DC are on your list.</p>';
+  const backup = `<details><summary class="muted">Or add it another way</summary><p class="muted">The backups, for when a read can’t run: a guided check — you show the assistant the record page and approve a preview before anything saves — the official manual lookup, or typing it in yourself. Manual entry is at the bottom of this page; records saved there are user-entered, not verified.</p><div class="toolbar">${anyOpened ? `<button type="button" data-action="portal-return" data-id="licenses">I’m back — run my check</button>` : ''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="State Licenses">I signed in — check it</button></div>${PORTAL_LOOKUP_LINKS}</details>`;
+  return collapsePanelHTML('credentials-licenses-panel', summary ? 'State Licenses · ' + summary : 'State Licenses', `<p class="muted">State boards of nursing — RN and APRN licenses. Each state has its own board portal: pick your state below, then Connect opens that board.</p><p class="muted">${licManual}</p>${rows}${picker}${backup}`, open);
+}
+
 function credentialsPage(){
   if(!featureOn('featureCredentials'))return featureOffHTML('featureCredentials');
   const n=db.nbcrna||{},a=db.aana||{},lic=db.licenses.find(x=>x.id===editId)||{},doc=db.documents.find(x=>x.id===editId)||{},nce=db.nbcrnaCE.find(x=>x.id===editId)||{},ace=db.aanaCE.find(x=>x.id===editId)||{},legacy=db.credentials.find(x=>x.id===editId)||{};
@@ -7104,7 +7265,7 @@ function credentialsPage(){
   ${connCard('NBCRNA','National Board of Certification and Recertification for Nurse Anesthetists — your certification record.','certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status.',nbcrnaManual,'portal.nbcrna.com','https://portal.nbcrna.com/','nbcrna',[n.status,(n.periodEnd||n.renewalDeadline)?('ends '+fmt(n.periodEnd||n.renewalDeadline)):''].filter(Boolean).join(' · '),!(n.status||n.number||n.periodEnd||n.renewalDeadline),credentialInfoStrip(nbcrnaStripFacts(n),n.reminders))}
   ${connCard('AANA','American Association of Nurse Anesthesiology — your membership and CE transcript. Kept separate from NBCRNA certification.','membership status, membership expiration, and CE transcript totals (Class A / Class B).',aanaManual,'aana.com/login','https://www.aana.com/login','aana',[a.status,a.expiration?('expires '+fmt(a.expiration)):''].filter(Boolean).join(' · '),!(a.status||a.number||a.expiration),credentialInfoStrip(aanaStripFacts(a),a.reminders))}
   ${portalMonitoringHTML()}
-  ${connCard('State Licenses','State boards of nursing — RN and APRN licenses, one connection per state you hold a license in.','license status, license type (RN / APRN), license number, issue date, and expiration date.',licManual,'State board portals (per license, below)','https://www.nursys.com/','licenses',db.licenses.length?(db.licenses.length+' on file'+(()=>{const e=db.licenses.map(x=>x.expiry).filter(Boolean).sort()[0];return e?(' · next expiry '+fmt(e)):''})()):'',!db.licenses.length)}
+  ${stateLicensesCardHTML()}
   ${documentsSection(doc)}
   ${collapsePanelHTML('credentials-manual-panel','Manual entry',`<p class="muted">The backup path — for when a portal check hasn't run. Records saved here are user-entered, not verified.</p>
   <div class="form-grid"><div class="field"><label for="f_manualType">Entry type</label><select id="manualTypeSelect" name="manualType"><option value="NBCRNA" ${manualType==='NBCRNA'?'selected':''}>NBCRNA</option><option value="AANA" ${manualType==='AANA'?'selected':''}>AANA</option><option value="State license" ${manualType==='State license'?'selected':''}>State license</option><option value="NBCRNA CE" ${manualType==='NBCRNA CE'?'selected':''}>NBCRNA CE record</option><option value="AANA CE" ${manualType==='AANA CE'?'selected':''}>AANA CE record</option><option value="Other credential" ${manualType==='Other credential'?'selected':''}>Other credential</option></select></div></div>
@@ -9243,11 +9404,13 @@ if(action==='monitor-prompt-dismiss'){const m=(db.portalMonitoring||[]).find(x=>
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
-if(action==='monitor-signin'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);const key=m?(m.source==='licenses'?'licenses':m.source):entry;tab='Credentials';render();portalConnectClick(key);return;}
-if(action==='portal-read-request'){portalRequestRead(entry);return render();}
-if(action==='portal-return-read'){portalRequestRead(entry);return render();}
+if(action==='monitor-signin'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);const key=m?(m.source==='licenses'?'licenses':m.source):entry;tab='Credentials';render();portalConnectClick(key,undefined,m?m.state||'':'');return;}
+if(action==='portal-read-request'){portalRequestRead(entry,{state:date||''});return render();}
+if(action==='portal-return-read'){portalRequestRead(entry,{state:date||''});return render();}
+if(action==='portal-state-add'){const sel=$('licStatePicker');portalStateAdd(sel?sel.value:'');return;}
+if(action==='portal-state-remove'){portalStateRemove(entry);return;}
 if(action==='portal-return-dismiss'){const pd=portalDepartureGet();if(pd){pd.dismissed=true;portalDeparturePersist();}return render();}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry);}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry,date||'');}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
 if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
@@ -10850,7 +11013,7 @@ function cloudNbcrnaRow() { const n = db.nbcrna || {}; return { user_id: cloudUi
 function cloudAanaRow() { const a = db.aana || {}; return { user_id: cloudUid(), membership_status: a.status || null, membership_number: a.number || null, expiration: a.expiration || null, ce_class_a: cloudNumOrNull(a.classA), ce_class_b: cloudNumOrNull(a.classB), source: a.source || 'user_entered', last_synced_at: cloudNow() }; }
 function cloudLicenseRow(x) { return { id: x.id, user_id: cloudUid(), state: x.state, license_type: x.type, license_number: x.number || null, issue_date: x.issue || null, expiration_date: x.expiry || null, status: x.status || null, board_portal_url: x.portal || null, notes: x.note || null, source: x.source || 'user_entered', last_synced_at: cloudNow() }; }
 function cloudCeRow(x, source) { return { id: x.id, user_id: cloudUid(), source: source, title: x.title || null, credits: cloudNumOrNull(x.credits) || 0, credit_class: source === 'nbcrna' ? (x.class || null) : null, completed_date: x.date || null }; }
-async function cloudUpsertPortals() { const states = []; (db.licenses || []).forEach(x => { if (x.state && states.indexOf(x.state) === -1) states.push(x.state); }); const desired = [{ portal: 'nbcrna', state: null }, { portal: 'aana', state: null }].concat(states.map(st => ({ portal: 'state_board', state: st }))); let existing = []; try { existing = await sbReq('/rest/v1/portal_connections?select=*&user_id=eq.' + encodeURIComponent(cloudUid()), 'GET'); } catch (e) { existing = []; } // Only create rows that do not exist yet, as 'not_connected' —
+async function cloudUpsertPortals() { const states = []; (db.licenses || []).forEach(x => { if (x.state && states.indexOf(x.state) === -1) states.push(x.state); }); licenseStatesAdded().forEach(st => { if (states.indexOf(st) === -1) states.push(st); }); const desired = [{ portal: 'nbcrna', state: null }, { portal: 'aana', state: null }].concat(states.map(st => ({ portal: 'state_board', state: st }))); let existing = []; try { existing = await sbReq('/rest/v1/portal_connections?select=*&user_id=eq.' + encodeURIComponent(cloudUid()), 'GET'); } catch (e) { existing = []; } // Only create rows that do not exist yet, as 'not_connected' —
 // NEVER overwrite an existing row's status: a portal that a live read
 // marked 'connected' (or a failed attempt marked 'failed') must not be
 // reset to 'connected' by a manual upload, or vice versa.
@@ -10933,7 +11096,9 @@ function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasC
 // (session_state / read_requested_at / last_read_outcome, migration
 // 015) round-trip with no per-field mapping — portalReadState() reads
 // them straight off the rows in cloudPortals.
-function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', classA: r.ce_class_a === null || r.ce_class_a === undefined ? '' : String(r.ce_class_a), classB: r.ce_class_b === null || r.ce_class_b === undefined ? '' : String(r.ce_class_b), source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
+function cloudApplyData(data) { cloudPortals = data.portals || []; // v147: a state_board connection row on any device puts that state on this device's Licenses card too (union into the added-states list; settings sync carries the list itself).
+  { const boardStates = (data.portals || []).filter(r => r && r.portal === 'state_board' && r.state).map(r => stateNameOf(r.state)).filter(Boolean); if (boardStates.length) { db.settings = (db.settings && typeof db.settings === 'object') ? db.settings : {}; const cur = Array.isArray(db.settings.licStates) ? db.settings.licStates.slice() : []; let grew = false; boardStates.forEach(s => { if (!cur.includes(s)) { cur.push(s); grew = true; } }); if (grew) db.settings.licStates = cur; } }
+  if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', classA: r.ce_class_a === null || r.ce_class_a === undefined ? '' : String(r.ce_class_a), classB: r.ce_class_b === null || r.ce_class_b === undefined ? '' : String(r.ce_class_b), source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }, (shellId, twin) => { cloudRecordTombstone('facilities', shellId); if (twin && twin.id) { try { cloudSaveKind('facilities', twin.id); } catch (e) {} } }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
@@ -11190,9 +11355,16 @@ function cloudDeleteKind(kind, entryId) { if (!cloudSyncEnabled()) return; (asyn
 // itself: a portal source on the record plus a retrieval date.
 let portalAttemptFailed = {}; // key -> {at, error}: a read failed this session
 let portalHealed = {}; // key -> true: a stale 'connected' row was corrected once
-function portalVerifiedRetrievedAt(key) {
+function portalVerifiedRetrievedAt(key, state) {
   if (key === 'nbcrna') { const n = db.nbcrna || {}; return (n.source === 'public_verification' || n.source === 'nbcrna_portal') && cloudSyncTimes.nbcrna ? cloudSyncTimes.nbcrna : ''; }
   if (key === 'aana') { const a = db.aana || {}; return a.source === 'aana_portal' && cloudSyncTimes.aana ? cloudSyncTimes.aana : ''; }
+  // v147: per-state verification — a verified record in THAT state.
+  if (key === 'licenses' && state) {
+    const recs = (db.licenses || []).filter(x => stateNameOf(x.state) === stateNameOf(state) && x.source === 'state_board_portal');
+    if (!recs.length) return '';
+    const whens = recs.map(x => x.updatedAt || '').filter(Boolean).sort();
+    return whens.length ? whens[whens.length - 1] : (cloudSyncTimes.licenses || '');
+  }
   return (db.licenses || []).some(x => x.source === 'state_board_portal') && cloudSyncTimes.licenses ? cloudSyncTimes.licenses : '';
 }
 function portalHealStaleConnected(key, row) {
@@ -11244,6 +11416,10 @@ function portalNoteFailed(key, error) {
 // that fail soft (the same pattern as portalNoteFailed) — the loop
 // stays dark, never faked.
 let portalReadRequests = {}; // card key -> ISO stamp of this session's read request (covers the no-row-yet case)
+// v147: the on-device request stamp keys PER STATE for licenses
+// ('licenses:Ohio'), so one state's tap never lights another state's
+// row. NBCRNA / AANA keep the bare source key, as in v143.
+function portalReqKey(key, state) { return key === 'licenses' && state ? ('licenses:' + state) : key; }
 function portalRowFor(source, state) {
   const rows = cloudPortals || [];
   if (source === 'nbcrna') return rows.find(r => r.portal === 'nbcrna') || null;
@@ -11258,7 +11434,7 @@ function portalReadState(key, state) {
   return {
     row,
     sessionState: (row && row.session_state) || 'unknown',
-    readRequestedAt: (row && row.read_requested_at) || portalReadRequests[key] || '',
+    readRequestedAt: (row && row.read_requested_at) || portalReadRequests[portalReqKey(key, state)] || '',
     lastReadOutcome: (row && row.last_read_outcome) || '',
   };
 }
@@ -11272,14 +11448,14 @@ function portalPatchRow(row, fields) {
 // With no row yet (first run), the portals upsert creates it first
 // and the stamp lands on the fresh row.
 function portalRequestRead(key, opts) {
-  portalDepartureClear(key);
   const state = (opts && opts.state) || '';
+  portalDepartureClear(key, state);
   const stamp = cloudNow();
-  portalReadRequests[key] = stamp;
+  portalReadRequests[portalReqKey(key, state)] = stamp;
   const row = portalRowFor(key, state);
   if (row) { row.read_requested_at = stamp; portalPatchRow(row, { read_requested_at: stamp }); return stamp; }
   if (typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
-    (async () => { try { await cloudUpsertPortals(); const r2 = portalRowFor(key, state); if (r2) { r2.read_requested_at = portalReadRequests[key] || stamp; portalPatchRow(r2, { read_requested_at: r2.read_requested_at }); } } catch (e) {} })();
+    (async () => { try { await cloudUpsertPortals(); const r2 = portalRowFor(key, state); if (r2) { r2.read_requested_at = portalReadRequests[portalReqKey(key, state)] || stamp; portalPatchRow(r2, { read_requested_at: r2.read_requested_at }); } } catch (e) {} })();
   }
   return stamp;
 }
@@ -11291,9 +11467,9 @@ function portalRequestRead(key, opts) {
 // (unknown outcome / empty read) clears the request and writes
 // nothing else.
 function portalReadFileResult(source, state, outcome) {
-  portalDepartureClear(source);
+  portalDepartureClear(source, state);
   const row = portalRowFor(source, state);
-  delete portalReadRequests[source];
+  delete portalReadRequests[portalReqKey(source, state)];
   if (!row) return;
   const patch = { read_requested_at: null };
   row.read_requested_at = null;
@@ -11323,29 +11499,32 @@ let portalDepartureCache = null, portalDepartureLoaded = false;
 function portalDepartureGet() {
   if (!portalDepartureLoaded) {
     portalDepartureLoaded = true;
-    try { const raw = localStorage.getItem(PORTAL_DEPARTURE_STORAGE); const d = raw ? JSON.parse(raw) : null; portalDepartureCache = (d && typeof d === 'object' && PORTAL_CHECK_SOURCES[d.source]) ? { source: d.source, at: d.at || '', shownAt: d.shownAt || '', dismissed: !!d.dismissed } : null; } catch (e) { portalDepartureCache = null; }
+    try { const raw = localStorage.getItem(PORTAL_DEPARTURE_STORAGE); const d = raw ? JSON.parse(raw) : null; portalDepartureCache = (d && typeof d === 'object' && PORTAL_CHECK_SOURCES[d.source]) ? { source: d.source, state: d.state || '', at: d.at || '', shownAt: d.shownAt || '', dismissed: !!d.dismissed } : null; } catch (e) { portalDepartureCache = null; }
   }
   return portalDepartureCache;
 }
 function portalDeparturePersist() {
   try { const d = portalDepartureGet(); if (d) localStorage.setItem(PORTAL_DEPARTURE_STORAGE, JSON.stringify(d)); else localStorage.removeItem(PORTAL_DEPARTURE_STORAGE); } catch (e) {}
 }
-function portalDepartureStamp(key) {
+// v147: a departure also carries the STATE for a licenses sign-in,
+// so the return greeting can name it ("tap to run your West
+// Virginia read") and clearing can target just that state's trip.
+function portalDepartureStamp(key, state) {
   if (!PORTAL_CHECK_SOURCES[key]) return;
   portalDepartureLoaded = true;
-  portalDepartureCache = { source: key, at: new Date().toISOString(), shownAt: '', dismissed: false };
+  portalDepartureCache = { source: key, state: state || '', at: new Date().toISOString(), shownAt: '', dismissed: false };
   portalDeparturePersist();
 }
-function portalDepartureClear(key) {
+function portalDepartureClear(key, state) {
   const d = portalDepartureGet();
-  if (d && (!key || d.source === key)) { portalDepartureCache = null; portalDeparturePersist(); }
+  if (d && (!key || d.source === key) && (state === undefined || (d.state || '') === (state || ''))) { portalDepartureCache = null; portalDeparturePersist(); }
 }
 // A departure still awaiting its read: not dismissed, and no read
 // requested for the source (local tap or cloud row) since.
 function portalDeparturePending() {
   const d = portalDepartureGet();
   if (!d || d.dismissed) return null;
-  if (portalReadState(d.source).readRequestedAt) return null;
+  if (portalReadState(d.source, d.state || '').readRequestedAt) return null;
   return d;
 }
 // Mark the pending departure as surfaced — called from the return
@@ -11361,28 +11540,30 @@ function portalReturnSurface() {
 function portalReturnGreetingHTML() {
   const d = portalDeparturePending();
   if (!d || !d.shownAt) return '';
-  const title = (PORTAL_CHECK_SOURCES[d.source] || {}).title || d.source;
-  return `<section class="panel portal-return-greeting"><p><strong>Welcome back — tap to run your ${escapeHTML(title)} read.</strong></p><p class="muted">You signed in at ${escapeHTML(title)}; one tap queues the read from your signed-in session.</p><div class="toolbar"><button type="button" data-action="portal-return-read" data-id="${escapeHTML(d.source)}">Run my ${escapeHTML(title)} read</button><button type="button" class="secondary" data-action="portal-return-dismiss">Not now</button></div></section>`;
+  const title = d.state || (PORTAL_CHECK_SOURCES[d.source] || {}).title || d.source;
+  return `<section class="panel portal-return-greeting"><p><strong>Welcome back — tap to run your ${escapeHTML(title)} read.</strong></p><p class="muted">You signed in at ${escapeHTML(title)}; one tap queues the read from your signed-in session.</p><div class="toolbar"><button type="button" data-action="portal-return-read" data-id="${escapeHTML(d.source)}" data-date="${escapeHTML(d.state || '')}">Run my ${escapeHTML(title)} read</button><button type="button" class="secondary" data-action="portal-return-dismiss">Not now</button></div></section>`;
 }
 function monitorSessionState(mon) { return portalReadState(mon.source === 'licenses' ? 'licenses' : mon.source, mon.state || ''); }
-function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Sign-in isn’t available yet' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (!cloudActive) return { label: 'Not connected', detail: 'Signed in — records are merging with your account automatically' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
+function cloudPortalState(key, state) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Sign-in isn’t available yet' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (!cloudActive) return { label: 'Not connected', detail: 'Signed in — records are merging with your account automatically' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
   // A read that failed in this session outranks any stored row: the
   // refresh after a failure may itself fail to land, and the label must
   // still show the failure, never a stale Verified.
   const failedHere = portalAttemptFailed[key];
   if (failedHere) return { label: 'Not verified', detail: 'Last read failed · last attempt ' + cloudFmtWhen(failedHere.at) + (failedHere.error ? ' — ' + failedHere.error : '') + '. Use the manual lookup / manual entry below.' };
   const rows = cloudPortals || [];
+  // v147: with a state, the licenses status is THAT state's row —
+  // the aggregate (newest board row) stays for state-less callers.
   const row = key === 'licenses'
-    ? rows.filter(r => r.portal === 'state_board').sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0]
+    ? (state ? portalRowFor('licenses', state) : rows.filter(r => r.portal === 'state_board').sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0])
     : rows.find(r => r.portal === key);
   if (!row) return { label: 'Not verified', detail: 'No successful read yet — use Connect below, or the manual entry fallback' };
   const when = row.last_synced_at ? ' · last attempt ' + cloudFmtWhen(row.last_synced_at) : '';
   if (row.status === 'connected') {
-    const retrievedAt = portalVerifiedRetrievedAt(key);
+    const retrievedAt = portalVerifiedRetrievedAt(key, state);
     if (retrievedAt) return { label: 'Verified — read from your signed-in session', detail: 'Read from the portal · last verified ' + cloudFmtWhen(retrievedAt) };
     // Stale 'connected' row with no verified record behind it: never show
     // Verified. Correct the stored row once and say so.
-    portalHealStaleConnected(key, row);
+    portalHealStaleConnected(state ? (key + ':' + state) : key, row);
     return { label: 'Not verified', detail: 'Last read did not return a verified record' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
   }
   if (row.status === 'needs_reauth') return { label: 'Not verified — sign-in needed', detail: (row.last_error || 'The portal session expired — connect again') + when };
@@ -11450,11 +11631,19 @@ function portalStandaloneMode() {
   } catch (e) {}
   return false;
 }
-function portalConnectFlow(key) {
-  const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return null;
-  if (!portalFlows[key]) {
-    portalFlows[key] = {
-      key, meta, win: null, openedAt: '', returnedAt: '',
+// v147: a licenses flow is PER STATE — flow id 'licenses:<State>',
+// its meta.url is that state's board portal (STATE_BOARDS) and its
+// departure carries the state. NBCRNA / AANA flows are unchanged
+// (flow id = the source key).
+function portalConnectFlow(key, state) {
+  const base = PORTAL_CHECK_SOURCES[key]; if (!base) return null;
+  const stName = key === 'licenses' && state ? (stateNameOf(state) || String(state)) : '';
+  const flowId = stName ? ('licenses:' + stName) : key;
+  let meta = base;
+  if (stName) { const b = stateBoard(stName); meta = Object.assign({}, base, { url: b ? b.url : base.url, title: stName }); }
+  if (!portalFlows[flowId]) {
+    portalFlows[flowId] = {
+      key, state: stName, flowId, meta, win: null, openedAt: '', returnedAt: '',
       open(ev) {
         this.openedAt = new Date().toISOString();
         this.returnedAt = '';
@@ -11463,8 +11652,8 @@ function portalConnectFlow(key) {
           // portal — do not touch the tap, do not re-render mid-tap.
           // State is persisted; the return prompt is waiting when he
           // comes back (the focus/visibility hook re-renders).
-          portalOpened[key] = true;
-          portalDepartureStamp(key);
+          portalOpened[flowId] = true;
+          portalDepartureStamp(key, stName);
           portalStatePersist();
           return 'link';
         }
@@ -11474,8 +11663,8 @@ function portalConnectFlow(key) {
           if (ev && ev.preventDefault) ev.preventDefault();
           try { win.opener = null; } catch (e) {}
           this.win = win;
-          portalOpened[key] = true;
-          portalDepartureStamp(key);
+          portalOpened[flowId] = true;
+          portalDepartureStamp(key, stName);
           portalLeaveSheet = '';
           portalStatePersist();
           render();
@@ -11484,7 +11673,7 @@ function portalConnectFlow(key) {
         // Blocked: never silently redirect this tab — pre-leaving
         // sheet first, and leaving is its own explicit tap.
         if (ev && ev.preventDefault) ev.preventDefault();
-        portalLeaveSheet = key;
+        portalLeaveSheet = flowId;
         render();
         return 'blocked';
       },
@@ -11492,24 +11681,25 @@ function portalConnectFlow(key) {
         this.returnedAt = new Date().toISOString();
         if (this.win) { try { if (!this.win.closed) this.win.close(); } catch (e) {} this.win = null; }
         startPortalCheck(this.key);
+        if (this.key === 'licenses' && this.state && portalCheck) portalCheck.state = this.state;
       },
     };
   }
-  return portalFlows[key];
+  return portalFlows[flowId];
 }
 // The Connect anchor's tap: runs the flow inside the tap handler, so
 // the synchronous window.open keeps its user-activation on iOS.
-function portalConnectClick(key, ev) { const f = portalConnectFlow(key); if (f) f.open(ev); }
-function portalOpenSignIn(key) { const f = portalConnectFlow(key); if (f) f.open(); }
+function portalConnectClick(key, ev, state) { const f = portalConnectFlow(key, state); if (f) f.open(ev); }
+function portalOpenSignIn(key, state) { const f = portalConnectFlow(key, state); if (f) f.open(); }
 // The pre-leaving sheet's explicit tap — the ONLY place a portal
 // connect navigates the current tab, and only after he has seen the
 // sheet and chosen to go. His place is persisted before leaving.
-function portalLeaveGo(key) {
-  const meta = PORTAL_CHECK_SOURCES[key]; if (!meta) return;
-  const f = portalConnectFlow(key);
-  if (f) { f.openedAt = new Date().toISOString(); f.returnedAt = ''; }
-  portalOpened[key] = true;
-  portalDepartureStamp(key);
+function portalLeaveGo(key, state) {
+  const f = portalConnectFlow(key, state); if (!f) return;
+  const meta = f.meta;
+  f.openedAt = new Date().toISOString(); f.returnedAt = '';
+  portalOpened[f.flowId] = true;
+  portalDepartureStamp(key, f.state);
   portalLeaveSheet = '';
   portalStatePersist();
   try { if (typeof location !== 'undefined' && location && typeof location.assign === 'function') { location.assign(meta.url); return; } } catch (e) {}

@@ -119,10 +119,15 @@ t('Credentials tab: no final-design status readout on any card',
   !sandbox.__cred.includes('Final-design status:') &&
   !sandbox.__cred.includes('<strong>unproven</strong>') &&
   !sandbox.__cred.includes('<strong>likely_blocked</strong>'));
+// (v147 rewrite — State Licenses is per-state: with no states on
+// the card yet there is no Connect button at all, just the state
+// picker; the generic "Connect State Licenses" button is gone for
+// good. Per-state Connect pins live in test-v147-state-picker.js.)
 t('Credentials tab: Connect / check-it / Safari actions still present on every card',
   sandbox.__cred.includes('Connect NBCRNA — open portal') &&
   sandbox.__cred.includes('Connect AANA — open portal') &&
-  sandbox.__cred.includes('Connect State Licenses — open portal') &&
+  !sandbox.__cred.includes('Connect State Licenses — open portal') &&
+  sandbox.__cred.includes('id="licStatePicker"') &&
   (sandbox.__cred.match(/I signed in — check it/g) || []).length >= 3 &&
   sandbox.__cred.includes('Open in Safari'));
 t('Credentials tab: no portal password field anywhere',

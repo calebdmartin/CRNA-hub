@@ -78,10 +78,19 @@ const A = makeSandbox();
 const runA = (code) => vm.runInContext(code, A);
 
 // --- 1. Connect is a real anchor the browser opens as a new tab ---
-runA(`globalThis.__cred = credentialsPage();`);
+// (v147 rewrite — State Licenses is per-state now: a fresh page has
+// no state rows yet, so the licenses Connect anchor renders once a
+// state is on the card, aimed at THAT state's board portal. The
+// generic licenses Connect is gone by design — Caleb's ask.)
+runA(`
+  db.licenses = [{ id: 'l1', state: 'West Virginia', type: 'APRN', status: 'Active', number: '103459', expiry: '2027-06-30', reminders: '90,60,30,7' }];
+  globalThis.__cred = credentialsPage();
+`);
 t('Connect is a real <a href target="_blank"> for every portal (browser-native new tab)',
   ['nbcrna', 'aana', 'licenses'].every((k) => A.__cred.includes('data-portal-connect="' + k + '"')) &&
   A.__cred.includes('href="https://portal.nbcrna.com/" target="_blank"') &&
+  A.__cred.includes('data-portal-state="West Virginia"') &&
+  A.__cred.includes('href="https://wvrn.boardsofnursing.org/licenselookup" target="_blank"') &&
   A.__cred.includes('Connect NBCRNA — open portal'));
 t('no script-redirect Connect button remains',
   !A.__cred.includes('data-action="connect-portal"'));
