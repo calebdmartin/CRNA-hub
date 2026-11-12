@@ -121,8 +121,16 @@ function shiftsFixture() {
   t('sheet: says the mail app sends it, not the app', sheet.includes('never sends email for you'));
   const facPage = w.run(`facilitiesPage()`);
   t('facility card: Email button with count', facPage.includes('Email proposed shifts (2)'));
+  // v145 (Caleb, Nov 12, 2026) SUPERSEDES the old pin below it in
+  // spirit: the dashboard entry MOVED from Quick actions to directly
+  // under the calendar, shown only in months containing a proposed
+  // shift (pinned in test-v145-email-button-placement.js). The
+  // action itself — and this sheet — are unchanged. View the
+  // fixture's proposed month so the moved button renders.
+  w.run(`month = new Date(${J(dayStr(9))} + 'T12:00:00'); selected = ${J(dayStr(9))};`);
   const dash = w.run(`dashboard()`);
-  t('dashboard: Quick actions carries the same action', dash.includes('data-action="proposed-email"') && dash.includes('Email proposed shifts'));
+  const qaSeg = dash.split('Quick actions')[1].split('</section>')[0];
+  t('dashboard (v145): out of Quick actions, under the calendar', !qaSeg.includes('proposed-email') && dash.includes('data-action="proposed-email"') && dash.includes('Email proposed shifts') && dash.indexOf('data-action="proposed-email"') > dash.indexOf('shifts · Tap a day'));
 
   // Composition
   const composed = w.run(`composeProposedEmail(${holz}, upcomingProposedShifts(${holz}), 'Caleb Martin')`);
