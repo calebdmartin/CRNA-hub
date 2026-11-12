@@ -108,3 +108,9 @@ details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(18
    standalone Add shift save (close-and-return). */
 .day.flash{animation:dayflash 2.6s ease-in-out}
 @keyframes dayflash{0%,100%{box-shadow:none;background:#fff}18%,55%{box-shadow:0 0 0 3px #f59e0b inset;background:#fef3c7}}
+/* v138: wording guidance inside the describe box — compact, one
+   short line per example, visible by default without crowding
+   the box on small screens. */
+.rules-guide{background:#eaf3f8;border-radius:9px;padding:9px 12px;margin:0 0 10px;font-size:12.5px;color:#385b72}
+.rules-guide p{margin:2px 0;line-height:1.35}
+.rules-guide-intro{font-weight:650;color:#121e53}

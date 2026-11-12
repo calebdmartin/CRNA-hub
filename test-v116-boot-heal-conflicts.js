@@ -189,7 +189,7 @@ const metrics = (run) => ({
 
 (async () => {
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-  t('service worker cache is v116', swSrc.includes('crna-hub-shell-v137'));
+  t('service worker cache is v116', swSrc.includes('crna-hub-shell-v138'));
 
   // ================= Part A: the boot sequence =================
   {

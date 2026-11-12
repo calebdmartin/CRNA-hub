@@ -25,10 +25,13 @@
 //   double-booking warning keeps precedence (form stays open);
 //   day-sheet saves keep returning to the day sheet.
 // PHASE 3 — manual-shift chips (Caleb's Apr 5/6, 2027 screenshot):
-//   a code-less manual shift's chip names facility + shift (the
-//   facility's own code when a real definition matches the type,
-//   else "HOLZ · 8hr") — never a bare type label; proposed chips
-//   render amber, confirmed chips unchanged.
+//   as built in v137, a code-less manual shift's chip named
+//   facility + shift via a borrowed facility code, else
+//   "HOLZ · 8hr"; proposed chips render amber, confirmed chips
+//   unchanged. The LABEL design was superseded the same evening
+//   by Caleb's v138 correction — a hand-added chip is the
+//   facility name he picked + the short type ("Holzer 8hr") —
+//   and the Phase 3 pins below assert the corrected design.
 const fs = require('fs'); const path = require('path'); const vm = require('vm');
 const R = __dirname + path.sep;
 const store = new Map();
@@ -258,18 +261,26 @@ run(`
   month = new Date(2027, 3, 1); selected = '2027-04-05'; dayViewOpen = false; flashDay = '';
   persist();
 `);
-t('P3 chip: code-less manual shift names facility + type', run(`shiftChipLabel(db.shifts[0])`) === 'HOLZ · 8hr',
+// SUPERSEDED in v138 (Caleb's correction, Nov 11, 2026, the same
+// evening v137 shipped): a hand-added shift's chip is the facility
+// name he picked + the short type — "Holzer 8hr" — NOT a borrowed
+// schedule code and NOT the short-name fallback. Live, the borrow
+// had also failed his real rows (first match in map order was the
+// duration-named "8s"). The four pins below now assert the v138
+// design; the borrow itself survives for code-less shifts that
+// arrived from a feed (test-chip-paysched A2 pins that path).
+t('P3 chip: code-less manual shift names facility + type', run(`shiftChipLabel(db.shifts[0])`) === 'Holzer 8hr',
   run(`shiftChipLabel(db.shifts[0])`));
-t('P3 chip: manual second call borrows the facility code',
-  run(`shiftChipLabel({facility:'Holzer', type:'Second call', status:'proposed'})`) === 'Call 2',
-  run(`shiftChipLabel({facility:'Holzer', type:'Second call', status:'proposed'})`));
+t('P3 chip: manual second call names facility + type (no borrowed code)',
+  run(`shiftChipLabel({facility:'Holzer', type:'Second call', status:'proposed', source:'user-entered'})`) === 'Holzer 2nd call',
+  run(`shiftChipLabel({facility:'Holzer', type:'Second call', status:'proposed', source:'user-entered'})`));
 run(`db.facilities[0].codeMap['G Main (8)'] = {label:'G Main (8)', canonicalType:'8-hour day', hours:'8', viaWords:true}; persist();`);
-t('P3 chip: a matching facility code names the shift', run(`shiftChipLabel(db.shifts[0])`) === 'G Main (8)',
+t('P3 chip: a matching facility code does NOT rename a hand-added shift', run(`shiftChipLabel(db.shifts[0])`) === 'Holzer 8hr',
   run(`shiftChipLabel(db.shifts[0])`));
 run(`delete db.facilities[0].codeMap['G Main (8)']; persist();`);
 const gridHtml = run(`calendar()`);
 t('P3 grid: proposed chip is amber-classed and named',
-  /<span class="chip[^"]*proposed[^"]*">HOLZ · 8hr<\/span>/.test(gridHtml));
+  /<span class="chip[^"]*proposed[^"]*">Holzer 8hr<\/span>/.test(gridHtml));
 t('P3 grid: confirmed coded chip unchanged, no proposed class',
   (() => { const m = gridHtml.match(/<span class="chip([^"]*)">HOLZ - G Main \(8\)<\/span>/); return !!m && !/proposed/.test(m[1]); })());
 run(`db = empty(); db.shifts = [{id:'z1', date:'2026-12-02', facility:'Holzer', type:'8-hour day', pay:'2125', status:'confirmed'}]; persist();`);

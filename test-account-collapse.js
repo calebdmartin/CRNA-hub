@@ -295,7 +295,7 @@ const SESSION = `cloudSession = { access_token: 'x', email: 'crna@example.com' }
     sandbox.__schedBusy.startsWith('<details class="panel collapse-panel" id="schedule-import-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v137'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v138'));
 
   console.log(failures === 0 ? 'account-collapse test done: all passed' : 'account-collapse test done: FAILURES=' + failures);
 })();

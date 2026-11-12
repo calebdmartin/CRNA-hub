@@ -3169,15 +3169,32 @@ function shiftChipLabel(x){
   if(code)code=code.replace(/\s*\[[A-Za-z][A-Za-z\s,.'-]*\]$/,'').trim();
   if(code)return code;
   const fac=x.facility?facilityByNameOrAlias(x.facility):null;
+  // A hand-added shift's chip (Nov 11, 2026, v138 — Caleb's
+  // correction of the v137 borrowed-code design, the same evening
+  // it shipped): the facility name he picked + the short type —
+  // "Holzer 8hr". Never a borrowed schedule code: a code like
+  // "HOLZ - G Main (8)" is how a SYNCED shift is named, and synced
+  // shifts carry their code and return above; a shift he typed in
+  // himself is named the way he thinks of it. (Live, the borrow
+  // also failed his real rows — the first matching definition in
+  // map order was the duration-named "8s", so his Apr 5/6, 2027
+  // chips still read as bare durations.) Hand-added = every
+  // recorded source is his own entry; a merged row that picked up
+  // any feed source is not hand-added and keeps the paths below.
+  const srcs=shiftSourcesList(x);
+  if(srcs.length&&srcs.every(v=>v==='user-entered')){
+    const nm=String(x.facility||(fac?fac.name:'')||'').trim();
+    const st=shortTypeForChip(String(x.type||'').trim());
+    if(nm&&st)return nm+' '+st;
+  }
   if(fac){
-    // A code-less shift (added by hand) borrows the facility's own
-    // code for its type when a real definition names it (v137,
-    // Phase 3): the definition whose canonical type or label IS
-    // this shift's type lends its code, facility prefix stripped
-    // ("G Main (8)"). App-derived definitions (the ones the code
-    // wrote for itself — "8s", "8hr") never lend: they are not the
-    // facility's name for the shift, and a bare "8hr" is what
-    // Caleb's Apr 5/6, 2027 chips wrongly showed.
+    // A code-less shift that arrived some other way (a calendar
+    // row whose type IS a clarified label) borrows the facility's
+    // own code for its type when a real definition names it
+    // (v137, Phase 3): the definition whose canonical type or
+    // label IS this shift's type lends its code, facility prefix
+    // stripped ("G Main (8)"). App-derived definitions (the ones
+    // the code wrote for itself — "8s", "8hr") never lend.
     const defs=facilityCodeDefs(fac);const t=String(x.type||'').trim();
     for(const k of Object.keys(defs)){
       const d=defs[k]||{};if(d.derived)continue;
@@ -4047,9 +4064,9 @@ function weekendDayNums(s){const out=[];for(const m of String(s||'').toLowerCase
 function parseWeekendDaysText(text){
   const t=' '+String(text||'').toLowerCase()+' ';
   let days=null;
-  const defM=t.match(/weekends?\s+(?:is|are|means?|counts? as)\s+([^.;\n]{3,60})/);
+  const defM=t.match(/weekends?\s+(?:here\s+)?(?:is|are|means?|counts? as)\s+([^.;\n]{3,60})/);
   if(defM){const found=weekendDayNums(defM[1]);if(found.length)days=found}
-  const incM=t.match(/weekends?\s+(?:only\s+)?(?:also\s+)?(?:includes?|including|starts?\s+on)\s+([^.;\n]{3,40})/);
+  const incM=t.match(/weekends?\s+(?:here\s+)?(?:only\s+)?(?:also\s+)?(?:includes?|including|starts?\s+on)\s+([^.;\n]{3,40})/);
   if(incM){const found=weekendDayNums(incM[1]);if(found.length)days=[...new Set([...(days||[0,6]),...found])]}
   const wdM=t.match(/\b(sundays?|saturdays?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|sun|sat|mon|tue|tues|wed|thu|thur|thurs|fri)\b[^.;\n]{0,24}?\b(?:is|counts? as|treated as|considered)\s+a\s+weekday/);
   if(wdM){const n=WEEKDAY_ALIASES[wdM[1]];if(n!=null){days=(days||[0,6]).filter(d=>d!==n);if(!days.length)days=null}}
@@ -4228,7 +4245,13 @@ function describeCodeBlocks(text,codes){
   // keep their asterisks (a bare "*" carries no identity and is
   // dropped), and the match boundaries treat "*" as a name
   // character, so "5*" never matches inside "5**" or vice versa.
-  const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9*]+/).filter(tk=>/[a-z0-9]/.test(tk));
+  // A trailing "+" is part of a code's name the same way an
+  // asterisk is (Nov 11, 2026, v138): tokenizing it away
+  // collapsed "N5" and "N5+" into ONE form, so a statement
+  // about N5+ mid-text was attributed to N5 (its phrase came
+  // out as "+ is a 10-hour shift") and N5+ itself was left
+  // unanswered. Tokens and match boundaries keep the plus.
+  const toks=s=>String(s||'').toLowerCase().split(/[^a-z0-9*+]+/).filter(tk=>/[a-z0-9]/.test(tk));
   const escRx=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const forms=[];
   for(const c of (codes||[])){
@@ -4243,7 +4266,7 @@ function describeCodeBlocks(text,codes){
       // would match everywhere. Distinctive single tokens
       // ("PCDO", "NOC") and any multi-token form are fine.
       if(tk.length===1&&/^(call|day|shift|first|second)$/.test(tk[0]))return;
-      forms.push({code,prio:prio||0,rx:new RegExp('(?<![a-z0-9*])'+tk.map(escRx).join('[^a-z0-9*]+')+'(?![a-z0-9*])','gi')});
+      forms.push({code,prio:prio||0,rx:new RegExp('(?<![a-z0-9*+])'+tk.map(escRx).join('[^a-z0-9*+]+')+'(?![a-z0-9*+])','gi')});
     };
     const pushName=tk=>{
       if(!tk.length)return;
@@ -4443,7 +4466,29 @@ function describeCodeBlocks(text,codes){
       let stripped='',pos=0;for(const mn of acc){stripped+=seg.slice(pos,mn.start);pos=mn.end}stripped+=seg.slice(pos);
       if(/^(?:[\s=:\-–—.,&\/]|\b(?:and|or)\b)*$/i.test(stripped)){leadCodes=seg+' ';continue}
     }
-    if(!acc.length){if(current)addChunk(current,seg,null);continue}
+    if(!acc.length){
+      // A clause naming the OTHER call kind is a new subject,
+      // not a continuation of the current block (Nov 11, 2026,
+      // v138): "1st call pays $4,500 on weekdays and $3,900 on
+      // weekends" followed by "2nd call is $2,800 flat" — when
+      // no second-call code is on the schedule, the second line
+      // used to carry forward into the first call's block, its
+      // words re-typed that block as second call, and the
+      // per-code rate mapping then filed the $4,500 under the
+      // SECOND-call rates. A clause naming exactly one call
+      // kind, different from the current block's kind, ends the
+      // block instead; its amounts are read at text level by
+      // the call-amounts extraction, where they belong, and
+      // later code-less clauses no longer donate to the ended
+      // block either.
+      if(current){
+        const kindOf=s=>{const v=String(s||'').toLowerCase();const k1=/\b(?:call\s*1|1st\s+call|first\s+call|24\s*-?\s*h(?:ou)?r\s+call)\b/.test(v)?1:0;const k2=/\b(?:call\s*2|2nd\s+call|second\s+call)\b/.test(v)?2:0;return k1&&k2?0:(k1||k2)};
+        const curC=(codes||[]).find(c=>String(c&&c.code||'')===current);
+        const curKind=kindOf(curC?(String(curC.ctype||'')+' '+String(curC.code||'')):'');
+        const segKind=kindOf(seg);
+        if(curKind&&segKind&&curKind!==segKind){current=null;continue}
+      }
+      if(current)addChunk(current,seg,null);continue}
     for(let i=0;i<acc.length;i++){
       const mn=acc[i];
       const from=i===0?0:mn.start,to=i+1<acc.length?acc[i+1].start:seg.length;
@@ -4898,6 +4943,14 @@ function describeParseLocal(text,fac,codes){
     }
     for(const s of phTargets){
       if(durSet.has(s.dur))continue;
+      // The 8-hour case has a facility-level home (Nov 11, 2026,
+      // v138): paidHours8 IS the 8-hour shift's paid hours, so a
+      // length-8 statement with no 8-hour code to bind still
+      // lands — "I'm paid for 8.5 hours on an 8-hour shift" on a
+      // fresh facility sets the facility figure instead of
+      // reading back as unattached. Other lengths have no
+      // facility field and stay named below, in the user's words.
+      if(s.dur===8&&rates.paidHours8==null){rates.paidHours8=s.paid;continue}
       const phrase=s.text.replace(/\s+/g,' ').trim();
       if(phrase&&!unanswered.includes(phrase))unanswered.push(phrase);
     }
@@ -5836,6 +5889,35 @@ function confirmDescribe(key){
   const bornProvider=suggestionBornProviders[fac.id];
   if(bornProvider){delete suggestionBornProviders[fac.id];if(typeof window!=='undefined'&&typeof window.liveSyncRescanAfterFacilitySave==='function')window.liveSyncRescanAfterFacilitySave(bornProvider,fac.name);}
 }
+// Wording guidance inside the describe box (Nov 11, 2026, v138 —
+// Caleb's ask): a first-timer should never have to guess how to
+// phrase a rule, and the PCDO lesson — an unpaid code only reads
+// as unpaid when the words SAY no pay — belongs on the section
+// itself, not in a help page. The examples ARE the instructions:
+// one line per rule shape, generic facilities and figures only
+// (neutrality — no user's real rates or codes live here), and
+// every line is pinned machine-true in test-v138: each example is
+// run through the reader and must resolve to the rule it states.
+// Rendered by the ONE shared component, so the facility card, the
+// contract-import preview, onboarding and the import prompts all
+// carry the identical block.
+const DESCRIBE_GUIDE_INTRO='Plain sentences work — one rule per line is easiest to read.';
+const DESCRIBE_GUIDE_EXAMPLES=[
+  'Day shifts pay $200/hr',
+  'I\'m paid for 8.5 hours on an 8-hour shift',
+  'D8 = an 8-hour shift',
+  'Main 10 is a 10-hour shift',
+  '1st call pays $4,500 on weekdays and $3,900 on weekends',
+  '2nd call is $2,800 flat',
+  'PCDO = post call day off — no pay',
+  'Orientation days are unpaid',
+  'N5 is the same as N5+',
+  'Weekends here are Saturday and Sunday only'
+];
+const DESCRIBE_GUIDE_OUTRO='Anything I can\'t read, I\'ll ask about — nothing is guessed silently.';
+function describeGuideHTML(){
+  return `<div class="rules-guide"><p class="rules-guide-intro">${DESCRIBE_GUIDE_INTRO}</p>${DESCRIBE_GUIDE_EXAMPLES.map(e=>`<p class="rules-guide-ex">“${escapeHTML(e)}”</p>`).join('')}<p class="rules-guide-outro">${DESCRIBE_GUIDE_OUTRO}</p></div>`;
+}
 function describeRulesHTML(key,opts){
   const o=opts||{};
   const st=describeState(key);
@@ -5865,7 +5947,7 @@ function describeRulesHTML(key,opts){
   const derivedNote=derivedDefs.length?`<p class="hint">Learned from the code itself: ${derivedDefs.map(([c,d])=>'“'+escapeHTML(c)+'” = '+escapeHTML(d.label||((d.hours||'')+'-hour shift'))).join(' · ')}. Edit the words above any time — your own definition replaces it.</p>`:'';
   const confirmLabel=isFacPrev?'Use these rules':(key.indexOf('imp:')===0?'Use these rules & approve import':'Use these rules — save & reprice');
   const confirmNote=isFacPrev?'These rules join the preview — “Save facilities” below saves them with the facility.':(key.indexOf('imp:')===0?'Approving saves these rules and imports the shifts above in one go.':'Saving updates the rate card and reprices the shifts these rules cover.');
-  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.aiBasic?`<p class="hint">The AI reader didn't answer that time, so this is the basic read — tap “Make my rules” again to retry it, or use these rules as-is.</p>`:''}${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
+  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${describeGuideHTML()}${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.aiBasic?`<p class="hint">The AI reader didn't answer that time, so this is the basic read — tap “Make my rules” again to retry it, or use these rules as-is.</p>`:''}${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
 }
 // A facility whose priced shifts rest on rules the user never
 // confirmed in the read-back sense: a day code defined by the old
