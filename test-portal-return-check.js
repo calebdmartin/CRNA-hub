@@ -270,7 +270,7 @@ t('canned portal answer is one short line pointing at the read-it-now step',
 
   // --- 12. Cache bumped for the shell change.
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v145'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v146'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();
