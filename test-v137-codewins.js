@@ -22,8 +22,13 @@
 // PHASE 2 — Add shift close-and-return (Caleb, with screenshot):
 //   a successful STANDALONE save closes the form and lands on the
 //   calendar on the shift's month with the day flashed; the
-//   double-booking warning keeps precedence (form stays open);
-//   day-sheet saves keep returning to the day sheet.
+//   double-booking warning keeps precedence (form stays open).
+//   As shipped in v137, day-sheet saves kept returning to the day
+//   sheet — SUPERSEDED in v140 (Caleb, Nov 12, 2026, screenshot):
+//   an ADD from the day sheet ("Add a shift on this day") now
+//   lands on the calendar the same way; only an EDIT opened from
+//   the day sheet still returns to it. The pins below assert the
+//   v140 behavior.
 // PHASE 3 — manual-shift chips (Caleb's Apr 5/6, 2027 screenshot):
 //   as built in v137, a code-less manual shift's chip named
 //   facility + shift via a borrowed facility code, else
@@ -239,15 +244,46 @@ run(`actions('manual-shift-anyway')`);
 t('P2 conflict resolved: saved, closed, landed on the day',
   run(`db.shifts.length`) === 2 && run(`showShiftForm`) === false && run(`flashDay`) === '2027-04-06' && run(`month.getMonth()`) === 3);
 
-// Day-sheet saves keep returning to the day sheet.
+// v140 (Caleb, Nov 12, 2026): an ADD from the day sheet lands on
+// the calendar like any other add — sheet closed, month moved,
+// day flashed. (In v137 this pin asserted the day sheet stayed
+// up; Caleb's screenshot the next morning superseded that.)
 run(`
   dayViewOpen = true; flashDay = ''; month = new Date(2026, 10, 1);
   actions('add-shift');
 `);
 t('P2 day sheet: origin recorded as daysheet', run(`shiftFormOrigin`) === 'daysheet');
 run(`__submitShift({date:'2027-04-07', facility:'Holzer', type:'8-hour day', status:'confirmed', pay:'', note:''})`);
-t('P2 day sheet: saved, day sheet stays up, no calendar jump',
-  run(`db.shifts.length`) === 3 && run(`dayViewOpen`) === true && run(`flashDay`) === '' && run(`month.getFullYear()`) === 2026);
+t('P2 day sheet add (v140): saved, sheet closed, landed on the calendar',
+  run(`db.shifts.length`) === 3 && run(`dayViewOpen`) === false && run(`showShiftForm`) === false &&
+  run(`selected`) === '2027-04-07' && run(`flashDay`) === '2027-04-07' &&
+  run(`month.getFullYear()`) === 2027 && run(`month.getMonth()`) === 3);
+
+// …but an EDIT opened from the day sheet still returns to it
+// (the inspect loop is unchanged): reopen the day, edit the
+// shift just added, and the day sheet is where the save lands.
+run(`flashDay=''; selectDay('2027-04-07'); actions('edit-shifts', db.shifts[2].id);`);
+t('P2 day sheet edit: origin recorded as daysheet', run(`shiftFormOrigin`) === 'daysheet' && run(`showShiftForm`) === true);
+run(`__submitShift({date:'2027-04-07', facility:'Holzer', type:'10-hour day', status:'confirmed', pay:'', note:''})`);
+t('P2 day sheet edit (v140): edit applied, day sheet stays up, no calendar jump',
+  run(`db.shifts[2].type`) === '10-hour day' && run(`dayViewOpen`) === true && run(`showShiftForm`) === false &&
+  run(`flashDay`) === '' && run(`selected`) === '2027-04-07' &&
+  run(`month.getFullYear()`) === 2027 && run(`month.getMonth()`) === 3);
+
+// The double-booking escape from the day sheet also lands on
+// the calendar (v140): warn first, then "Add it anyway" closes
+// everything and flashes the day.
+run(`
+  db.shifts.push({id:'x2', date:'2027-04-08', facility:'CAMC', code:'5**', type:'8-hour day', pay:'2000', status:'confirmed', incomplete:false, source:'user-entered'});
+  selectDay('2027-04-08'); actions('add-shift');
+  __submitShift({date:'2027-04-08', facility:'Holzer', type:'8-hour day', status:'confirmed', pay:'', note:''});
+`);
+t('P2 day sheet conflict: form stays open with the warning, nothing saved',
+  run(`showShiftForm`) === true && !!run(`pendingManualShift`) && run(`db.shifts.length`) === 4);
+run(`actions('manual-shift-anyway')`);
+t('P2 day sheet conflict resolved (v140): saved, sheet closed, landed on the day',
+  run(`db.shifts.length`) === 5 && run(`showShiftForm`) === false && run(`dayViewOpen`) === false &&
+  run(`flashDay`) === '2027-04-08' && run(`month.getFullYear()`) === 2027 && run(`month.getMonth()`) === 3);
 
 /* ================= PHASE 3: chips ============================ */
 run(`

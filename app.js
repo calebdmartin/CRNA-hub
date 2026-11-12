@@ -541,9 +541,10 @@ function healShiftsAfterChange(onAbsorb,onFold){
 //    the December combining rule treats them as one assignment.
 let pendingManualShift=null;
 // Where the shift form was opened from (v137): 'daysheet' when the
-// day sheet was up (saves return there), 'standalone' otherwise —
-// a standalone save closes the form and lands on the calendar
-// showing the saved day (flashDay), per Caleb's Nov 11, 2026 ask.
+// day sheet was up, 'standalone' otherwise. Since v140 only an
+// EDIT opened from the day sheet returns there; every ADD closes
+// the form and lands on the calendar showing the saved day
+// (flashDay), per Caleb's Nov 11–12, 2026 asks.
 let shiftFormOrigin='standalone',flashDay='';
 function shiftGuardKindOf(x){
   let canon='';try{canon=canonicalTypeOf(String((x&&x.type)||''))||canonicalTypeOf(String((x&&x.code)||''))}catch(e){}
@@ -2036,12 +2037,13 @@ function setTab(t){onboardStep=0;assistantSheetOpen=false;tab=t;editId=null;show
 function moveMonth(n){month=new Date(month.getFullYear(),month.getMonth()+n,1);render()}
 function selectDay(d){selected=d;tab='Dashboard';editId=null;showShiftForm=false;dayViewOpen=true;render()}
 // Land on the calendar showing a just-saved shift's day (v137,
-// Caleb Nov 11, 2026): after a STANDALONE Add shift save the form
-// closes and the calendar is positioned on the shift's month with
+// Caleb Nov 11, 2026): after an Add shift save the form closes
+// and the calendar is positioned on the shift's month with
 // the day flashed — "it currently just stays open making it hard
-// to know what happened." The day sheet is NOT opened. The flash
-// clears itself a few seconds later without a re-render (a render
-// would yank scroll / focus mid-task).
+// to know what happened." v140: day-sheet adds land here too —
+// this helper closes the day sheet as part of the landing. The
+// flash clears itself a few seconds later without a re-render
+// (a render would yank scroll / focus mid-task).
 function returnToCalendarDay(dateStr){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr||'')))return;
   selected=dateStr;
@@ -8995,13 +8997,17 @@ if(['shifts','licenses','nbcrnaCE','aanaCE','credentials','vehicles'].includes(k
   }
   pendingManualShift=null;
 }
-let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;
-// Close-and-return (v137): a STANDALONE shift save lands on the
-// calendar showing the saved day, flashed — the form closing
-// alone left Caleb unsure anything happened. Day-sheet saves
-// return to the day sheet (origin 'daysheet'), untouched here.
-// The double-booking path returned earlier, so it still wins.
-let navShiftDay='';if(kind==='shifts'&&shiftFormOrigin!=='daysheet'){const sv=(db.shifts||[]).find(s=>s.id===savedId);if(sv){tab='Dashboard';returnToCalendarDay(sv.date);navShiftDay=sv.date}}if(kind==='mileage'){mileageFormDraft=null;mileageDraftHold=true;mileageCalcStatus=''}persist();if(kind==='vehicles'){const savedV=(db.vehicles||[]).find(v=>v.id===savedId);if(savedV&&savedV.isDefault){let clearedV=false;(db.vehicles||[]).forEach(v=>{if(v.id!==savedId&&v.isDefault){v.isDefault=false;clearedV=true;cloudSaveKind('vehicles',v.id)}});if(clearedV)persist();}}let repriced=0;let priceFix={priced:0,updated:0};if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}if(saved){priceFix=repairShiftPaysForFacility(saved);repriced=priceFix.priced+priceFix.updated;if(repriced>0)persist();}}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
+const shiftSaveIsEdit=kind==='shifts'&&!!editId;let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;
+// Close-and-return (v137, widened v140): a shift ADD lands on
+// the calendar showing the saved day, flashed — the form closing
+// alone left Caleb unsure anything happened. v140: an add that
+// started from the day sheet ("Add a shift on this day") lands
+// the same way; leaving the day sheet up after an add made it
+// confusing (Caleb, Nov 12, 2026). Only an EDIT opened from the
+// day sheet still returns to the day sheet — that inspect loop
+// is unchanged. The double-booking path returned earlier, so
+// it still wins.
+let navShiftDay='';if(kind==='shifts'&&(!shiftSaveIsEdit||shiftFormOrigin!=='daysheet')){const sv=(db.shifts||[]).find(s=>s.id===savedId);if(sv){tab='Dashboard';returnToCalendarDay(sv.date);navShiftDay=sv.date}}if(kind==='mileage'){mileageFormDraft=null;mileageDraftHold=true;mileageCalcStatus=''}persist();if(kind==='vehicles'){const savedV=(db.vehicles||[]).find(v=>v.id===savedId);if(savedV&&savedV.isDefault){let clearedV=false;(db.vehicles||[]).forEach(v=>{if(v.id!==savedId&&v.isDefault){v.isDefault=false;clearedV=true;cloudSaveKind('vehicles',v.id)}});if(clearedV)persist();}}let repriced=0;let priceFix={priced:0,updated:0};if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}if(saved){priceFix=repairShiftPaysForFacility(saved);repriced=priceFix.priced+priceFix.updated;if(repriced>0)persist();}}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
 if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(kind==='facilities'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(['licenses','nbcrnaCE','aanaCE','shifts','facilities','mileage','payStubs','vehicles'].includes(kind))cloudSaveKind(kind,savedId);if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved){const sgRec=(db.facilitySuggestions||[]).find(x=>normFacilityName(x.name)===normFacilityName(saved.name));const sgProvider=(sgRec&&sgRec.provider)||suggestionBornProviders[saved.id]||'';const hadSuggestion=clearFacilitySuggestion(saved.name);if(hadSuggestion||suggestionBornProviders[saved.id]){delete suggestionBornProviders[saved.id];if(typeof window!=='undefined'&&typeof window.liveSyncRescanAfterFacilitySave==='function')window.liveSyncRescanAfterFacilitySave(sgProvider||'apple',saved.name);}if(facilitySuggestionPrefill&&normFacilityName(facilitySuggestionPrefill.name)===normFacilityName(saved.name))facilitySuggestionPrefill=null;
   // Bug 2: a suggestion cleared by adding the facility means held
   // shifts exist for it. If the last import also skipped shifts as
@@ -9031,7 +9037,7 @@ if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
 if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry);}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
-if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(shiftFormOrigin!=='daysheet'){tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}}return render()}
+if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
 if(action==='vehicle-default'){const v=(db.vehicles||[]).find(x=>x.id===entry);if(v){(db.vehicles||[]).forEach(o=>{const was=!!o.isDefault;o.isDefault=o.id===entry;if(was!==!!o.isDefault)cloudSaveKind('vehicles',o.id)});persist();}return render()}if(action==='mileage-autocalc')return calcMileageForForm();if(action==='facility-distance')return calcFacilityDistance();if(action==='edit-profile'){profileEditing=true;return render()}
