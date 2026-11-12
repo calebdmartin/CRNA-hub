@@ -148,8 +148,14 @@ const t = (name, cond) => {
   t('credentials on: page renders the NBCRNA panel', run(`credentialsPage()`).includes('Connect NBCRNA'));
   t('credentials on: dashboard shows the credential deadlines stat', run(`dashboard()`).includes('Credential & certification deadlines (90 days)'));
   await run(`monitorBackgroundSweep()`);
+  // (v142: the sweep no longer auto-attempts any portal check — the
+  // server pull is retired and checks are agent reads. With the
+  // feature ON the sweep keeps the monitors current and the due
+  // prompt surfaces; it records no attempt and stamps nothing.)
   const cycleOn = run(`(ensurePortalMonitoring().find(m => m.source === 'nbcrna') || {}).autoAttemptCycle || ''`);
-  t('credentials on: background sweep attempts the due public check', cycleOn !== '');
+  const outcomeOn = run(`(ensurePortalMonitoring().find(m => m.source === 'nbcrna') || {}).lastOutcome || ''`);
+  t('credentials on: background sweep runs but attempts no portal check (agent reads now)',
+    cycleOn === '' && outcomeOn === '' && run(`monitorDuePromptsHTML()`).includes('NBCRNA check due'));
   run(`db.portalMonitoring.forEach(m => { m.autoAttemptCycle = ''; }); persist(); setFeature('featureCredentials', false);`);
   const credOff = run(`credentialsPage()`);
   t('credentials off: tab collapses to the off line (no Checks due strip, no panels)',

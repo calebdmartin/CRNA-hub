@@ -85,9 +85,14 @@ run(`globalThis.__flows = Object.fromEntries(Object.keys(PORTAL_CHECK_SOURCES).m
 t('every portal in PORTAL_CHECK_SOURCES has a full connect flow (open + returnToApp)',
   KEYS.every((k) => sandbox.__flows[k] === 'full') &&
   Object.keys(sandbox.__flows).length === KEYS.length);
-t('the final native model stays the system sign-in sheet the flow drops into',
-  run(`PORTAL_NATIVE_SPEC.model`) === 'system_signin_sheet' &&
-  run(`PORTAL_NATIVE_SPEC.sheet`).includes('ASWebAuthenticationSession'));
+// (v142: PORTAL_NATIVE_SPEC — the Nov 5 system-sign-in-sheet model —
+// was superseded by the agent-read model; this pin now guards the
+// replacement contract: an agent reads the portal in the user's own
+// signed-in session, and the app never stores a portal password.)
+t('the portal model is the agent read the connect flow serves',
+  run(`PORTAL_AGENT_SPEC.model`) === 'agent_read' &&
+  run(`PORTAL_AGENT_SPEC.neverStoresPasswords`) === true &&
+  run(`typeof PORTAL_NATIVE_SPEC`) === 'undefined');
 
 // --- 2. Connect opens the portal, keeps a closeable handle, severs opener.
 run(`
@@ -263,7 +268,7 @@ t('canned portal answer is one short line pointing at the check step',
 
   // --- 12. Cache bumped for the shell change.
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v141'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v142'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

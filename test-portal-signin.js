@@ -1,15 +1,20 @@
-// CRNA Hub — tests for the FINAL native portal sign-in rework (Nov 5, 2026).
+// CRNA Hub — tests for the portal sign-in / check model.
 // Run: node test-portal-signin.js
 //
+// Nov 12, 2026 (v142): the model is the AGENT READ (Caleb's direction:
+// "Do it the same way you do it for me now") — PORTAL_AGENT_SPEC
+// supersedes the Nov 5 PORTAL_NATIVE_SPEC (system sign-in sheet +
+// server pull) pins below; they were rewritten in place, reasons in
+// the section comments. The server-pull model was a proven dead end
+// (NBCRNA submit 404s, AANA SSO bot-gated, WV/OH block automation);
+// an agent reading the portal in the user's own signed-in browser
+// session is the working shape.
+//
 // Covers, without any live portal or API call:
-//   * the final native design is the designed path everywhere it is shown
-//     (PORTAL_NATIVE_SPEC: system sign-in sheet, Face ID, no passwords in
-//     the app, preview-before-save, per-source honest status);
-//   * the new-tab sign-in is ONLY a clearly-labelled preview stand-in
-//     ("Preview stand-in — the finished app signs you in with the system
-//     sign-in sheet", class "standin") on the Credentials tab, the
-//     Assistant portal-check flow, the onboarding step, and the assistant's
-//     own answer — and the final model is stated before the stand-in;
+//   * the agent-read design is the designed path everywhere it is shown
+//     (PORTAL_AGENT_SPEC: agent reads in the user's signed-in session,
+//     no passwords in the app, only a 'read' verifies, per-source
+//     honest status, page paths as data);
 //   * Connect still opens the real portal (window.open) and "I signed in
 //     — check it" still starts the assistant check;
 //   * the reusable final pieces still work: deterministic portal-page
@@ -70,28 +75,35 @@ const t = (name, cond) => {
 };
 const STANDIN = 'Preview stand-in — the finished app signs you in with the system sign-in sheet';
 
-// --- 1. Final native spec object: the designed path, in code.
-t('spec: final model is the system sign-in sheet',
-  run(`PORTAL_NATIVE_SPEC.model`) === 'system_signin_sheet' &&
-  run(`PORTAL_NATIVE_SPEC.sheet`).includes('ASWebAuthenticationSession'));
-t('spec: never stores portal passwords, preview-before-save',
-  run(`PORTAL_NATIVE_SPEC.neverStoresPasswords`) === true &&
-  run(`PORTAL_NATIVE_SPEC.previewBeforeSave`) === true);
-t('spec: per-source honest status (NBCRNA unproven, AANA likely blocked, WV/OH blocked)',
-  run(`PORTAL_NATIVE_SPEC.sources.nbcrna.status`) === 'unproven' &&
-  run(`PORTAL_NATIVE_SPEC.sources.aana.status`) === 'likely_blocked' &&
-  run(`PORTAL_NATIVE_SPEC.sources.wv.status`) === 'blocked' &&
-  run(`PORTAL_NATIVE_SPEC.sources.ohio.status`) === 'blocked');
-t('spec: monitoring is weekly with 90/60/30/7 escalation; public automatic, private via re-sign-in prompt',
-  run(`PORTAL_NATIVE_SPEC.monitoring.baseCadenceDays`) === 7 &&
-  run(`PORTAL_NATIVE_SPEC.monitoring.escalation.inside90`) === 3 &&
-  run(`PORTAL_NATIVE_SPEC.monitoring.escalation.inside30`) === 2 &&
-  run(`PORTAL_NATIVE_SPEC.monitoring.escalation.inside7`) === 1 &&
-  run(`PORTAL_NATIVE_SPEC.monitoring.publicChecks`) === 'automatic' &&
-  run(`PORTAL_NATIVE_SPEC.monitoring.privatePortals`).includes('re-sign-in prompt'));
-t('spec: server owns the NBCRNA pull + blocked answers + status rows; native owns the sheet',
-  run(`PORTAL_NATIVE_SPEC.serverOwns.join(' ')`).includes('NBCRNA public verification pull') &&
-  run(`PORTAL_NATIVE_SPEC.nativeOwns.join(' ')`).includes('system sign-in sheet'));
+// --- 1. Agent-read spec object: the designed path, in code.
+// (Supersedes the Nov 5 PORTAL_NATIVE_SPEC pins — v142, reason above.)
+t('spec: the model is the agent read',
+  run(`PORTAL_AGENT_SPEC.model`) === 'agent_read' &&
+  run(`PORTAL_AGENT_SPEC.session`).includes('signs in to the portal themselves') &&
+  run(`typeof PORTAL_NATIVE_SPEC`) === 'undefined');
+t('spec: never stores portal passwords; only a read verifies',
+  run(`PORTAL_AGENT_SPEC.neverStoresPasswords`) === true &&
+  run(`PORTAL_AGENT_SPEC.onlyReadVerifies`) === true);
+t('spec: the result outcomes are read / needs-sign-in / blocked / not-found, handled by applyPortalAgentRead',
+  JSON.stringify(run(`PORTAL_AGENT_SPEC.outcomes`)) === JSON.stringify(['read', 'needs-sign-in', 'blocked', 'not-found']) &&
+  run(`PORTAL_AGENT_SPEC.resultHandler`) === 'applyPortalAgentRead' &&
+  run(`typeof applyPortalAgentRead`) === 'function');
+t('spec: per-source honest status — every portal is an agent read now (no unproven / likely-blocked pull statuses)',
+  run(`PORTAL_AGENT_SPEC.sources.nbcrna.status`) === 'agent_read' &&
+  run(`PORTAL_AGENT_SPEC.sources.aana.status`) === 'agent_read' &&
+  run(`PORTAL_AGENT_SPEC.sources.wv.status`) === 'agent_read' &&
+  run(`PORTAL_AGENT_SPEC.sources.ohio.status`) === 'agent_read');
+t('spec: monitoring is weekly with 90/60/30/7 escalation; a due read that needs the user raises ONE prompt per cycle',
+  run(`PORTAL_AGENT_SPEC.monitoring.baseCadenceDays`) === 7 &&
+  run(`PORTAL_AGENT_SPEC.monitoring.escalation.inside90`) === 3 &&
+  run(`PORTAL_AGENT_SPEC.monitoring.escalation.inside30`) === 2 &&
+  run(`PORTAL_AGENT_SPEC.monitoring.escalation.inside7`) === 1 &&
+  run(`PORTAL_AGENT_SPEC.monitoring.dueAction`).includes('ONE needs-you prompt per cycle') &&
+  run(`PORTAL_AGENT_SPEC.monitoring.reads`).includes('never a silent server pull'));
+t('spec: page paths are data (PORTAL_AGENT_PATHS); fallbacks are the guided check, manual routes, manual entry',
+  run(`PORTAL_AGENT_SPEC.paths`) === 'PORTAL_AGENT_PATHS' &&
+  run(`PORTAL_AGENT_SPEC.fallbacks.join(' ')`).includes('guided check') &&
+  run(`PORTAL_AGENT_SPEC.fallbacks.join(' ')`).includes('manual entry'));
 t('stand-in label constant is GONE (Nov 6 sweep)',
   run(`typeof PORTAL_STANDIN_LABEL`) === 'undefined');
 
@@ -247,9 +259,11 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     globalThis.__keptSource = db.nbcrna.source;
     globalThis.__keptLabel = portalSourceLabel(db.nbcrna.source, '');
   `);
-  t('a server-verified record keeps its Verified source after an assistant check',
+  // (v142 relabel: the legacy public_verification source now reads
+  // "Verified — NBCRNA portal read"; the record itself is never downgraded.)
+  t('a portal-verified record keeps its Verified source after an assistant check',
     sandbox.__keptSource === 'public_verification' &&
-    sandbox.__keptLabel.includes('Verified — NBCRNA public lookup'));
+    sandbox.__keptLabel.includes('Verified — NBCRNA portal read'));
 
   // --- 8. Monitoring: cadence escalates near renewal; blocked is recorded honestly.
   const isoIn = (days) => {
@@ -270,7 +284,7 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     db.portalMonitoring = [];
     ensurePortalMonitoring();
     globalThis.__mons = db.portalMonitoring.map(m => m.key);
-    recordMonitorCheck('nbcrna','blocked','NBCRNA public check could not run: submit endpoint unavailable','public');
+    recordMonitorCheck('nbcrna','blocked','NBCRNA agent read could not run: the portal refused the read (captcha)','agent_read');
     globalThis.__blocked = (db.portalMonitoring.find(m => m.key === 'nbcrna') || {}).lastOutcome;
     globalThis.__blockedLabel = monitorOutcomeLabel('blocked');
     globalThis.__dueNew = monitorIsDue({key:'nbcrna',source:'nbcrna',enabled:true,lastChecked:''}, localDate(new Date()));
@@ -281,9 +295,10 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     sandbox.__cad7 === 1 && sandbox.__cadExp === 1);
   t('monitoring covers NBCRNA + AANA by default',
     sandbox.__mons.includes('nbcrna') && sandbox.__mons.includes('aana'));
+  // (v142 relabel: blocked now reads plainly as "Couldn’t read".)
   t('a blocked check is recorded as blocked — never faked as verified',
     sandbox.__blocked === 'blocked' &&
-    sandbox.__blockedLabel === 'Blocked — automation not allowed');
+    sandbox.__blockedLabel === 'Couldn’t read');
   t('a never-checked monitor is due now',
     sandbox.__dueNew === true);
   t('monitoring panel is one clean line: checks run on their own every 7 days, faster near renewal, no password stored; no preview-limit scaffolding',

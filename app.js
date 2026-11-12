@@ -51,7 +51,7 @@ function normalizeStoredRates(obj){
 const FEATURE_DEFS=[
   {key:'featureMileage',label:'Mileage tracking',blurb:'Track drives to your facilities for taxes.'},
   {key:'featurePaychecks',label:'Paycheck estimates',blurb:'Pay dates and paycheck estimates from your pay stubs.'},
-  {key:'featureCredentials',label:'Credential tracking & portal monitoring',blurb:'Licenses, certifications, and automatic portal checks.'},
+  {key:'featureCredentials',label:'Credential tracking & portal monitoring',blurb:'Licenses, certifications, and scheduled portal reads.'},
   {key:'featureQgenda',label:'QGenda feed',blurb:'Pull your shifts straight from your QGenda schedule.'},
  {key:'featurePush',label:'Push notifications',blurb:'Get pinged only when something needs your action.'}
 ];
@@ -2091,7 +2091,7 @@ function deadlinesWithin90(){
 }
 function credentialDeadlinesPanel(){
   const items=credentialDeadlines();
-  return `<section class="panel"><h2>Credential & certification deadlines</h2><p class="muted">Deadlines from your records — portal-pulled records are labelled with their source on the Credentials tab; the rest are user-entered, not verified. <a href="https://www.nbcrna.com/" target="_blank" rel="noopener">NBCRNA</a> · <a href="https://www.aana.com/" target="_blank" rel="noopener">AANA</a></p>${items.length?items.map(x=>`<div class="item"><strong>${escapeHTML(x.label)}</strong> · ${fmt(x.date)} <span class="${x.days<0?'expired':x.days<=7?'expired':x.days<=30?'warning':'success'}">${x.days<0?('Expired '+Math.abs(x.days)+' days ago'):(x.days===0?'Due today':('Due in '+x.days+' days'))}</span><div class="muted">${escapeHTML(x.source)}</div></div>`).join(''):'<p class="muted">No credential deadlines within their reminder windows.</p>'}</section>`;
+  return `<section class="panel"><h2>Credential & certification deadlines</h2><p class="muted">Deadlines from your records — records read from a portal are labelled with their source on the Credentials tab; the rest are user-entered, not verified. <a href="https://www.nbcrna.com/" target="_blank" rel="noopener">NBCRNA</a> · <a href="https://www.aana.com/" target="_blank" rel="noopener">AANA</a></p>${items.length?items.map(x=>`<div class="item"><strong>${escapeHTML(x.label)}</strong> · ${fmt(x.date)} <span class="${x.days<0?'expired':x.days<=7?'expired':x.days<=30?'warning':'success'}">${x.days<0?('Expired '+Math.abs(x.days)+' days ago'):(x.days===0?'Due today':('Due in '+x.days+' days'))}</span><div class="muted">${escapeHTML(x.source)}</div></div>`).join(''):'<p class="muted">No credential deadlines within their reminder windows.</p>'}</section>`;
 }
 function ceTotal(records,type){return records.filter(r=>!type||r.class===type).reduce((s,r)=>s+num(r.credits),0)}
 function ceForm(kind,label,record){
@@ -2128,8 +2128,8 @@ function answerQuestion(raw){
   if(/this year|year.*(income|gross|earn|pay)|income.*year|annual (income|gross|pay)|how much.*year/.test(l)){const y=currentYear(),cur=shiftsForYear(y);if(!cur.length)return `No shifts are recorded for ${y} yet, so I can't project this year's income. Add shifts or import a CSV, and this answer will use them.`;const split=yearIncomeSplit(y);return `Income for ${y}, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(split.c.ytd)} year to date and ${currency(split.c.predicted)} predicted annual; P (proposed-inclusive — C plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date and ${currency(split.p.predicted)} predicted annual. None of these is paid income — they are estimates from scheduled shifts. Shifts from other years are not included.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in either total.`:''}${split.w2Salary?` ${split.w2Salary} W-2 salary day(s) are excluded — paid through W-2 salary, never double-counted.`:''}`}
   if(/income|projected|earn|gross|pay.*month|this month/.test(l)){const cur=assistantMonthShifts();if(!cur.length)return 'No shifts are recorded for this month, so I can\'t project income yet. Add shifts or import a CSV, and this answer will use them.';const prefix=localDate(new Date()).slice(0,7);const m=monthIncomeSplit(prefix);const head=monthHeadline(prefix);const by={};cur.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).forEach(x=>{by[x.facility||'Unknown']=(by[x.facility||'Unknown']||0)+num(x.pay)});const byFac=`By facility (confirmed only): ${Object.keys(by).length?Object.entries(by).map(([f,v])=>`${f} ${currency(v)}`).join('; '):'no confirmed shifts yet'}`;const unpricedNote=m.unpriced?` ${m.unpriced} shift(s) this month are unpriced and are not included in any total.`:'';if(head.scheduled)return `Expected gross this month: ${currency(head.gross)} — the Dashboard headline, on the paycheck basis: the paychecks landing this month${head.anyActual?', including the actual amount from your pay stub':''}${head.partial?`, plus ${currency(head.worked)} from shifts not on a pay schedule`:''}. The shifts themselves split C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}.${unpricedNote}`;return `Projected income this month, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}. None of these is paid income.${unpricedNote}`}
   if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: tap “I signed in — check it” on the portal’s Connect card (or a Check button below), then show me the page that lists your record — I read it and show you the report, and nothing is saved until you approve it.';
-  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — sign in from the prompt on the Credentials tab and the guided check runs.`:''} Public checks run automatically where the source allows it; private portals run when you sign in yourself, and the assistant prompts you when a sign-in is due.`;}
-  if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential or certification deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, state license, and certification dates are entered.';return `Credentials & certifications needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records a portal pull brought back are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
+  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — sign in from the prompt on the Credentials tab and the guided check runs.`:''} Checks are agent reads: an assistant reads each portal in a real browser session you signed in to yourself — never a silent server pull — and prompts you, once per cycle, when a read needs your sign-in.`;}
+  if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential or certification deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, state license, and certification dates are entered.';return `Credentials & certifications needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records read from a portal are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
   if(/mileage|miles|trip/.test(l)){if(!db.mileage.length)return 'No mileage trips are logged yet. Log one from the Mileage tab, or generate schedule-based drafts there and confirm each trip.';const total=verifiedMileageTotal(),verified=verifiedMileageTrips().length,draft=db.mileage.filter(x=>x.status==='draft').length;return `Mileage on this device: ${total.toFixed(1)} verified miles across ${verified} confirmed trip(s), including ${draft} draft(s) still needing confirmation (drafts are not counted until the weekly review confirms them). Mileage defaults to ${tripTypeLabel(mileageTripType())}, and each trip shows whether it is round trip or one way — a round-trip trip is counted once, never doubled. Drafts are not verified trips — confirm the trip occurred and the actual miles before using them.`}
   if(/facilit|hospital/.test(l)){if(!db.facilities.length)return 'No facilities are saved yet. Add one from the Facilities tab with its rates, and shifts can then use those rates.';return `You have ${db.facilities.length} facilit(ies) saved: ${db.facilities.map(f=>`${f.name} (8h ${currency(f.rate8)}, 24h ${currency(f.rate24)}, 2nd call ${currency(f.rateSecond)})`).join('; ')}. I don't quote facility notes here, since they may hold authorized facility codes.`}
   if(/contract|rate|pay.*(shift|call|hour)/.test(l))return 'Each facility stores a flat rate for 8-hour, 24-hour, and second-call shifts. The Facilities tab has a contract import (text, CSV text, .ics, and text-based PDF): it parses facility names, dates, shift types, and stated rates, shows a preview for your approval, and links approved shifts to a saved contract record. Contract pictures are read with “Read with AI” (recommended) on the Facilities tab and show the same preview for your approval. On-device reading is the fallback for when you have no connection — less accurate on rate tables.';
@@ -2259,81 +2259,67 @@ async function askAssistantLive(raw){
 // not in Supabase, not in any log. Anything the assistant did not actually
 // read is left blank, never guessed, and labelled user-entered, not verified.
 //
-// --- FINAL native portal sign-in design (spec, agreed Nov 4-5, 2026) ---
-// The finished product is a native iOS App Store app. This web preview
-// CANNOT do the final flow, so everything below is the designed path the
-// preview stands in for — the new-tab sign-in + screenshot check is a
-// clearly-labelled PREVIEW STAND-IN, not the design. Do not present the
-// stand-in as the final flow, and do not build preview-only workarounds
-// into the native layer.
+// --- Portal checks are AGENT READS (Caleb's direction, Nov 12, 2026) ---
+// "Do it the same way you do it for me now. From my understanding you
+// are able to monitor those for me. So build the app the same way."
+// This supersedes the Nov 4-5, 2026 native-sign-in-sheet spec: the
+// server-side pull model is a proven dead end (NBCRNA's public submit
+// 404s, AANA's SSO is bot-gated, WV/OH board lookups block datacenter
+// automation), while an AI agent reading the portals in a REAL browser
+// session demonstrably works — it is how Jewel reads Caleb's own
+// licenses and CE today (Oct 19, 2026). The app is built in that shape:
 //
-// FINAL FLOW (native layer — what the iOS app must do):
-//   1. Connect opens the portal in Apple's system sign-in sheet
-//      (ASWebAuthenticationSession). The sheet is Apple's UI, not the
-//      app's: iPhone Passwords + Face ID fill the login, the user sees
-//      the portal's own domain, and the app never receives the password.
-//   2. The sheet returns to the app with an authenticated session only
-//      (cookies / tokens held by the system, scoped to that portal).
-//      CRNA Hub never sees, stores, logs, or syncs a portal password —
-//      not in the app, not in Supabase, not in any log. There is no
-//      username/password box anywhere in the app, now or in the final
-//      product.
-//   3. With the session, the assistant reads the record page (status,
-//      numbers, dates, CE credits) — server-side through the portal-sync
-//      Edge Function where a pull is possible, or from the record page
-//      the user shows the assistant where it is not — and shows a
-//      preview of exactly what it will save. NOTHING is saved until the
-//      user checks the preview and approves it.
-//   4. A record is labelled Verified ONLY when a pull/check actually
-//      returned a record from the portal (source + retrieval date).
+//   1. A portal CHECK is an agent read: a session in which an AI agent,
+//      in a real browser where THE USER has signed in themselves,
+//      navigates the portal's defined pages (PORTAL_AGENT_PATHS — the
+//      routes are data, not code) and reads the record like a person.
+//      The app never sees, collects, or stores a portal password — not
+//      in the app, not in Supabase, not in any log. There is no
+//      username/password box anywhere in the app.
+//   2. A read reports back through applyPortalAgentRead() with the
+//      result schema in PORTAL_AGENT_SPEC: the fields it read plus an
+//      outcome — 'read', 'needs-sign-in', 'blocked', or 'not-found'.
+//      ONLY a 'read' (data actually returned) stamps the source as
+//      checked / Verified (the v119 rule, unchanged). Blocked,
+//      needs-sign-in, and not-found attempts are logged as attempts
+//      with their plain reason; they never stamp a check that did not
+//      happen, and a 'read' carrying no fields is not a read.
+//   3. A record is labelled Verified ONLY when a read actually
+//      returned it from the portal (portal source + retrieval date).
 //      Anything else stays user-entered or assistant-portal-check —
 //      never upgraded, never faked.
-//   5. Monitoring runs on schedule in the background (weekly by
-//      default, escalating to every 3 days inside 90 days, every 2 days
-//      inside 30 days, daily inside 7 days / once expired). Public
-//      checks run automatically; private portals run when the user is
-//      signed in, and the assistant PROMPTS the user to sign in again
-//      (system sheet) when a check is due and no session exists. It
-//      never silently logs in as the user and never stores a portal
-//      password.
-//
-// SERVER (portal-sync Edge Function — what the server still owns):
-//   * NBCRNA public verification pull (no login) — implemented, UNPROVEN:
-//     the APEX submit endpoint 404s server-side (Nov 5, 2026).
-//   * Honest blocked/unsupported answers for WV / Ohio lookups, with
-//     the manual route + Nursys e-Notify pointer.
-//   * portal_connections status rows (connected / needs_reauth / failed)
-//     so a stale "connected" label can never survive a failed pull.
-//   * It does NOT own sign-in: the legacy connect-aana endpoint (server
-//     took a username/password for one AANA attempt) was DELETED
-//     Nov 5, 2026 (audit F9) — the final product never hands the server
-//     a portal password, even transiently.
-//
-// PER-SOURCE honest status (Nov 5, 2026 — re-check before claiming more):
-//   * NBCRNA: public verification UNPROVEN (submit 404s); member-portal
-//     record (MAC Ed / MAC Dev / CPC check-in) needs the signed-in sheet.
-//   * AANA: member sign-in is SSO + Incapsula bot-gated — LIKELY BLOCKED
-//     even from the sheet; the sheet is still the correct attempt, and a
-//     blocked sheet falls back to the assistant reading the member page.
-//   * WV Board lookup: BLOCKED (Imperva Incapsula). Ohio eLicense:
-//     BLOCKED (Salesforce Lightning app, no public API). Manual route
-//     only, plus Nursys e-Notify for push alerts. Nursys does NOT verify
-//     APRN licenses and is never claimed as a pull.
-const PORTAL_NATIVE_SPEC={
-  model:'system_signin_sheet',
-  sheet:'ASWebAuthenticationSession — Apple system sign-in sheet, iPhone Passwords + Face ID',
+//   4. Monitoring runs on schedule (weekly by default, escalating to
+//      every 3 days inside 90 days, every 2 days inside 30 days, daily
+//      inside 7 days / once expired). When a check comes due the agent
+//      read runs; if it comes back needs-sign-in or blocked, the user
+//      gets ONE "needs you" prompt per cycle (the watchdog trigger) —
+//      never repeated nagging, never a silent retry loop.
+//   5. Fallbacks stay fallbacks: the guided check (the user shows the
+//      assistant the record page — screenshot or pasted text — and
+//      approves a preview before anything saves), the official manual
+//      lookup links + Nursys e-Notify, and manual entry. Nursys does
+//      NOT verify APRN licenses and is never claimed as a read.
+//   6. The portal-sync Edge Function no longer pulls anything: its
+//      verify endpoints are retired and uncalled (datacenter pulls are
+//      blocked by the portals themselves). Nothing in the app may
+//      claim or imply a silent server pull.
+const PORTAL_AGENT_SPEC={
+  model:'agent_read',
+  session:'The user signs in to the portal themselves in a real browser; the agent navigates and reads the portal’s defined pages like a person. The app never sees or stores a portal password.',
   neverStoresPasswords:true,
-  previewBeforeSave:true,
-  monitoring:{baseCadenceDays:7,escalation:{inside90:3,inside30:2,inside7:1,expired:1},publicChecks:'automatic',privatePortals:'re-sign-in prompt via system sheet, never silent login'},
+  outcomes:['read','needs-sign-in','blocked','not-found'],
+  onlyReadVerifies:true,
+  resultHandler:'applyPortalAgentRead',
+  paths:'PORTAL_AGENT_PATHS',
+  monitoring:{baseCadenceDays:7,escalation:{inside90:3,inside30:2,inside7:1,expired:1},dueAction:'agent read runs; needs-sign-in / blocked raises ONE needs-you prompt per cycle',reads:'agent session — never a silent server pull'},
   sources:{
-    nbcrna:{status:'unproven',note:'Public verification submit 404s server-side (Nov 5, 2026); member-portal record needs the signed-in sheet.'},
-    aana:{status:'likely_blocked',note:'SSO + Incapsula bot-gated; the sheet is the correct attempt, blocked sheet falls back to the assistant reading the member page.'},
-    wv:{status:'blocked',note:'WV Board lookup Imperva Incapsula-blocked; manual route + Nursys e-Notify.'},
-    ohio:{status:'blocked',note:'Ohio eLicense is a Salesforce Lightning app with no public API; manual route + Nursys e-Notify.'},
-    licenses:{status:'blocked',note:'WV and Ohio board lookups block automation; manual route + Nursys e-Notify. Nursys does not verify APRN licenses and is never claimed as a pull.'}
+    nbcrna:{status:'agent_read',note:'Read from the signed-in portal.nbcrna.com session (certification status + CPC check-in pages). Public verification submit 404s — no server pull.'},
+    aana:{status:'agent_read',note:'Read from the signed-in AANA member session (membership status + CE transcript). SSO is bot-gated for automation — the read happens in the user’s own browser session.'},
+    wv:{status:'agent_read',note:'WV Board lookup read in the user’s browser session (RN + APRN-CRNA records). The lookup blocks datacenter automation; manual route + Nursys e-Notify stay as fallback.'},
+    ohio:{status:'agent_read',note:'Ohio eLicense read in the user’s browser session (RN + APRN.CRNA records). eLicense blocks datacenter automation; manual route + Nursys e-Notify stay as fallback.'},
+    licenses:{status:'agent_read',note:'State license records are agent reads (WV / Ohio paths above). Nursys does not verify APRN licenses and is never claimed as a read.'}
   },
-  serverOwns:['NBCRNA public verification pull (unproven)','honest blocked/unsupported answers for WV/OH with manual route + Nursys pointer','portal_connections status rows'],
-  nativeOwns:['system sign-in sheet (ASWebAuthenticationSession)','Face ID / iPhone Passwords fill','assistant record-page read + preview-before-save','background monitoring schedule + re-sign-in prompts']
+  fallbacks:['guided check — the user shows the assistant the page (screenshot or text), preview-before-save','official manual lookup links + Nursys e-Notify','manual entry']
 };
 // Exact stand-in label used everywhere the preview flow appears. Keep the
 // wording identical so a search for it finds every stand-in surface.
@@ -2341,15 +2327,15 @@ const PORTAL_CHECK_SOURCES={
   nbcrna:{title:'NBCRNA',short:'NBCRNA',url:'https://portal.nbcrna.com/',siteLabel:'portal.nbcrna.com',
     what:'certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status',
     how:'NBCRNA has its own sign-in portal. Open portal.nbcrna.com and sign in yourself, then screenshot the page that shows your certification timeline / record — status, period, and MAC progress.',
-    limit:'Honest limit: NBCRNA’s public verification submit does not answer (404), so the assistant cannot pull NBCRNA directly — it reads the page you show it instead.'},
+    limit:'How monitoring reads this: an assistant reads NBCRNA in a real browser session you signed in to yourself — there is no silent server pull (NBCRNA’s public verification submit does not answer). In this guided check, the assistant reads the page you show it.'},
   aana:{title:'AANA',short:'AANA',url:'https://www.aana.com/login',siteLabel:'aana.com/login',
     what:'membership status, membership expiration, and CE transcript totals (Class A / Class B)',
     how:'AANA needs a member sign-in. Open aana.com/login and sign in yourself, then screenshot your membership page or CE transcript — the page that shows your status and totals.',
-    limit:'Honest limit: AANA sign-in runs through SSO and that page is bot-gated, so the assistant cannot sign in for you — it reads the member page you show it instead. AANA also shares CE with NBCRNA, so NBCRNA totals may already cover the same credits.'},
+    limit:'How monitoring reads this: an assistant reads AANA in a real browser session you signed in to yourself — AANA’s SSO is bot-gated for automation, so there is no silent server pull and the assistant never signs in for you. In this guided check, the assistant reads the member page you show it. AANA also shares CE with NBCRNA, so NBCRNA totals may already cover the same credits.'},
   licenses:{title:'State Licenses',short:'a state license',url:'https://www.nursys.com/',siteLabel:'your official state board lookup',
     what:'license status, license type (RN / APRN), license number, issue date, and expiration date',
     how:'Open the official lookup for the license — WV Board License Lookup for West Virginia (RN and APRN; Nursys does not verify APRN licenses) or Ohio eLicense for Ohio — look yourself up, and screenshot the result page that shows your license.',
-    limit:'Honest limit: WV and Ohio board lookups block automation, so the assistant cannot pull them directly — it reads the lookup page you show it instead. Nursys e-Notify can alert you when a license changes.'}
+    limit:'How monitoring reads this: an assistant reads the board lookup in a real browser session you signed in to yourself — WV and Ohio lookups block datacenter automation, so there is no silent server pull. In this guided check, the assistant reads the lookup page you show it. Nursys e-Notify can alert you when a license changes.'}
 };
 
 // --- Assistant-guided portal navigation (Nov 6, 2026) ---
@@ -2381,6 +2367,36 @@ const PORTAL_NAV_MAPS={
     {key:'license',name:'license lookup result',direction:'Open ONE license result — the WV Board License Lookup for a West Virginia license (RN or APRN), or your Ohio eLicense verification details for an Ohio license — that’s the page I need.',fields:['status','number','type','issue','expiry']}]}
 };
 function portalNavMap(source){ return PORTAL_NAV_MAPS[source]||{required:[],pages:[{key:'record',name:'record page',direction:'Open the page that lists your record — that’s the page I need.',fields:[]}]}; }
+// --- Agent-read page paths (Nov 12, 2026) ---
+// The routes an agent read follows, per portal — the same routes Jewel
+// used reading Caleb's own records on Oct 19, 2026. Each path is an
+// ordered list of named pages and the fields each page gives. This is
+// DATA: if a portal rearranges its pages, the path is updated here,
+// not in code. The guided screenshot walk above (PORTAL_NAV_MAPS) is
+// the in-app fallback and names the same pages for the user.
+const PORTAL_AGENT_PATHS={
+  nbcrna:{portal:'NBCRNA',site:'portal.nbcrna.com',pages:[
+    {key:'certification',name:'Certification status',direction:'Open the certification record / timeline after sign-in.',fields:['status','number','periodStart','periodEnd','renewalDeadline']},
+    {key:'cpc',name:'CPC check-in & MAC progress',direction:'Open the CPC / MAC progress page — MAC Check status, MAC Ed and MAC Dev.',fields:['checkStatus','classA','classB','macEd','macDev']}]},
+  aana:{portal:'AANA',site:'aana.com',pages:[
+    {key:'membership',name:'Membership status',direction:'Open the Member Dashboard, then My AANA Membership Information. “Dues paid through” is the membership expiration.',fields:['status','number','expiration']},
+    {key:'transcript',name:'CE transcript',direction:'Open the CE transcript for the Class A / Class B totals.',fields:['classA','classB']}]},
+  wv:{portal:'West Virginia Board of Nursing',site:'wvrn.boardsofnursing.org/licenselookup',pages:[
+    {key:'rn',name:'RN license record',direction:'Look the licensee up in the WV Board License Lookup and open the RN record.',fields:['status','number','type','issue','expiry'],licenseType:'RN'},
+    {key:'aprn',name:'APRN-CRNA license record',direction:'Open the APRN-CRNA record from the same lookup (Nursys does not verify APRN licenses — the board lookup is the route).',fields:['status','number','type','issue','expiry'],licenseType:'APRN'}]},
+  ohio:{portal:'Ohio eLicense',site:'elicense.ohio.gov',pages:[
+    {key:'rn',name:'RN license record',direction:'Search Ohio eLicense and open the RN verification details.',fields:['status','number','type','issue','expiry'],licenseType:'RN'},
+    {key:'aprn',name:'APRN.CRNA license record',direction:'Open the APRN.CRNA verification details (a CRNA-titled page maps to the APRN record).',fields:['status','number','type','issue','expiry'],licenseType:'APRN'}]}
+};
+// The page path for a check source: licenses resolve per state (the
+// routes Jewel used); anything unlisted falls back to the WV path,
+// matching the guided check's default state.
+function portalAgentPath(source,state){
+  if(source==='nbcrna')return PORTAL_AGENT_PATHS.nbcrna;
+  if(source==='aana')return PORTAL_AGENT_PATHS.aana;
+  if(source==='licenses')return String(state||'').toLowerCase().startsWith('oh')?PORTAL_AGENT_PATHS.ohio:PORTAL_AGENT_PATHS.wv;
+  return null;
+}
 const PORTAL_LOOKUP_LINKS={
   licenses:'<p class="muted">Official lookups: <a href="https://wvrn.boardsofnursing.org/licenselookup" target="_blank" rel="noopener">WV Board License Lookup</a> (West Virginia RN + APRN) · <a href="https://elicense.ohio.gov/oh_verifylicense" target="_blank" rel="noopener">Ohio eLicense</a> (Ohio licenses) · <a href="https://www.nursys.com/" target="_blank" rel="noopener">Nursys</a> (RN licenses in other states only — it does not verify APRN licenses).</p>'
 };
@@ -2446,30 +2462,30 @@ const PORTAL_VERIFIED_SOURCES=['public_verification','nbcrna_portal','aana_porta
 // schedule — it does not wait to be asked. Cadence: weekly by default,
 // escalating inside the renewal windows (every 3 days inside 90 days,
 // every 2 days inside 30 days, daily inside 7 days, daily once expired).
-//   * Public checks (NBCRNA public verification) the assistant runs
-//     automatically where the source allows it — no login, no password.
-//   * Private portals (AANA member portal, state board member pages) run
-//     only when the user is signed in; when a check is due and no signed-in
-//     session exists, the assistant PROMPTS the user to sign in again.
-//     It never silently logs in as the user and never stores a portal
-//     password.
-//   * A check that finds a change (status, dates, CE totals) is flagged on
-//     the Dashboard and in the Assistant tab, with what changed and when it
-//     was read. A check that finds nothing records "checked, no change"
-//     with the date. A source that blocks automation is recorded honestly
-//     as blocked — never faked.
+//   * Every check is an AGENT READ (Nov 12, 2026): when a check comes
+//     due, an assistant reads the portal in a real browser session the
+//     user signed in to themselves, following the portal's page path
+//     (PORTAL_AGENT_PATHS), and reports the result back through
+//     applyPortalAgentRead. There is no server pull — the portals
+//     block datacenter automation, and the app never pretends
+//     otherwise. It never silently logs in as the user and never
+//     stores a portal password.
+//   * A read that finds a change (status, dates, CE totals) is flagged
+//     on the Dashboard and in the Assistant tab, with what changed and
+//     when it was read. A read that finds nothing records "checked, no
+//     change" with the date. A read that comes back needs-sign-in,
+//     blocked, or not-found is recorded honestly with its reason —
+//     never faked, and it never stamps the source as checked.
 //   * There is no "run check now": the cadence is the only trigger.
-//     When a check comes due, public-route sources are attempted
-//     automatically (monitorBackgroundSweep — on app open / sign-in here,
-//     a background task in the finished native app); sources that need a
-//     signed-in session surface ONE prompt per due cycle, which launches
-//     the guided check. Dismissing snoozes the prompt to the next cycle.
+//     A due check surfaces ONE prompt per due cycle (which can launch
+//     the guided check as the in-app fallback). Dismissing snoozes the
+//     prompt to the next cycle.
 // Monitoring state lives on this device (db.portalMonitoring, included in
 // JSON backups); the check log reuses db.portalChecks (last 20).
 const MONITOR_SOURCES={
-  nbcrna:{title:'NBCRNA',method:'public',blocked:'Checks read the page you show the assistant.'},
-  aana:{title:'AANA',method:'signed_in',blocked:'Checks run when you sign in yourself.'},
-  licenses:{title:'State Licenses',method:'signed_in',blocked:'Checks read the lookup page you show the assistant.'}
+  nbcrna:{title:'NBCRNA',method:'agent_read',blocked:'Reads run in a browser session you signed in to.'},
+  aana:{title:'AANA',method:'agent_read',blocked:'Reads run in a browser session you signed in to.'},
+  licenses:{title:'State Licenses',method:'agent_read',blocked:'Reads run in a browser session you signed in to.'}
 };
 function monitorKey(source,state,type){return source==='licenses'?('licenses:'+(state||'')+':'+(type||'APRN')):source}
 function monitorLabel(mon){return mon.source==='licenses'?((mon.state||'State license')+' '+(mon.type||'')):((MONITOR_SOURCES[mon.source]||{}).title||mon.source)}
@@ -2495,29 +2511,21 @@ function monitorNextDue(mon,todayStr){
   // A failed / blocked attempt retries on the same cadence measured from
   // the attempt — it stays "not checked", but it is not retried on every
   // app open either.
-  const failedAttempt=mon.lastAttempt&&(!mon.lastChecked||mon.lastAttempt>mon.lastChecked)&&['blocked','failed','needs_signin'].includes(mon.lastOutcome);
+  const failedAttempt=mon.lastAttempt&&(!mon.lastChecked||mon.lastAttempt>mon.lastChecked)&&['blocked','failed','needs_signin','not_found'].includes(mon.lastOutcome);
   const base=failedAttempt?mon.lastAttempt:mon.lastChecked;
   if(!base)due=today;
   else due=addDaysStr(String(base).slice(0,10),monitorCadence(mon));
   if(mon.snoozeUntil&&mon.snoozeUntil>due)due=mon.snoozeUntil;
   return due;
 }
-function monitorMethod(mon){return (MONITOR_SOURCES[mon.source]||{}).method||'signed_in'}
-// Names for the public check come from the monitor (asked once) or the
-// step-1 profile name; with a signed-in app session the public check can
-// run on its own. Without them it falls back to the due prompt.
-function monitorPublicReady(mon){
-  if(mon.source!=='nbcrna')return monitorMethod(mon)==='public';
-  if(typeof cloudSession==='undefined'||!cloudSession)return false;
-  const named=((mon.firstName||'')+' '+(mon.lastName||'')).trim();
-  return !!(named||String(profileName()||'').trim().split(/\s+/).filter(Boolean).length>=2);
-}
-// One prompt per due cycle for checks that need the user: visible while
-// the check is due and this cycle has not been dismissed. Dismissing
+function monitorMethod(mon){return (MONITOR_SOURCES[mon.source]||{}).method||'agent_read'}
+// One prompt per due cycle: visible while the check is due and this
+// cycle has not been dismissed. Every check is an agent read in the
+// user's own signed-in session, so every due check can need the user —
+// there is no silent server route that skips the prompt. Dismissing
 // snoozes to the next cadence (a new due date = a new cycle).
 function monitorPromptVisible(mon,todayStr){
   if(!monitorIsDue(mon,todayStr))return false;
-  if(monitorMethod(mon)==='public'&&monitorPublicReady(mon))return false;
   return mon.promptDismissedCycle!==monitorNextDue(mon,todayStr);
 }
 function monitorIsDue(mon,todayStr){if(mon.enabled===false)return false;return monitorNextDue(mon,todayStr)<=(todayStr||localDate(new Date()))}
@@ -2563,7 +2571,7 @@ function recordMonitorCheck(key,outcome,summary,method){
   pushWatchRefreshPortal();
   return mon;
 }
-function monitorOutcomeLabel(o){return {'no_change':'Checked — no change','changed':'Changed','needs_signin':'Needs sign-in','blocked':'Blocked — automation not allowed','failed':'Check failed','not_checked':'Not checked yet'}[o]||o||'Not checked yet'}
+function monitorOutcomeLabel(o){return {'no_change':'Checked — no change','changed':'Changed','needs_signin':'Needs your sign-in','blocked':'Couldn’t read','not_found':'No record found','failed':'Check failed','not_checked':'Not checked yet'}[o]||o||'Not checked yet'}
 function monitorDuePromptHTML(mon){
   return `<div class="item"><strong>${escapeHTML(mon.label)} check due — sign in to run it.</strong><div class="toolbar"><button type="button" data-action="monitor-assistant" data-id="${escapeHTML(mon.key)}">Run my check</button><button type="button" class="secondary" data-action="monitor-prompt-dismiss" data-id="${escapeHTML(mon.key)}">Not now</button></div></div>`;
 }
@@ -2581,67 +2589,29 @@ function portalMonitoringHTML(){
   const monOpen=!!(mons.some(m=>monitorPromptVisible(m,today))||mons.some(m=>monitorIsDue(m,today))||mons.some(m=>m.changeFlag));
   const monLastChecked=mons.map(m=>m.lastChecked||'').filter(Boolean).sort().pop()||'';
   const monTitle='Portal monitoring'+(monLastChecked?(' · checked '+fmt(String(monLastChecked).slice(0,10))):'');
-  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. If a check needs your sign-in, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'}${m.lastAttempt&&m.lastAttempt!==m.lastChecked?` · Last attempt: ${fmt(String(m.lastAttempt).slice(0,10))}`:''} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue&&monitorMethod(m)!=='public'?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
+  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. Each check is an assistant read of the portal, in a browser session you signed in to yourself — never a silent server pull. If a read needs you, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'}${m.lastAttempt&&m.lastAttempt!==m.lastChecked?` · Last attempt: ${fmt(String(m.lastAttempt).slice(0,10))}`:''} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
 }
 // Dashboard portal-monitoring card removed (Nov 6, 2026): monitoring
 // lives on the Credentials tab; the Dashboard no longer repeats it.
 // The monitoring engine, Credentials panel, and Assistant checks
 // are untouched.
-// Automatic public check — the background path. When a check comes due,
-// a source with a working public route (NBCRNA public verification) is
-// attempted on its own: no prompt, no alert. Names come from the monitor
-// (asked once in the guided flow) or the step-1 profile name. Outcomes —
-// including blocked / failed — are recorded in the monitoring log, and
-// lastChecked only moves when a check returned data. Nothing is faked.
-async function monitorAttemptPublic(mon){
-  if(!SUPABASE_CONFIGURED||!cloudSession)return false;
-  let first=mon.firstName||'',last=mon.lastName||'';
-  if(!first||!last){
-    const parts=String(profileName()||'').trim().split(/\s+/).filter(Boolean);
-    if(parts.length>=2){first=parts[0];last=parts.slice(1).join(' ');mon.firstName=first;mon.lastName=last;persist();}
-  }
-  if(!first||!last)return false;
-  const before=monitorSnapshot('nbcrna');
-  try{
-    const data=await portalCall({action:'verify-nbcrna',firstName:first,lastName:last,certNumber:((db.nbcrna||{}).number||''),state:''});
-    const r=data.record||{};
-    if(!r.certification_number&&!r.period_end&&!r.period_start) throw new Error('NBCRNA public verification returned no record data');
-    db.nbcrna={...(db.nbcrna||{}),status:r.certification_status||'Certified',number:r.certification_number||(db.nbcrna&&db.nbcrna.number)||'',periodEnd:r.period_end||(db.nbcrna&&db.nbcrna.periodEnd)||'',renewalDeadline:r.renewal_deadline||(db.nbcrna&&db.nbcrna.renewalDeadline)||'',source:'public_verification',reminders:(db.nbcrna&&db.nbcrna.reminders)||'90,60,30,7'};
-    cloudSyncTimes.nbcrna=data.retrievedAt||cloudNow();
-    delete portalAttemptFailed['nbcrna'];delete portalHealed['nbcrna'];
-    persist();cloudSaveKind('nbcrna');await portalRefreshStatus();
-    const changed=monitorSnapshotChanged(before,monitorSnapshot('nbcrna'));
-    recordMonitorCheck(mon.key,changed?'changed':'no_change',changed?('NBCRNA record changed on public check — '+(r.certification_number||'certification')+' expires '+(r.period_end||'unknown')):'NBCRNA public check: no change','public');
-    return true;
-  }catch(e){
-    const msg=portalErrMsg(e);portalNoteFailed('nbcrna',msg);
-    recordMonitorCheck(mon.key,/404|did not answer|unavailable|not answer/i.test(msg)?'blocked':'failed','NBCRNA public check could not run: '+msg,'public');
-    await portalRefreshStatus();
-    return true;
-  }
-}
-// The background cadence sweep: the only way monitoring checks start.
-// Runs when the app opens and after sign-in (in the finished native app
-// this is a background task on the same schedule). Public-route sources
-// are attempted automatically, once per due cycle; sources that need a
-// signed-in session are left due — the one prompt per cycle (panel +
-// Credentials reminder surface) is how they run, via the guided flow.
+// The cadence sweep — all that remains of the old background path
+// (Nov 12, 2026). There is NO automatic server attempt anymore: the
+// NBCRNA public-verification pull was a dead end (submit 404s; the
+// portals block datacenter automation), and pretending a background
+// pull exists was retired with it. Checks are agent reads: they run
+// in a real browser session the user signed in to, and their results
+// come back through applyPortalAgentRead. The sweep's only job now is
+// to keep the watchdog mirror current, so a check that comes due
+// surfaces its ONE prompt per cycle (panel + Credentials reminder
+// surface + the portal sign-in push trigger) until the read lands.
 let monitorSweepRunning=false;
 async function monitorBackgroundSweep(){
   if(!featureOn('featureCredentials'))return;
   if(monitorSweepRunning)return;monitorSweepRunning=true;
   try{
-    const today=localDate(new Date());let attempted=false;
-    for(const mon of ensurePortalMonitoring()){
-      if(!monitorIsDue(mon,today))continue;
-      if(monitorMethod(mon)!=='public')continue;
-      const cycle=monitorNextDue(mon,today);
-      if(mon.autoAttemptCycle===cycle)continue;
-      mon.autoAttemptCycle=cycle;persist();
-      if(await monitorAttemptPublic(mon))attempted=true;
-    }
+    ensurePortalMonitoring();
     pushWatchRefreshPortal();
-    if(attempted)render();
   }catch(e){}finally{monitorSweepRunning=false;}
 }
 function monitorAssistantCheck(mon){
@@ -2880,11 +2850,15 @@ async function submitPortalCheck(e){
 // assistant actually read (or the user corrected in the preview) are written,
 // blank fields never clear an existing value, and a record a server portal
 // pull already verified is NEVER downgraded to the assistant source.
-function applyPortalCheckRecord(source,f,when){
+function applyPortalCheckRecord(source,f,when,opts){
   // Provenance follows what actually happened: a page was shown and read
   // -> assistant check; every page skipped and values typed by hand ->
   // the user's own entry. A server-verified record is never downgraded.
-  const prov=(portalCheck&&(portalCheck.pagesShown||0)>0)?'assistant_portal_check':'user_entered';
+  // opts.prov overrides provenance (the agent-read path passes the
+  // portal's own verified source — the agent read the real portal in
+  // the user's signed-in session); opts.state pins the license state
+  // when no guided check is in progress.
+  const prov=(opts&&opts.prov)?opts.prov:((portalCheck&&(portalCheck.pagesShown||0)>0)?'assistant_portal_check':'user_entered');
   const keep=(cur)=>PORTAL_VERIFIED_SOURCES.includes(cur&&cur.source)?cur.source:prov;
   if(source==='nbcrna'){
     const cur=db.nbcrna||{};
@@ -2898,7 +2872,7 @@ function applyPortalCheckRecord(source,f,when){
     cloudSyncTimes.aana=when; cloudSaveKind('aana');
     return 'AANA '+(f.status||db.aana.status||'')+' · expires '+(db.aana.expiration||'unknown');
   }
-  const state=String(f.state||portalCheck&&portalCheck.state||'West Virginia'), type=f.type||'APRN';
+  const state=String(f.state||(opts&&opts.state)||(portalCheck&&portalCheck.state)||'West Virginia'), type=f.type||'APRN';
   const existing=(db.licenses||[]).find(x=>String(x.state||'').toLowerCase()===state.toLowerCase()&&String(x.type||'').toUpperCase()===type.toUpperCase());
   let recId;
   if(existing){
@@ -2932,6 +2906,76 @@ function approvePortalCheck(e){
   if(pagesShown>0) recordMonitorCheck(monKey,changed?'changed':'no_change',(changed?'Changed on assistant check — ':'Checked, no change — ')+summary,'signed_in');
   portalCheck=null; portalCheckError=''; portalCheckOcrStatus=''; portalStatePersist(); persist(); render();
   alert(pagesShown>0?('Saved from the assistant portal check ('+String(when).slice(0,10)+'): '+summary+'\n\nSource: assistant portal check — read from the portal page you showed the assistant. It is not a server portal pull, and nothing was stored from your sign-in.'):('Saved what you typed in: '+summary+'\n\nNo portal page was shown for this check, so it is saved as your own entry — not counted as a portal check.'));
+}
+// --- Agent-read results (the monitoring check contract, Nov 12, 2026) ---
+// The live reads run OUTSIDE the app: an AI agent, in a real browser
+// where the user signed in themselves, follows the portal's page path
+// (PORTAL_AGENT_PATHS) and reads the record like a person. The result
+// comes back here in ONE shape, for every source:
+//   { outcome:'read', fields:{...}, readAt }        — data returned
+//   { outcome:'needs-sign-in', reason }             — no live session
+//   { outcome:'blocked', reason }                   — captcha / 2FA /
+//                                                     portal refusal
+//   { outcome:'not-found', reason }                 — no record there
+// Rules (the v119 rule, carried unchanged): ONLY a 'read' stamps the
+// monitor's lastChecked and marks the record Verified; the other
+// outcomes are attempts, logged with their plain reason. A 'read'
+// carrying no fields is not a read at all — it is recorded as a failed
+// attempt and changes nothing. Fields use the portal-check field names
+// (status / number / periodStart / periodEnd / renewalDeadline /
+// checkStatus / classA / classB / macEd / macDev / expiration / state /
+// type / issue / expiry), and they land through the same save path as
+// an approved guided check — so status flows end-to-end (v119), Ohio's
+// dotted numbers are kept whole, and the NBCRNA CPC field rides along.
+// Provenance is the portal's own verified source: the agent read the
+// real portal, in the user's own signed-in session.
+const PORTAL_READ_OUTCOMES=['read','needs-sign-in','blocked','not-found'];
+const PORTAL_AGENT_READ_SOURCE={nbcrna:'nbcrna_portal',aana:'aana_portal',licenses:'state_board_portal'};
+function applyPortalAgentRead(source,result){
+  result=result||{};
+  const outcome=String(result.outcome||'');
+  const fields={...((result.fields&&typeof result.fields==='object')?result.fields:{})};
+  const reason=String(result.reason||'');
+  // State/type may ride at the top level of the report; fold them into
+  // the fields so the snapshot, the monitor key and the save path all
+  // resolve the same record (the save path reads type from fields).
+  if(!fields.state&&result.state)fields.state=result.state;
+  if(!fields.type&&result.type)fields.type=result.type;
+  const state=String(fields.state||'');
+  const type=String(fields.type||'APRN');
+  const key=monitorKey(source,state,type);
+  if(!PORTAL_READ_OUTCOMES.includes(outcome)){
+    recordMonitorCheck(key,'failed',reason||'Agent read reported an unknown outcome','agent_read');
+    return {ok:false,outcome:outcome||'unknown'};
+  }
+  if(outcome==='needs-sign-in'){
+    recordMonitorCheck(key,'needs_signin',reason||'The portal session needs your sign-in','agent_read');
+    return {ok:false,outcome};
+  }
+  if(outcome==='blocked'){
+    recordMonitorCheck(key,'blocked',reason||'The portal would not let the read through','agent_read');
+    return {ok:false,outcome};
+  }
+  if(outcome==='not-found'){
+    recordMonitorCheck(key,'not_found',reason||'No record found on the portal','agent_read');
+    return {ok:false,outcome};
+  }
+  // outcome === 'read': data must actually have come back (v119 rule —
+  // a response with no record data certifies nothing and stamps nothing).
+  const hasData=Object.keys(fields).some(k=>String(fields[k]??'').trim()!=='');
+  if(!hasData){
+    recordMonitorCheck(key,'failed','Agent read came back with no record data','agent_read');
+    return {ok:false,outcome:'failed'};
+  }
+  const when=String(result.readAt||cloudNow());
+  const beforeSnap=monitorSnapshot(source,state,type);
+  const summary=applyPortalCheckRecord(source,fields,when,{prov:PORTAL_AGENT_READ_SOURCE[source]||'assistant_portal_check',state});
+  if(source==='licenses')cloudSyncTimes.licenses=when;
+  delete portalAttemptFailed[source];
+  const changed=monitorSnapshotChanged(beforeSnap,monitorSnapshot(source,state,type));
+  recordMonitorCheck(key,changed?'changed':'no_change',(changed?'Changed on agent read — ':'Agent read, no change — ')+summary,'agent_read');
+  persist();
+  return {ok:true,outcome:'read',changed,summary};
 }
 
 function assistantChatInner(){
@@ -10481,9 +10525,10 @@ async function awaitSaveContractImage(c,files,preview){const list=Array.isArray(
 // Reads/writes ONLY the five migration-001 tables, with user_id = auth uid.
 // Row Level Security on those tables restricts every row to its owner.
 // Shifts, facilities, and mileage are NOT synced in this release: they
-// stay on-device, and the Account tab says so. Live NBCRNA / AANA / state
-// portal pulls are NOT part of this section: they need a server-side Edge
-// Function (next phase) and are never faked from the browser.
+// stay on-device, and the Account tab says so. Portal checks are NOT
+// part of this section: they are agent reads in the user's own signed-in
+// browser session (Nov 12, 2026) — never a server-side pull, and never
+// faked from the browser.
 // Sync is automatic (Nov 6, 2026): there is no direction for the user
 // to choose. On sign-in the cloud and on-device credential records
 // MERGE — union of both sides, the newest edit of a shared record wins,
@@ -10511,7 +10556,7 @@ function cloudMode() { if (!SUPABASE_CONFIGURED) return 'not-configured'; if (!c
 function cloudSyncEnabled() { return SUPABASE_CONFIGURED && !!cloudSession && cloudActive; }
 function cloudHeaderLabel() { const m = cloudMode(); if (m === 'not-configured') return 'On this device · Not signed in'; if (m === 'signed-out') return cloudSession ? 'Signed in · Syncing automatically' : 'On this device · Not signed in'; if (m === 'cloud-offline') return 'Cloud (offline) · On-device copy'; return 'Cloud · ' + (cloudSession.email || 'signed in'); }
 function cloudModeHint() { const m = cloudMode(); if (m === 'not-configured') return 'Everything here is saved on this device only.'; if (m === 'signed-out') return 'Not signed in, so everything here is saved on this device only.'; if (m === 'cloud-offline') return 'Cloud account is unreachable right now, so this is the on-device copy. Credential edits will retry on the next sync.'; return 'Signed in — everything syncs to your account: credentials, shifts, facilities, mileage, and pay schedules.'; }
-function cloudAssistantAnswer() { if (!SUPABASE_CONFIGURED) return 'You are not signed in, so everything is saved on this device only. Use the Account tab to download a JSON backup before changing phones or clearing browser data.'; if (!cloudSession) return 'You are not signed in, so data lives in this browser only (localStorage). Sign in on the Account tab to sync your records — credentials, shifts, facilities, mileage, and pay schedules — to your account. Use the Account tab to download a JSON backup before changing phones or clearing browser data.'; if (!cloudActive) return 'You are signed in, and your records are merging with your account automatically — newest edit wins, and nothing is overwritten or deleted. Once the merge finishes, edits sync in the background.'; return 'You are signed in and your records sync to your account — NBCRNA, AANA, licenses, CE records, shifts, facilities, mileage, pay schedules, and settings. Portal pulls run from the Credentials tab — NBCRNA by public lookup, AANA by one-time sign-in, state boards where automation is allowed (WV and Ohio block it). The Assistant tab can also check a portal for you: you sign in yourself, show it the record page, and confirm what it saves — it never stores a portal password. Records a pull brings back are labelled with their source; the rest are user-entered, not verified.'; }
+function cloudAssistantAnswer() { if (!SUPABASE_CONFIGURED) return 'You are not signed in, so everything is saved on this device only. Use the Account tab to download a JSON backup before changing phones or clearing browser data.'; if (!cloudSession) return 'You are not signed in, so data lives in this browser only (localStorage). Sign in on the Account tab to sync your records — credentials, shifts, facilities, mileage, and pay schedules — to your account. Use the Account tab to download a JSON backup before changing phones or clearing browser data.'; if (!cloudActive) return 'You are signed in, and your records are merging with your account automatically — newest edit wins, and nothing is overwritten or deleted. Once the merge finishes, edits sync in the background.'; return 'You are signed in and your records sync to your account — NBCRNA, AANA, licenses, CE records, shifts, facilities, mileage, pay schedules, and settings. Portal checks are agent reads run from the Credentials tab — an assistant reads NBCRNA, AANA, and your state boards in a real browser session you sign in to yourself (the portals block server automation, so nothing is ever pulled silently, and a portal password is never stored). The Assistant tab can also check a portal with you: you sign in yourself, show it the record page, and confirm what it saves. Records read from a portal are labelled with their source; the rest are user-entered, not verified.'; }
 function cloudFmtWhen(iso) { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } }
 async function sbAuthPost(url, body, signal) {
   // One POST attempt (no fallback here — the caller decides).
@@ -10671,7 +10716,7 @@ function cloudAanaRow() { const a = db.aana || {}; return { user_id: cloudUid(),
 function cloudLicenseRow(x) { return { id: x.id, user_id: cloudUid(), state: x.state, license_type: x.type, license_number: x.number || null, issue_date: x.issue || null, expiration_date: x.expiry || null, status: x.status || null, board_portal_url: x.portal || null, notes: x.note || null, source: x.source || 'user_entered', last_synced_at: cloudNow() }; }
 function cloudCeRow(x, source) { return { id: x.id, user_id: cloudUid(), source: source, title: x.title || null, credits: cloudNumOrNull(x.credits) || 0, credit_class: source === 'nbcrna' ? (x.class || null) : null, completed_date: x.date || null }; }
 async function cloudUpsertPortals() { const states = []; (db.licenses || []).forEach(x => { if (x.state && states.indexOf(x.state) === -1) states.push(x.state); }); const desired = [{ portal: 'nbcrna', state: null }, { portal: 'aana', state: null }].concat(states.map(st => ({ portal: 'state_board', state: st }))); let existing = []; try { existing = await sbReq('/rest/v1/portal_connections?select=*&user_id=eq.' + encodeURIComponent(cloudUid()), 'GET'); } catch (e) { existing = []; } // Only create rows that do not exist yet, as 'not_connected' —
-// NEVER overwrite an existing row's status: a portal that a live pull
+// NEVER overwrite an existing row's status: a portal that a live read
 // marked 'connected' (or a failed attempt marked 'failed') must not be
 // reset to 'connected' by a manual upload, or vice versa.
 const missing = desired.filter(d => !(existing || []).some(e => e.portal === d.portal && (e.state || null) === (d.state || null))); if (missing.length) { const rows = missing.map(d => ({ id: id(), user_id: cloudUid(), portal: d.portal, state: d.state, status: 'not_connected', last_synced_at: null, last_error: null })); await sbReq('/rest/v1/portal_connections', 'POST', rows); } }
@@ -10994,12 +11039,12 @@ function cloudDeleteDocument(entryId) { if (!cloudSyncEnabled()) return; const r
 
 function cloudSaveKind(kind, savedId) { if (!cloudSyncEnabled()) return; (async () => { try { const spec = cloudSyncedSpec(kind); if (spec) { const rec = (db[kind] || []).find(x => x.id === savedId); if (rec) { const row = spec.row(rec); if (row) await sbReq('/rest/v1/' + spec.table, 'POST', row); } } else if (kind === 'nbcrna') { if (cloudLocalHasNbcrna()) { await sbReq('/rest/v1/nbcrna_profiles', 'POST', cloudNbcrnaRow()); await cloudUpsertPortals(); } } else if (kind === 'aana') { if (cloudLocalHasAana()) { await sbReq('/rest/v1/aana_memberships', 'POST', cloudAanaRow()); await cloudUpsertPortals(); } } else if (kind === 'licenses') { const rec = (db.licenses || []).find(x => x.id === savedId); if (rec) { await sbReq('/rest/v1/licenses', 'POST', cloudLicenseRow(rec)); await cloudUpsertPortals(); } } else if (kind === 'nbcrnaCE') { const rec = (db.nbcrnaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'nbcrna')); } else if (kind === 'aanaCE') { const rec = (db.aanaCE || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/ce_records', 'POST', cloudCeRow(rec, 'aana')); } else if (kind === 'documents') { const rec = (db.documents || []).find(x => x.id === savedId); if (rec) await sbReq('/rest/v1/documents', 'POST', cloudDocumentRow(rec)); } cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
 function cloudDeleteKind(kind, entryId) { if (!cloudSyncEnabled()) return; (async () => { try { const table = kind === 'licenses' ? 'licenses' : 'ce_records'; await sbReq('/rest/v1/' + table + '?id=eq.' + encodeURIComponent(entryId), 'DELETE'); } catch (e) { cloudOffline = true; cloudError = e.message; } })(); }
-// A portal card may say Connected / Verified ONLY when a real pull
-// actually returned a record. The portal_connections status string alone
+// A portal card may say Verified ONLY when a real read actually
+// returned a record. The portal_connections status string alone
 // is not proof: a stale 'connected' row, or a status refresh that never
-// landed, must never produce that label. Proof is the pulled record
+// landed, must never produce that label. Proof is the read record
 // itself: a portal source on the record plus a retrieval date.
-let portalAttemptFailed = {}; // key -> {at, error}: a pull failed this session
+let portalAttemptFailed = {}; // key -> {at, error}: a read failed this session
 let portalHealed = {}; // key -> true: a stale 'connected' row was corrected once
 function portalVerifiedRetrievedAt(key) {
   if (key === 'nbcrna') { const n = db.nbcrna || {}; return (n.source === 'public_verification' || n.source === 'nbcrna_portal') && cloudSyncTimes.nbcrna ? cloudSyncTimes.nbcrna : ''; }
@@ -11011,12 +11056,12 @@ function portalHealStaleConnected(key, row) {
   portalHealed[key] = true;
   // Make the in-memory copy honest at once so a re-render stays honest.
   row.status = 'failed';
-  row.last_error = row.last_error || 'Last pull did not return a verified record.';
+  row.last_error = row.last_error || 'Last read did not return a verified record.';
   // Best effort: correct the stored row too, so a later load also shows
   // the truth. The server already writes 'failed' on every failure path;
   // this covers a stale row whose failure write never landed.
   if (typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
-    (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'PATCH', { status: 'failed', last_error: 'Corrected: no verified record on file for this portal — last pull did not return a record.', last_synced_at: row.last_synced_at || cloudNow() }); } catch (e) {} })();
+    (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'PATCH', { status: 'failed', last_error: 'Corrected: no verified record on file for this portal — last read did not return a record.', last_synced_at: row.last_synced_at || cloudNow() }); } catch (e) {} })();
   }
 }
 function portalNoteFailed(key, error) {
@@ -11037,40 +11082,39 @@ function portalNoteFailed(key, error) {
   }
 }
 function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Sign-in isn’t available yet' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (!cloudActive) return { label: 'Not connected', detail: 'Signed in — records are merging with your account automatically' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
-  // A pull that failed in this session outranks any stored row: the
+  // A read that failed in this session outranks any stored row: the
   // refresh after a failure may itself fail to land, and the label must
-  // still show the failure, never a stale Connected.
+  // still show the failure, never a stale Verified.
   const failedHere = portalAttemptFailed[key];
-  if (failedHere) return { label: 'Not verified', detail: 'Last pull failed · last attempt ' + cloudFmtWhen(failedHere.at) + (failedHere.error ? ' — ' + failedHere.error : '') + '. Use the manual lookup / manual entry below.' };
+  if (failedHere) return { label: 'Not verified', detail: 'Last read failed · last attempt ' + cloudFmtWhen(failedHere.at) + (failedHere.error ? ' — ' + failedHere.error : '') + '. Use the manual lookup / manual entry below.' };
   const rows = cloudPortals || [];
   const row = key === 'licenses'
     ? rows.filter(r => r.portal === 'state_board').sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0]
     : rows.find(r => r.portal === key);
-  if (!row) return { label: 'Not verified', detail: 'No successful pull yet — use Connect below, or the manual entry fallback' };
+  if (!row) return { label: 'Not verified', detail: 'No successful read yet — use Connect below, or the manual entry fallback' };
   const when = row.last_synced_at ? ' · last attempt ' + cloudFmtWhen(row.last_synced_at) : '';
   if (row.status === 'connected') {
     const retrievedAt = portalVerifiedRetrievedAt(key);
-    if (retrievedAt) return { label: 'Connected — live portal pull', detail: 'Verified by the portal · last verified ' + cloudFmtWhen(retrievedAt) };
+    if (retrievedAt) return { label: 'Verified — read from your signed-in session', detail: 'Read from the portal · last verified ' + cloudFmtWhen(retrievedAt) };
     // Stale 'connected' row with no verified record behind it: never show
-    // Connected / Verified. Correct the stored row once and say so.
+    // Verified. Correct the stored row once and say so.
     portalHealStaleConnected(key, row);
-    return { label: 'Not verified', detail: 'Last pull did not return a verified record' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
+    return { label: 'Not verified', detail: 'Last read did not return a verified record' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
   }
   if (row.status === 'needs_reauth') return { label: 'Not verified — sign-in needed', detail: (row.last_error || 'The portal session expired — connect again') + when };
-  if (row.status === 'failed') return { label: 'Not verified', detail: 'Last pull failed' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
-  return { label: 'Not verified', detail: 'No successful pull yet — use Connect below, or the manual entry fallback' }; }
-function portalSourceLabel(source, when) { const labels = { 'public_verification': 'Verified — NBCRNA public lookup', 'nbcrna_portal': 'Verified — NBCRNA portal', 'aana_portal': 'Verified — AANA member sign-in', 'state_board_portal': 'Verified — state board lookup', 'assistant_portal_check': 'Assistant portal check — read from the portal page you showed the assistant', 'user_entered': 'User-entered — not verified' }; return (labels[source] || 'User-entered — not verified') + (when ? ' · ' + cloudFmtWhen(when) : ''); }
+  if (row.status === 'failed') return { label: 'Not verified', detail: 'Last read failed' + when + (row.last_error ? ' — ' + row.last_error : '') + '. Use the manual lookup / manual entry below.' };
+  return { label: 'Not verified', detail: 'No successful read yet — use Connect below, or the manual entry fallback' }; }
+function portalSourceLabel(source, when) { const labels = { 'public_verification': 'Verified — NBCRNA portal read', 'nbcrna_portal': 'Verified — read from your NBCRNA sign-in', 'aana_portal': 'Verified — read from your AANA sign-in', 'state_board_portal': 'Verified — read from the state board portal', 'assistant_portal_check': 'Assistant portal check — read from the portal page you showed the assistant', 'user_entered': 'User-entered — not verified' }; return (labels[source] || 'User-entered — not verified') + (when ? ' · ' + cloudFmtWhen(when) : ''); }
 // --- Portal connect flow (final-product structure, Nov 6, 2026) ---
 // ONE flow object per portal, built by portalConnectFlow() and shared
 // by every Connect card (NBCRNA, AANA, State Licenses — and any portal
 // added to PORTAL_CHECK_SOURCES later gets the same flow). The flow's
 // steps are open() -> returnToApp() -> the assistant check, and they
-// are the FINAL product's steps (see PORTAL_NATIVE_SPEC): in the
-// finished native app, open() is Apple's system sign-in sheet
-// (ASWebAuthenticationSession) — iPhone Passwords + Face ID fill the
-// login, the app never sees a portal password, and when sign-in
-// finishes the sheet RETURNS the user to the app automatically, where
-// returnToApp() hands straight into the check.
+// are the FINAL product's steps (see PORTAL_AGENT_SPEC): the user
+// signs in to the portal themselves in a real browser — the app never
+// sees a portal password — and the check reads the record from that
+// signed-in session (an agent read for monitoring; this flow is the
+// guided in-app route to the same record).
 //
 // Why Connect is a real link, not a script redirect (Caleb's report,
 // Nov 6, 2026): the old Connect was a button whose handler called
@@ -11097,11 +11141,14 @@ function portalSourceLabel(source, when) { const labels = { 'public_verification
 //     navigates on his explicit tap on that sheet (portalLeaveGo).
 // Guided-check state is persisted on every step (portalStatePersist),
 // so even a full reload resumes the check where he left off.
-// Server-side pulls stay blocked — NBCRNA public verification submit
-// 404s, AANA SSO sign-in is bot-gated, WV/OH board lookups block
-// automation — so the check reads the record page the user brings
-// back (screenshot or pasted text) and previews it before saving.
-// (portalCall/portalRefreshStatus below still serve the monitoring log.)
+// There are no server-side pulls — NBCRNA's public verification
+// submit 404s, AANA's SSO is bot-gated for automation, WV/OH board
+// lookups block datacenter automation. Monitoring checks are agent
+// reads in the user's own signed-in browser session, reported back
+// through applyPortalAgentRead. This Connect flow + the guided check
+// are the in-app fallback: the check reads the record page the user
+// brings back (screenshot or pasted text) and previews it before
+// saving.
 let portalOpened = {}; // portalKey -> true once Connect opened the portal
 let portalLeaveSheet = ''; // portalKey whose pre-leaving sheet is showing ('' = none)
 const portalFlows = {}; // portalKey -> connect flow object
@@ -11197,7 +11244,10 @@ if (typeof window !== 'undefined' && window && typeof window.addEventListener ==
   window.addEventListener('focus', portalNoteReturn);
 }
 async function portalRefreshStatus() { try { if (typeof liveSyncGet !== 'function') return; const data = await liveSyncGet('portal-sync', 'status'); cloudPortals = data.connections || []; } catch (e) {} }
-async function portalCall(body) { await cloudEnsureToken(); return await liveSyncPost('portal-sync', body); }
+// portalCall — the client half of the portal-sync verify endpoints —
+// was REMOVED Nov 12, 2026 with the agent-read rebuild: the app makes
+// no portal pull calls at all now. The function's status read above
+// only fetches portal_connections rows; it pulls nothing.
 function portalErrMsg(e) { return (e && e.data && e.data.message) || (e && e.message) || 'The portal check failed.'; }
 function syncSectionHTML(){
   // Three separate sibling panels (Nov 6, 2026): Live calendar sync,

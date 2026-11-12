@@ -5,15 +5,19 @@
 // background every 7 days? I don't think we need the option to run
 // check now."
 //   * "Run check now" is gone — the cadence is the only trigger.
-//   * When a check comes due, a source with a working public route
-//     (NBCRNA public verification) is attempted automatically by the
-//     background sweep and the outcome is recorded — no tap needed.
-//   * A source that needs a signed-in session surfaces ONE prompt per
-//     due cycle ("NBCRNA check due — sign in to run it") in the panel
-//     and on the Credentials reminder surface; the prompt launches the
-//     guided check. Dismissing snoozes it to the next cadence.
+//   * Nov 12, 2026 (v142) REWRITE: the sweep's automatic server attempt
+//     (the old NBCRNA public-verification pull) is RETIRED — the pull
+//     never worked (404) and datacenter automation is blocked. Checks
+//     are agent reads in the user's own signed-in browser session,
+//     reported back through applyPortalAgentRead; the sweep makes NO
+//     portal calls at all — it only keeps the monitors + watchdog
+//     mirror current so the due prompt fires.
+//   * A due source surfaces ONE prompt per due cycle ("NBCRNA check
+//     due — sign in to run it") in the panel and on the Credentials
+//     reminder surface; the prompt launches the guided check.
+//     Dismissing snoozes it to the next cadence.
 //   * Honest labels: a due date passing alone never marks a source
-//     checked — lastChecked only moves when a check actually ran.
+//     checked — lastChecked only moves when a read actually ran.
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -69,7 +73,9 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   t('per-source cadence form is collapsed (inside <details>)',
     sandbox.__panel.includes('<details><summary class="muted">Cadence</summary>'));
 
-  // --- 2. Due public-route source auto-attempts in the sweep and records.
+  // --- 2. (v142 rewrite — the old pins here asserted the sweep
+  // auto-attempted the NBCRNA public pull; that pull is retired, so
+  // the pins now assert the opposite: the sweep attempts NOTHING.)
   run(`
     db.settings.scheduleName = 'Caleb Martin';
     cloudSession = { user: { id: 'u1' } };
@@ -79,27 +85,28 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
     m.lastChecked = ''; m.lastOutcome = '';
   `);
   await run(`monitorBackgroundSweep()`);
-  run(`globalThis.__nb = db.portalMonitoring.find(x => x.key === 'nbcrna'); globalThis.__log = (db.portalChecks || []).filter(c => c.source === 'nbcrna');`);
-  t('sweep attempted the due NBCRNA public check automatically (one server call)',
-    sandbox.__calls === 1);
-  t('outcome recorded without any tap: lastChecked set, outcome + log entry present',
-    !!sandbox.__nb.lastChecked && ['no_change', 'changed'].includes(sandbox.__nb.lastOutcome) && sandbox.__log.length === 1);
-  t('after the recorded check the source is no longer due',
-    run(`monitorIsDue(db.portalMonitoring.find(x => x.key === 'nbcrna'), localDate(new Date()))`) === false);
+  run(`globalThis.__nb = db.portalMonitoring.find(x => x.key === 'nbcrna'); globalThis.__panelD = portalMonitoringHTML();`);
+  t('sweep attempts NO portal check: zero calls, no outcome recorded, nothing stamped checked',
+    sandbox.__calls === 0 && !sandbox.__nb.lastChecked && !sandbox.__nb.lastOutcome);
+  t('the due source surfaces its one prompt in the panel instead (agent reads run in a signed-in session)',
+    (sandbox.__panelD.match(/data-action="monitor-prompt-dismiss" data-id="nbcrna"/g) || []).length === 1);
   await run(`monitorBackgroundSweep()`);
-  t('a second sweep in the same cycle does not re-attempt',
-    sandbox.__calls === 1);
+  run(`globalThis.__panelD2 = portalMonitoringHTML();`);
+  t('a second sweep in the same cycle still attempts nothing and still shows exactly one prompt',
+    sandbox.__calls === 0 && (sandbox.__panelD2.match(/data-action="monitor-prompt-dismiss" data-id="nbcrna"/g) || []).length === 1);
 
-  // --- 3. A failed public attempt is recorded honestly as blocked/failed.
+  // --- 3. A blocked agent read is recorded honestly (the attempt now
+  // arrives through applyPortalAgentRead, not the sweep).
   run(`
     const mm = db.portalMonitoring.find(x => x.key === 'nbcrna');
     mm.lastChecked = ''; mm.lastOutcome = ''; mm.autoAttemptCycle = '';
-    portalCall = async () => { globalThis.__calls++; throw new Error('Request failed with 404 — the service did not answer'); };
+    globalThis.__blockedRes = applyPortalAgentRead('nbcrna', { outcome: 'blocked', reason: 'The portal showed a captcha a person has to finish.' });
   `);
-  await run(`monitorBackgroundSweep()`);
-  run(`globalThis.__nb2 = db.portalMonitoring.find(x => x.key === 'nbcrna');`);
-  t('failed public attempt records blocked (never a fake success)',
-    sandbox.__nb2.lastOutcome === 'blocked' && !!sandbox.__nb2.lastAttempt && !sandbox.__nb2.lastChecked);
+  run(`globalThis.__nb2 = db.portalMonitoring.find(x => x.key === 'nbcrna'); globalThis.__nb2due = monitorIsDue(db.portalMonitoring.find(x => x.key === 'nbcrna'), localDate(new Date()));`);
+  t('blocked agent read records blocked with the reason (never a fake success)',
+    sandbox.__blockedRes && sandbox.__blockedRes.ok === false && sandbox.__nb2.lastOutcome === 'blocked' && !!sandbox.__nb2.lastAttempt && !sandbox.__nb2.lastChecked && String(sandbox.__nb2.lastSummary || '').includes('captcha'));
+  t('after a blocked attempt the source is not due again today — no same-cycle nagging',
+    sandbox.__nb2due === false);
 
   // --- 4. Due signed-in source: sweep does NOT check it; exactly one prompt.
   run(`

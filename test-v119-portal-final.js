@@ -18,7 +18,8 @@
 //     collected it and silently dropped it at every one of those steps);
 //   * a source counts as CHECKED only when a check returned data:
 //     blocked/failed attempts stamp lastAttempt, never lastChecked;
-//     a public NBCRNA response with no record data changes nothing;
+//     an agent read with no record data changes nothing (v142: this
+//     rule moved from the retired server pull to applyPortalAgentRead);
 //     a preview reached by skipping every page saves as the user's own
 //     entry and does not stamp the monitor;
 //   * a blank AI read is reported as a blank read (not "wrong page");
@@ -151,7 +152,7 @@ t('portalAiHasContent: empty payload + no raw text = no content; any field or ra
 // ---------- 7. Checked only when data returned ----------
 run(`
   db.portalMonitoring = []; db.portalChecks = [];
-  recordMonitorCheck('nbcrna', 'blocked', 'NBCRNA public check could not run: 404', 'public');
+  recordMonitorCheck('nbcrna', 'blocked', 'NBCRNA agent read could not run: the portal refused the read', 'agent_read');
   globalThis.__monB = db.portalMonitoring.find(m => m.key === 'nbcrna');
   globalThis.__dueAfterFail = monitorNextDue(globalThis.__monB, localDate(new Date()));
 `);
@@ -159,25 +160,26 @@ t('blocked attempt: lastAttempt stamped, lastChecked NOT stamped, retry due next
   !!sandbox.__monB.lastAttempt && !sandbox.__monB.lastChecked &&
   sandbox.__monB.lastOutcome === 'blocked' && sandbox.__dueAfterFail > run(`localDate(new Date())`));
 run(`
-  recordMonitorCheck('nbcrna', 'no_change', 'NBCRNA public check: no change', 'public');
+  recordMonitorCheck('nbcrna', 'no_change', 'NBCRNA agent read: no change', 'agent_read');
   globalThis.__monOk = db.portalMonitoring.find(m => m.key === 'nbcrna');
 `);
 t('a check that returned data stamps lastChecked',
   !!sandbox.__monOk.lastChecked && sandbox.__monOk.lastOutcome === 'no_change');
 
 (async () => {
-  // Public NBCRNA attempt whose response carries NO record data.
+  // (v142: the old pin drove monitorAttemptPublic — the retired server
+  // pull — with an empty response. The same v119 rule now lives in the
+  // agent-read entry point: an agent 'read' whose fields carry NO
+  // record data certifies nothing, saves nothing, and is not counted
+  // as checked.)
   run(`
     db.nbcrna = {status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',source:'user_entered'};
     db.portalMonitoring = []; db.portalChecks = [];
-    cloudSession = { email: 'crna@example.com' };
-    portalCall = async () => ({ record: {} });
-    globalThis.__monPub = ensurePortalMonitoring().find(m => m.key === 'nbcrna');
-    globalThis.__monPub.firstName = 'Caleb'; globalThis.__monPub.lastName = 'Martin';
+    globalThis.__emptyRead = applyPortalAgentRead('nbcrna', { outcome: 'read', fields: {} });
+    globalThis.__pubAfter = { status: db.nbcrna.status, source: db.nbcrna.source, mon: db.portalMonitoring.find(m => m.key === 'nbcrna') };
   `);
-  await run(`monitorAttemptPublic(globalThis.__monPub)`);
-  run(`globalThis.__pubAfter = { status: db.nbcrna.status, source: db.nbcrna.source, mon: db.portalMonitoring.find(m => m.key === 'nbcrna') };`);
-  t('public response with no record data: nothing certified, nothing saved, not counted as checked',
+  t('agent read with no record data: nothing certified, nothing saved, not counted as checked',
+    sandbox.__emptyRead && sandbox.__emptyRead.ok === false &&
     sandbox.__pubAfter.status === '' && sandbox.__pubAfter.source === 'user_entered' &&
     !sandbox.__pubAfter.mon.lastChecked && sandbox.__pubAfter.mon.lastOutcome === 'failed');
 
