@@ -624,7 +624,10 @@ Deno.test("parseQgendaICS: an unfamiliar grammar (STM) — all rows land, unknow
 });
 
 Deno.test("parser version is exported for client staleness checks", () => {
-  assertEquals(QGENDA_PARSER_VERSION, 8);
+  // v9 (Nov 11, 2026, v137): the grammar consults saved code
+  // definitions before its pattern guesses — held previews must
+  // re-read, so the version moved 8 -> 9.
+  assertEquals(QGENDA_PARSER_VERSION, 9);
 });
 
 Deno.test("bracketed assignee suffix: the emptied brackets never reach the code", () => {
@@ -951,4 +954,79 @@ Deno.test("v134: QGenda multi-day block of a defined code expands per day", () =
     "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14",
   ]);
   assertEquals(shifts.map((s) => s.pay), ["2000", "2000", "2000", "2000", "2000"]);
+});
+
+// --- v137 (Nov 11, 2026): definitions before patterns ------------
+// Caleb's Mar 8, 2027 row: QGenda carried "HOLZ - PCDO (8)" — the
+// post call day off after his Sun Mar 7 first call. The grammar's
+// paren pattern read "(8)" as an 8-hour day and priced it $2,125;
+// his card defines PCDO as UNPAID. The grammar now consults the
+// facility's saved definitions (unpaid included) before any
+// pattern guess: the task as written, then with the trailing
+// parenthesised annotation removed (the definition names the
+// task, not its duration note).
+const HOLZER_WITH_PCDO = normalizeFacilityRules([
+  {
+    name: "Holzer",
+    aliases: ["HOLZ"],
+    hourlyRate: 250,
+    hourlyCall1st: 175,
+    rate8: 2125,
+    rate10: 2625,
+    rateSecond: 3000,
+    weekendRateSecond: 2000,
+    callBonus: 1000,
+    paidHours8: 8.5,
+    codeDefs: [
+      { code: "HOLZ - PCDO", label: "post call day off", unpaid: true },
+    ],
+  },
+]);
+const PCDO_FEED = `BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//QGenda//EN\r
+BEGIN:VEVENT\r
+UID:v137-1@qgenda.com\r
+DTSTART;VALUE=DATE:20270308\r
+DTEND;VALUE=DATE:20270309\r
+SUMMARY:HOLZ - PCDO (8)\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+BEGIN:VEVENT\r
+UID:v137-2@qgenda.com\r
+DTSTART;VALUE=DATE:20270309\r
+DTEND;VALUE=DATE:20270310\r
+SUMMARY:HOLZ - PCDO\r
+LOCATION:Gallipolis, OH\r
+END:VEVENT\r
+END:VCALENDAR\r
+`;
+
+Deno.test("parseQgendaICS: an unpaid definition beats the (N) pattern guess — PCDO imports at $0", () => {
+  const { shifts } = parseQgendaICS(PCDO_FEED, HOLZER_WITH_PCDO, { name: "Caleb Martin" });
+  assertEquals(shifts.length, 2);
+  const byUid = new Map(shifts.map((s) => [s.uid, s]));
+  const a = byUid.get("v137-1@qgenda.com");
+  const b = byUid.get("v137-2@qgenda.com");
+  if (!a || !b) throw new Error("PCDO rows missing");
+  // Mar 8, 2027 (Monday): typed as the day off, priced a settled
+  // $0 — never an 8-hour day at $2,125.
+  assertEquals(a.date, "2027-03-08");
+  assertEquals(a.type, "post call day off");
+  assertEquals(a.pay, "0");
+  assertEquals(a.facilityKnown, true);
+  assertEquals(a.code.includes("PCDO"), true);
+  // The bare task (no annotation) resolves the same way.
+  assertEquals(b.type, "post call day off");
+  assertEquals(b.pay, "0");
+});
+
+Deno.test("parseQgendaICS: without the definition, the same title keeps the generic (8) reading (control)", () => {
+  const { shifts } = parseQgendaICS(PCDO_FEED, HOLZER, { name: "Caleb Martin" });
+  const a = shifts.find((s) => s.uid === "v137-1@qgenda.com");
+  if (!a) throw new Error("control row missing");
+  // This is the pre-v137 misread the definition now overrides —
+  // pinned so the override above is proven to come from the card.
+  assertEquals(a.type, "8-hour day");
+  assertEquals(a.pay, "2125");
 });

@@ -11,9 +11,11 @@
 // characters). It is never logged and never returned in full.
 
 import {
+  classifyFromCodeDef,
   coveredSpanDays,
   icsValuePiece,
   importStatusForDate,
+  matchFacilityCodeDef,
   parseWorkShiftEvent,
   priceShiftWithFacility,
   spanBlockLastDay,
@@ -24,7 +26,15 @@ import {
 // Parser version, returned with every fetch/status response so the
 // client can tell when a preview it is holding was parsed by an
 // older reader and re-read the feed instead of showing stale rows.
-// Bump whenever the parse semantics change (v7, Nov 11, 2026:
+// Bump whenever the parse semantics change (v9, Nov 11, 2026: the
+// "<CODE> - <Task>" grammar consults the facility's saved code
+// definitions — unpaid ones included — BEFORE its built-in pattern
+// guesses; a task whose name is a defined code imports as that
+// definition's kind and price (an unpaid code as a $0 day off),
+// never as a pattern-guessed paid day shift. v8, Nov 11, 2026:
+// facility code maps ride with the feed read so timed multi-day
+// blocks expand per day (span expansion lives in the shared
+// parser). v7, Nov 11, 2026:
 // multi-day feed events — a block whose kind is a day shift expands
 // to one row per covered day (per-day pricing, derived uids); call
 // blocks stay a single row and raw-named multi-day rows stay single
@@ -50,7 +60,7 @@ import {
 // as an unclassified row named exactly as read; v2 refined the
 // generic "Call (unclassified)"/"Shift" buckets from DESCRIPTION
 // text and event timing; v1 returned the raw buckets).
-export const QGENDA_PARSER_VERSION = 8;
+export const QGENDA_PARSER_VERSION = 9;
 
 export interface QgendaShift {
   date: string;
@@ -817,12 +827,29 @@ export function parseQgendaICS(
       splitQgendaSummary(cleanQgendaShiftName(summary, userName), userName);
     if (split) {
       const rule = resolveFacilityCode(split.code, facilities);
+      // Definitions before patterns (v137): the task may carry the
+      // facility's own code for this shift — a day off code, a named
+      // call code — and a built-in pattern guess must never outrank
+      // it. The task is tried as written and with a trailing
+      // parenthesised group removed: the definition names the task
+      // itself ("PCDO"), not its duration annotation ("PCDO (8)").
+      // A hit classifies the row ENTIRELY from the definition —
+      // kind and price (an unpaid definition: its own kind at $0) —
+      // exactly as the shared title parser does for calendar
+      // titles. Before this, the grammar below read "PCDO (8)" as
+      // an 8-hour day and priced it $2,125.
+      const taskDef = rule
+        ? (matchFacilityCodeDef(rule, split.task) ??
+          matchFacilityCodeDef(rule, split.task.replace(/\s*\([^()]*\)\s*$/, "").trim()) ??
+          matchFacilityCodeDef(rule, split.code))
+        : null;
+      const defClass = taskDef && rule ? classifyFromCodeDef(taskDef, rule, split.task, date) : null;
       const taskClass = classifyQgendaTask(split.task);
       const descClass = taskClass.type
         ? null
         : (description ? classifyQgendaTask(description.replace(/\n/g, " ")) : null);
-      const gType = taskClass.type ?? descClass?.type ?? null;
-      const gHours = taskClass.hours ?? descClass?.hours ?? hours;
+      let gType = taskClass.type ?? descClass?.type ?? null;
+      let gHours = taskClass.hours ?? descClass?.hours ?? hours;
       const gName = qgendaShiftName({
         summary,
         description,
@@ -832,7 +859,13 @@ export function parseQgendaICS(
       });
       const gCode = gName || cleanQgendaShiftName(summary, userName) || summary;
       let gPay = "";
-      if (rule && gType) gPay = priceShiftWithFacility(gType, rule, date);
+      if (defClass) {
+        gType = defClass.type;
+        gPay = defClass.pay;
+        if (taskDef && taskDef.hours != null) gHours = taskDef.hours;
+      } else if (rule && gType) {
+        gPay = priceShiftWithFacility(gType, rule, date);
+      }
       shifts.push({
         date,
         facility: rule ? rule.name : split.code,
@@ -843,6 +876,7 @@ export function parseQgendaICS(
         uid,
         code: gCode,
         hours: gHours,
+        ...(defClass?.spanKind ? { spanKind: defClass.spanKind } : {}),
         ...spanFields,
       });
       if (!rule) unknown.set(split.code, (unknown.get(split.code) ?? 0) + 1);

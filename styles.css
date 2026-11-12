@@ -98,3 +98,13 @@ details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(18
 .assistant-sheet .chat{flex:1 1 auto;min-height:0;max-height:none}
 .assistant-sheet .chat-form{flex:0 0 auto}
 @media(max-width:650px){.assistant-fab{width:54px;height:54px;right:14px}}
+
+/* v137: proposed shifts read amber on the calendar — unmistakably
+   not-yet-confirmed, distinct from every confirmed chip color;
+   red stays reserved for warnings. Placed last so it wins over
+   the call/second/off chip colors at equal specificity. */
+.chip.proposed{background:#fde68a;color:#713f12;font-weight:700}
+/* v137: the just-saved day flashes on the calendar after a
+   standalone Add shift save (close-and-return). */
+.day.flash{animation:dayflash 2.6s ease-in-out}
+@keyframes dayflash{0%,100%{box-shadow:none;background:#fff}18%,55%{box-shadow:0 0 0 3px #f59e0b inset;background:#fef3c7}}

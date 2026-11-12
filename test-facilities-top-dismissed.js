@@ -145,4 +145,4 @@ t('contract upload, pay stub and manual form all still present; rule chat retire
   pageMixed.includes('id="paystub-panel"') &&
   pageMixed.includes('id="f_name"'));
 
-t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v136'));
+t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v137'));

@@ -1146,6 +1146,24 @@ function spanKindFromCodeDef(def: FacilityCodeDef, type: string): "day" | "call"
   return undefined;
 }
 
+// The full classification a saved code definition gives a shift
+// (v137): type, price and span kind in one read, so every import
+// path that consults definitions — the shared title parser below,
+// the QGenda grammar in qgenda-feed/parse.ts — classifies the same
+// way. An unpaid definition prices "0": a final, settled amount,
+// never a blank the caller could mistake for unpriced.
+export function classifyFromCodeDef(
+  def: FacilityCodeDef,
+  rule: FacilityPayRule,
+  candidate: string,
+  date: string,
+): { type: string; pay: string; spanKind?: "day" | "call" } {
+  const type = typeFromCodeDef(def, candidate);
+  const pay = priceFromCodeDef(def, rule, type, date);
+  const spanKind = spanKindFromCodeDef(def, type);
+  return { type, pay, ...(spanKind ? { spanKind } : {}) };
+}
+
 export function parseWorkShiftEvent(
   title: string,
   location: string,
