@@ -1776,7 +1776,7 @@ function paystubCardSectionHTML(f){
   // force-opens only while a card-started read is in flight
   // or waiting (status / preview / error), exactly as the old
   // toggle section did.
-  return `<details class="collapse-sub paystub-card-panel" id="paystub-card-${escapeHTML(f.id)}"${open?' open':''}><summary class="collapse-head"><span class="collapse-title">Upload a pay stub (optional)</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><div class="item" style="display:block;margin-top:10px"><p class="muted">${PAYSTUB_INTRO}</p>${paystubUploadFormHTML(`class="paystubCardForm" data-fac="${escapeHTML(f.id)}"`,`f_paystubCardFile_${escapeHTML(f.id)}`,`f_paystubCardText_${escapeHTML(f.id)}`)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.cardFacId===f.id?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}</div></details>`;
+  return `<details class="collapse-sub paystub-card-panel" id="paystub-card-${escapeHTML(f.id)}"${open?' open':''}><summary class="collapse-head"><span class="collapse-title">Upload a pay stub (optional)${paystubStubActual(paystubScheduleForFacility(f))?' · on file':''}</span><span class="collapse-chevron" aria-hidden="true">▾</span></summary><div class="item" style="display:block;margin-top:10px"><p class="muted">${PAYSTUB_INTRO}</p>${paystubUploadFormHTML(`class="paystubCardForm" data-fac="${escapeHTML(f.id)}"`,`f_paystubCardFile_${escapeHTML(f.id)}`,`f_paystubCardText_${escapeHTML(f.id)}`)}${mine&&paystubStatus?`<p class="hint">${escapeHTML(paystubStatus)}</p>`:''}${paystubPreview&&paystubPreview.cardFacId===f.id?`<div style="margin-top:14px">${paystubPreviewHTML()}</div>`:''}${mine&&!paystubPreview&&paystubError?`<p class="hint">${escapeHTML(paystubError)}</p>`:''}</div></details>`;
 }
 // The card stub panels are native <details>: a tap toggles
 // them without a re-render, so render() snapshots the live
@@ -7834,6 +7834,7 @@ async function parseScheduleXlsx(file){
 
 // --- Schedule import: preview-before-save (nothing auto-saves) ---
 let schedulePreview=null,scheduleImportError='',scheduleAiStatus='',scheduleImportContext='';
+let syncSectionComposing=false;
 function scheduleImportHTML(){
   const nm=scheduleName();
   // Collapsed by default (Nov 6, 2026): once a calendar is synced (or a
@@ -7845,7 +7846,13 @@ function scheduleImportHTML(){
   const connected=typeof liveSyncConnectedProviders==='function'&&liveSyncConnectedProviders().length>0;
   const imported=!!(db.settings&&db.settings.scheduleImported);
   const busy=!!(schedulePreview||scheduleImportError||scheduleAiStatus||scheduleImportContext);
-  const open=busy||(!connected&&!imported);
+  // In the Account step-2 stack, Live calendar sync is the primary
+  // section: while IT rests open (incomplete), this alternative
+  // rests closed (v136 section-completion rule — one incomplete
+  // section open at a time). Everywhere else the long-standing rule
+  // holds: open for a fresh user with neither sync nor import.
+  const primaryOpen=syncSectionComposing&&typeof liveSyncPanelOpen==='function'&&liveSyncPanelOpen();
+  const open=busy||(!connected&&!imported&&!primaryOpen);
   // Upload a schedule is its own top-level panel now (Nov 6, 2026) — a
   // sibling of Live calendar sync and QGenda, same visual rank — and
   // the .ics import/export fallback lives inside it.
@@ -7990,7 +7997,7 @@ function approveScheduleImport(){
   const paySchedHint=importPaySchedHint(schedulePreview,'sched',paySchedSaved);
   const fileName=schedulePreview.fileName;
   acknowledgeImportConflicts(gate);
-  schedulePreview=null; scheduleAiStatus=''; scheduleImportError=''; qgendaSheetOpen=false; qgendaClearPending(); db.settings=db.settings||{}; db.settings.scheduleImported=true; db.settings.scheduleImportFile=fileName; db.settings.scheduleImportedAt=new Date().toISOString();
+  schedulePreview=null; scheduleAiStatus=''; scheduleImportError=''; scheduleImportContext=''; qgendaSheetOpen=false; qgendaClearPending(); db.settings=db.settings||{}; db.settings.scheduleImported=true; db.settings.scheduleImportFile=fileName; db.settings.scheduleImportedAt=new Date().toISOString();
   persist(); render();
   if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();
   alert(`Added ${created} shift(s) from the schedule.${skipped?` Merged ${skipped} duplicate(s) into existing shifts — never doubled.`:''}${createdFacility&&ratesSavedFor!==createdFacility?` Added ${createdFacility} to your facilities — set its pay rules on the Facilities tab.`:''}${ratesSavedFor?` Rates saved for ${ratesSavedFor} — these shifts priced from them.`:''}${ratesSkippedFor?` No rates for ${ratesSkippedFor} yet — its shifts are unpriced; set rates any time on the Facilities tab.`:''}${incomplete?` ${incomplete} unpriced — set the pay rule on the Facilities tab.`:''}${newNames.length?` New facilit(ies) noticed — check the suggestion on the Dashboard before their shifts are priced.`:''}${paySchedSaved?` Pay schedule saved for ${paySchedSaved.agency} — paychecks for these shifts now show on your calendar.`:''}${paySchedHint}${leftOut?` Left out ${leftOut} shift(s) that would double-book you — tick "Add it anyway" in the preview if you really have both.`:''} Imported shifts arrive confirmed — they are on a real schedule.`);
@@ -8526,7 +8533,12 @@ function qgendaFeedHTML(){
   // opens when a connect/fetch just reported back, so the result is on
   // screen instead of hidden behind the header — and when the boot
   // check left new shifts waiting in the preview.
-  return collapsePanelHTML('qgenda-panel','QGenda',inner+featureTurnOffLineHTML('featureQgenda'),!!qgendaStatusError||(qgendaPendingNew>0&&qgendaPendingPreview()));
+  // The closed header carries the completion summary (v136
+  // section-completion rule): connected reads on the header itself,
+  // so the resting panel signals "done" without opening it. The
+  // panel still force-opens for an error or shifts waiting in the
+  // preview — a problem never hides behind a closed section.
+  return collapsePanelHTML('qgenda-panel',connected?'QGenda · Connected':'QGenda',inner+featureTurnOffLineHTML('featureQgenda'),!!qgendaStatusError||(qgendaPendingNew>0&&qgendaPendingPreview()));
 }
 // QGenda errors reach the user as plain next steps, never as raw
 // server codes (function_not_allowed, qgenda_failed, …). The code is
@@ -8798,7 +8810,7 @@ if(action==='facility-page-remove'||action==='facility-page-up'||action==='facil
 if(action==='contract-page-remove'||action==='contract-page-up'||action==='contract-page-down'){const i=+entry;if(Number.isNaN(i)||i<0||i>=contractPendingImages.length)return render();const mv=action.endsWith('-up')?-1:action.endsWith('-down')?1:0;if(mv){const j=i+mv;if(j<0||j>=contractPendingImages.length)return render();[contractPendingImages[i],contractPendingImages[j]]=[contractPendingImages[j],contractPendingImages[i]]}else contractPendingImages.splice(i,1);contractOcrPages=orderedOcrPages(contractOcrPages,contractPendingImages);if(contractOcrPages.length){if(!reparseContractOcrPages()){contractImportError='The remaining pages contain no shifts by deterministic parsing. Nothing was saved.';contractPreview=null}}else{contractPreview=null;contractImportError=''}return render()}
 if(action==='view-contract-image')return viewContractImage(entry);
 if(action==='view-contract-image-page')return viewContractImage(entry,+date);
-if(action==='backup')return download('crna-hub-backup.json',deviceBackupJSON(),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='import-rates-skip'){const p=entry==='cal'?calPreview:schedulePreview;if(p){const t=importRatesTarget(p);p.ratesSkipped=true;if(t&&t.fac){t.fac.ratesPromptSkipped=true;persist()}}return render()}if(action==='describe-parse'){submitDescribe(String(entry||''));return}if(action==='describe-edit'){const dst=describeState(String(entry||''));if(dst)dst.collapsed=false;return render()}if(action==='describe-confirm'){confirmDescribe(String(entry||''));return}if(action==='describe-facility'){if(describeSavedFlashFac===entry)describeSavedFlashFac=null;describeOpenFac=describeOpenFac===entry?null:entry;return render()}if(action==='describe-dismiss'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){db.settings=db.settings||{};db.settings.rulesHealDismissed={...(db.settings.rulesHealDismissed&&typeof db.settings.rulesHealDismissed==='object'?db.settings.rulesHealDismissed:{}),[f.id]:rulesHealSignature(f)};persist()}return render()}if(action==='import-paysched-skip'){const p=entry==='cal'?calPreview:entry==='contract'?contractPreview:entry==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedSkipped=true;const ag=String(p._paySchedAgency||(p.paySchedDraft&&p.paySchedDraft.agency)||'').trim();if(ag){db.settings=db.settings||{};const dis={...importPaySchedDismissed()};dis[paySchedAgencyKey(ag)]=true;db.settings.paySchedPromptDismissed=dis;persist()}}return render()}if(action==='facility-paysched-save'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){const d=facPaySchedDrafts[f.id]||{};const agency=String(d.agency||f.name).trim();const frequency=normalizePayFrequency(d.frequency);const payDate=psValidISO(d.payDate);if(!agency||!frequency||!payDate){alert('Add a pay frequency and one pay date you know for '+(agency||f.name)+", and we'll put its paychecks on your calendar.");return render()}if(paystubForAgency(agency)){alert(agency+' already has a pay schedule — you can edit it under Pay schedules on the Facilities tab.');delete facPaySchedDrafts[f.id];persist();return render()}const rec={id:id(),agency,facility:String(d.facility||f.name).trim(),frequency,periodStart:psValidISO(d.periodStart),periodEnd:psValidISO(d.periodEnd),payDate,gross:'',net:'',source:'facility-card',fileName:'',updatedAt:new Date().toISOString()};db.payStubs=db.payStubs||[];db.payStubs.push(rec);try{if(typeof cloudSaveKind==='function')cloudSaveKind('payStubs',rec.id)}catch(_){}delete facPaySchedDrafts[f.id];persist();render();alert(`Pay schedule saved for ${agency} — paychecks for its shifts now show on your calendar.`);return}return render()}if(action==='facility-paysched-dismiss'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){db.settings=db.settings||{};const dis={...importPaySchedDismissed()};dis[paySchedAgencyKey(f.name)]=true;db.settings.paySchedPromptDismissed=dis;delete facPaySchedDrafts[f.id];persist()}return render()}if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;scheduleAiStatus='';scheduleImportError='';qgendaSheetOpen=false;qgendaClearPending();return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-sheet-close'){qgendaSheetOpen=false;return render()}if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='qgenda-review'){if(qgendaPendingPreview()){qgendaSheetOpen=true;return render()}return fetchQgendaFeed()}if(action==='qgenda-notice-dismiss'){qgendaNoticeDismissed=true;return render()}if(action==='conflict-alert-dismiss'){dismissDayConflict(entry);return render()}if(action==='conflict-held-keep-out'){dismissDayConflict(entry);return render()}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage'){mileageExportInit();mileageExportOpen=true;return render()}if(action==='mileage-export-close'){mileageExportOpen=false;return render()}if(action==='mileage-export-this-month'){mileageExportApplyQuick('this-month');return render()}if(action==='mileage-export-ytd'){mileageExportApplyQuick('ytd');return render()}if(action==='mileage-export-all'){mileageExportApplyQuick('all');return render()}if(action==='mileage-export-none'){mileageExportApplyQuick('none');return render()}if(action==='mileage-export-download')return mileageExportDownload()}
+if(action==='backup')return download('crna-hub-backup.json',deviceBackupJSON(),'application/json');if(action==='confirm-past-shifts')return confirmPastProposedShifts(entry);if(action==='import-rates-skip'){const p=entry==='cal'?calPreview:schedulePreview;if(p){const t=importRatesTarget(p);p.ratesSkipped=true;if(t&&t.fac){t.fac.ratesPromptSkipped=true;persist()}}return render()}if(action==='describe-parse'){submitDescribe(String(entry||''));return}if(action==='describe-edit'){const dst=describeState(String(entry||''));if(dst)dst.collapsed=false;return render()}if(action==='describe-confirm'){confirmDescribe(String(entry||''));return}if(action==='describe-facility'){if(describeSavedFlashFac===entry)describeSavedFlashFac=null;describeOpenFac=describeOpenFac===entry?null:entry;return render()}if(action==='describe-dismiss'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){db.settings=db.settings||{};db.settings.rulesHealDismissed={...(db.settings.rulesHealDismissed&&typeof db.settings.rulesHealDismissed==='object'?db.settings.rulesHealDismissed:{}),[f.id]:rulesHealSignature(f)};persist()}return render()}if(action==='import-paysched-skip'){const p=entry==='cal'?calPreview:entry==='contract'?contractPreview:entry==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedSkipped=true;const ag=String(p._paySchedAgency||(p.paySchedDraft&&p.paySchedDraft.agency)||'').trim();if(ag){db.settings=db.settings||{};const dis={...importPaySchedDismissed()};dis[paySchedAgencyKey(ag)]=true;db.settings.paySchedPromptDismissed=dis;persist()}}return render()}if(action==='facility-paysched-save'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){const d=facPaySchedDrafts[f.id]||{};const agency=String(d.agency||f.name).trim();const frequency=normalizePayFrequency(d.frequency);const payDate=psValidISO(d.payDate);if(!agency||!frequency||!payDate){alert('Add a pay frequency and one pay date you know for '+(agency||f.name)+", and we'll put its paychecks on your calendar.");return render()}if(paystubForAgency(agency)){alert(agency+' already has a pay schedule — you can edit it under Pay schedules on the Facilities tab.');delete facPaySchedDrafts[f.id];persist();return render()}const rec={id:id(),agency,facility:String(d.facility||f.name).trim(),frequency,periodStart:psValidISO(d.periodStart),periodEnd:psValidISO(d.periodEnd),payDate,gross:'',net:'',source:'facility-card',fileName:'',updatedAt:new Date().toISOString()};db.payStubs=db.payStubs||[];db.payStubs.push(rec);try{if(typeof cloudSaveKind==='function')cloudSaveKind('payStubs',rec.id)}catch(_){}delete facPaySchedDrafts[f.id];persist();render();alert(`Pay schedule saved for ${agency} — paychecks for its shifts now show on your calendar.`);return}return render()}if(action==='facility-paysched-dismiss'){const f=(db.facilities||[]).find(x=>x.id===entry);if(f){db.settings=db.settings||{};const dis={...importPaySchedDismissed()};dis[paySchedAgencyKey(f.name)]=true;db.settings.paySchedPromptDismissed=dis;delete facPaySchedDrafts[f.id];persist()}return render()}if(action==='cal-approve')return approveCalendarImport();if(action==='cal-discard'){calPreview=null;return render()}if(action==='schedule-approve')return approveScheduleImport();if(action==='schedule-discard'){schedulePreview=null;scheduleAiStatus='';scheduleImportError='';scheduleImportContext='';qgendaSheetOpen=false;qgendaClearPending();return render()}if(action==='save-schedule-name'){const el=$('f_scheduleNameUpload');if(el){db.settings=db.settings||{};db.settings.scheduleName=String(el.value||'').trim();persist()}return render()}if(action==='qgenda-fetch')return fetchQgendaFeed();if(action==='qgenda-sheet-close'){qgendaSheetOpen=false;return render()}if(action==='qgenda-disconnect')return disconnectQgendaFeed();if(action==='qgenda-open'){try{window.open('https://app.qgenda.com','_blank','noopener')}catch(e){}return}if(action==='qgenda-check-it'){scheduleImportContext='qgenda';render();const el=document.getElementById('schedule-import-panel');if(el&&el.scrollIntoView)el.scrollIntoView({block:'start'});return}if(action==='qgenda-review'){if(qgendaPendingPreview()){qgendaSheetOpen=true;return render()}return fetchQgendaFeed()}if(action==='qgenda-notice-dismiss'){qgendaNoticeDismissed=true;return render()}if(action==='conflict-alert-dismiss'){dismissDayConflict(entry);return render()}if(action==='conflict-held-keep-out'){dismissDayConflict(entry);return render()}if(action==='export-cal-all')return exportCalendarICS(db.shifts.slice().sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts.ics');if(action==='export-cal-month'){const prefix=localDate(new Date()).slice(0,7);return exportCalendarICS(db.shifts.filter(x=>x.date.startsWith(prefix)).sort((a,b)=>a.date.localeCompare(b.date)),'crna-hub-shifts-'+prefix+'.ics')}if(action==='connect-calendar'){setTab('Account');return}if(action==='export-shifts')return exportCsv('crna-hub-shifts.csv',['date','facility','type','pay','status','note'],db.shifts);if(action==='export-mileage'){mileageExportInit();mileageExportOpen=true;return render()}if(action==='mileage-export-close'){mileageExportOpen=false;return render()}if(action==='mileage-export-this-month'){mileageExportApplyQuick('this-month');return render()}if(action==='mileage-export-ytd'){mileageExportApplyQuick('ytd');return render()}if(action==='mileage-export-all'){mileageExportApplyQuick('all');return render()}if(action==='mileage-export-none'){mileageExportApplyQuick('none');return render()}if(action==='mileage-export-download')return mileageExportDownload()}
 async function makeMileageDrafts(){let count=0,auto=0,hotel=0,skipped=0;const skippedNoAddress=new Set();for(const x of db.shifts){if(/off|pto/i.test(x.type))continue;const f=facilityForRecord(x);if(!f)continue;if(db.mileage.some(m=>mileageTripMatchesShift(m,x)))continue;const stay=hotelStayFor(x.date,x.facility);let oneWay=null,source='',origin='home',hotelAddress='';if(stay){const res=await homeToFacilityMiles(f,stay.hotelAddress);if(res){oneWay=res.oneWay;source='auto';origin='hotel';hotelAddress=stay.hotelAddress}}else{const autoRes=await homeToFacilityMiles(f);if(autoRes){oneWay=autoRes.oneWay;source='auto'}else{oneWay=effectiveOneWayMiles(f);source='manual'}}const draft=mileageDraftForShift(x,f,oneWay,source,origin,hotelAddress,mileageTripType());if(!draft){skipped++;if(!String(f.address||'').trim())skippedNoAddress.add(f.name);continue}db.mileage.push(draft);count++;if(source==='auto')auto++;if(origin==='hotel')hotel++}persist();render();alert(`${count} mileage draft(s) created (${tripTypeLabel(mileageTripType())})${auto?` — ${auto} auto-calculated${hotel?`, ${hotel} from a hotel stay`:''}`:''}.${skipped?` ${skipped} shift(s) skipped — no usable address or manual distance on file.`:''}${skippedNoAddress.size?` Trips for ${[...skippedNoAddress].join(', ')} were skipped: no address is saved for ${skippedNoAddress.size===1?'that facility':'those facilities'} — add it on the Facilities tab so miles can be calculated.`:''} Review every trip and tax eligibility before using them.`)}
 function csvEscape(v){const s=String(v??'');return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function exportCsv(filename,headers,rows){download(filename,[headers.join(','),...rows.map(r=>headers.map(h=>csvEscape(r[h])).join(','))].join('\r\n'),'text/csv;charset=utf-8')}
@@ -9362,6 +9374,40 @@ function icsTitleCodeCandidate(summary,fac){
   }
   return s.replace(/^[-–—:;,\s]+|[-–—:;,\s]+$/g,'').trim();
 }
+// A bare ordinal call reference (v136, client mirror of
+// bareOrdinalCallKind in _shared/calendar.ts): the candidate is
+// JUST an ordinal — "1st", "first", "2nd", "second" — with or
+// without the word "call", in either order. It names a call KIND;
+// the facility's own card decides what it binds to.
+function bareOrdinalCallKind(code){
+  const toks=String(code||'').toLowerCase().replace(/[^a-z0-9*]+/g,' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean);
+  if(!toks.length||toks.length>2)return null;
+  if(toks.some(x=>x!=='call'&&x!=='1st'&&x!=='first'&&x!=='2nd'&&x!=='second'))return null;
+  const ord=toks.find(x=>x!=='call');if(!ord)return null;
+  return (ord==='1st'||ord==='first')?'first':'second';
+}
+// What a bare ordinal binds to at THIS facility (v136): exactly one
+// saved definition of that call kind owns it (its code rides along
+// so approve prices through the one clarifier path); with no such
+// definition, the facility's own call rates classify the type; with
+// two or more definitions of the kind it is genuinely ambiguous and
+// binds nothing — the preview row stays unclassified and flagged,
+// named in front of the user, never silently dropped.
+function ordinalCallBinding(fac,cand){
+  const kind=bareOrdinalCallKind(cand);if(!kind||!fac)return null;
+  const target=kind==='first'?'24-hour call':'Second call';
+  const defs=facilityCodeDefs(fac);
+  const hits=Object.keys(defs).filter(k=>{
+    const d=defs[k];
+    const ct=String((d&&d.canonicalType)||'').trim()||canonicalTypeOf(String(k)+' '+String((d&&d.label)||''));
+    return ct===target;
+  });
+  if(hits.length===1){const d=defs[hits[0]];return {code:hits[0],type:String((d&&d.canonicalType)||'').trim()||target}}
+  if(hits.length>1)return null;
+  if(kind==='first'&&(rateOrNull(fac.rate24)!=null||rateOrNull(fac.hourlyCall1st)!=null))return {type:target};
+  if(kind==='second'&&rateOrNull(fac.rateSecond)!=null)return {type:target};
+  return null;
+}
 function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,'');const rates=contractExtractRates(clean);const rows=[];let globalFacility='';
  const blocks=clean.split(/BEGIN:VEVENT/i).slice(1);
  for(let bi=0;bi<blocks.length;bi++){const b=blocks[bi];const get=k=>{const m=b.match(new RegExp(k+':(.*)','i'));return m?m[1].trim():''};
@@ -9389,7 +9435,9 @@ function parseICS(text,fileName){const clean=String(text||'').replace(/^\uFEFF/,
      if(cand){
        const cdef=codeDefForLoose(facilityObj,cand);
        if(cdef){rowCode=cand;const ch=rateOrNull(cdef.hours);type=String(cdef.canonicalType||'').trim()||(cdef.unpaid?(String(cdef.label||'').trim()||cand):(ch!=null?durationTypeLabel(ch):(String(cdef.label||'').trim()||cand)))}
-       else{const sh=selfDescribingCodeHours(cand);if(sh!=null&&rateOrNull(facilityObj.hourlyRate)!=null){rowCode=cand;type=durationTypeLabel(sh)}}
+       else{const ob=ordinalCallBinding(facilityObj,cand);
+         if(ob){if(ob.code)rowCode=ob.code;type=ob.type}
+         else{const sh=selfDescribingCodeHours(cand);if(sh!=null&&rateOrNull(facilityObj.hourlyRate)!=null){rowCode=cand;type=durationTypeLabel(sh)}}}
      }
      if(rowCode){const fi=flags.indexOf('shift type not classified from event title');if(fi>=0)flags.splice(fi,1)}
    }
@@ -10844,7 +10892,18 @@ function syncSectionHTML(){
   // the same two component functions — shared state, either home.
   const liveBody=typeof liveSyncPanelHTML==='function'?liveSyncPanelHTML():'<p class="muted">Live calendar sync is loading…</p>';
   const liveOpen=typeof liveSyncPanelOpen==='function'?liveSyncPanelOpen():true;
-  return collapsePanelHTML('live-sync-panel','Live calendar sync',onboardDirectionHTML(2)+liveBody,liveOpen)+qgendaFeedHTML()+scheduleImportHTML();
+  // Section-completion rule (Nov 11, 2026, v136 — Caleb: a section
+  // closes itself when its information is in): step 2's three panels
+  // are ALTERNATIVES, so exactly one rests open here — the first
+  // incomplete one. While Live calendar sync is open (nothing
+  // connected, a reconnect owed, deletions waiting), QGenda and
+  // Upload a schedule rest closed behind their headers, one tap
+  // away; on the Facilities tab (no live-sync sibling) they keep
+  // their own open rules.
+  syncSectionComposing=true;
+  try{
+    return collapsePanelHTML('live-sync-panel','Live calendar sync',onboardDirectionHTML(2)+liveBody,liveOpen)+qgendaFeedHTML()+scheduleImportHTML();
+  } finally { syncSectionComposing=false; }
 }
 // Profile — step 1 section (Nov 6, 2026): once the profile is complete
 // (name set) it renders collapsed — a one-line summary (name · employment

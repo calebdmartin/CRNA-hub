@@ -521,7 +521,7 @@ function liveSyncApplyChanges(provider, data) {
   // Remember the last Apple import result so the panel can say
   // "imported N shifts from Caleb Work Schedule" after the alert closes.
   if (data.imported && typeof data.imported === 'object') {
-    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, skippedSuggested: data.imported.skippedSuggested || 0, expandedBlocks: data.imported.expandedBlocks || 0, expandedExtraDays: data.imported.expandedExtraDays || 0, keptCallBlocks: data.imported.keptCallBlocks || 0, ambiguousBlocks: data.imported.ambiguousBlocks || 0, perSource: Array.isArray(data.imported.perSource) ? data.imported.perSource : [], suggestions: Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [], newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], at: new Date().toISOString() };
+    liveSyncState.lastImport = { provider, sourceName: data.imported.sourceCalendarName || '', created: data.imported.created || 0, updated: data.imported.updated || 0, skipped: data.imported.skipped || 0, duplicates: data.imported.duplicates || 0, seen: data.imported.seen || 0, parsed: data.imported.parsed || 0, fetchMethod: data.imported.fetchMethod || null, error: data.imported.error || null, skippedNotShift: data.imported.skippedNotShift || 0, skippedDeleted: data.imported.skippedDeleted || 0, skippedLegacy: data.imported.skippedLegacy || 0, repaired: data.imported.repaired || 0, unpriced: data.imported.unpriced || 0, skippedSuggested: data.imported.skippedSuggested || 0, expandedBlocks: data.imported.expandedBlocks || 0, expandedExtraDays: data.imported.expandedExtraDays || 0, keptCallBlocks: data.imported.keptCallBlocks || 0, ambiguousBlocks: data.imported.ambiguousBlocks || 0, perSource: Array.isArray(data.imported.perSource) ? data.imported.perSource : [], suggestions: Array.isArray(data.imported.suggestions) ? data.imported.suggestions : [], newFacilities: Array.isArray(data.imported.newFacilities) ? data.imported.newFacilities : [], unboundEvents: Array.isArray(data.imported.unboundEvents) ? data.imported.unboundEvents : [], at: new Date().toISOString() };
     // Facility suggestions (ask-first): merge the server's held
     // hospitals into db.facilitySuggestions — counted, dated, and
     // dismissable — without creating any facility. A dismissal survives
@@ -684,6 +684,9 @@ async function liveSyncNow(provider, silent) {
           if (imp.expandedBlocks) msg += ' ' + imp.expandedBlocks + ' multi-day block(s) became one shift per day (' + (imp.expandedBlocks + (imp.expandedExtraDays || 0)) + ' day shift(s) in all).';
           if (imp.keptCallBlocks) msg += ' ' + imp.keptCallBlocks + ' multi-day call(s) stayed one shift on their first day, as calls are single assignments.';
           if (imp.ambiguousBlocks) msg += ' ' + imp.ambiguousBlocks + ' multi-day event(s) could not be classified and were imported on their first day only — check them on the calendar.';
+          // No silent skips (v136): events that named a saved
+          // facility but bound no code are NAMED, never just counted.
+          if (Array.isArray(imp.unboundEvents) && imp.unboundEvents.length) msg += ' Not read as shifts: ' + imp.unboundEvents.map((u) => '“' + u.title + '” (' + u.facility + ', ' + u.date + ')').join(', ') + ' — if one of these IS a shift, tell me its pay on the Facilities tab and it imports next sync.';
           if (Array.isArray(imp.derivedCodes) && imp.derivedCodes.length) msg += ' Learned ' + imp.derivedCodes.length + ' code(s) straight from their names (' + imp.derivedCodes.map((d) => '“' + d.code + '” = ' + d.hours + '-hour shift').join(', ') + ') — they are saved on the Facilities tab; edit them any time.';
           // Held hospitals are NOT lumped into this sentence any
           // more (Nov 11, 2026, v121): they ride along as their own
@@ -986,6 +989,9 @@ function liveSyncLastImportHTML(provider) {
   if (li.expandedBlocks) html += '<p class="muted">' + li.expandedBlocks + ' multi-day block(s) became one shift per day (' + (li.expandedBlocks + (li.expandedExtraDays || 0)) + ' day shift(s) in all).</p>';
   if (li.keptCallBlocks) html += '<p class="muted">' + li.keptCallBlocks + ' multi-day call(s) stayed one shift on their first day.</p>';
   if (li.ambiguousBlocks) html += '<p class="muted">' + li.ambiguousBlocks + ' multi-day event(s) could not be classified and were imported on their first day only — check them on the calendar.</p>';
+  // No silent skips (v136): facility-named events that bound no code
+  // are listed by name, not folded into the skipped count.
+  if (Array.isArray(li.unboundEvents) && li.unboundEvents.length) html += '<p class="muted">Not read as shifts: ' + li.unboundEvents.map((u) => '“' + escapeHTML(u.title || '') + '” (' + escapeHTML(u.facility || '') + ', ' + escapeHTML(u.date || '') + ')').join(', ') + ' — if one of these IS a shift, tell me its pay on the Facilities tab and it imports next sync.</p>';
   // An import that skipped shifts usually means an earlier sync
   // paired them without ever delivering them. Offer the explicit
   // repair whenever anything was skipped as deleted/legacy (not

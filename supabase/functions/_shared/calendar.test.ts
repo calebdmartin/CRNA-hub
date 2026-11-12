@@ -33,6 +33,7 @@ import {
   groupFacilitySuggestions,
   heldEventBucket,
   importStatusForDate,
+  knownFacilityNamed,
   normalizeFacilityRules,
   parseWorkShiftEvent,
   priceShiftWithFacility,
@@ -1283,4 +1284,101 @@ Deno.test("v134: defined call blocks stay single; defined day blocks expand", ()
   // An unpaid defined code prices exactly $0 as a settled price.
   const pcdo = parseWorkShiftEvent("CAMC PCDO", "", "2026-08-10", callRules);
   assertEquals(pcdo?.pay, "0");
+});
+
+// ------------------------------------------------------------------
+// v136: bare ordinal call references ("Holzer 1st " — trailing space,
+// no word "call") bind to the facility's own call definitions, and
+// a facility-named event that still binds no code is NAMED for the
+// sync result (knownFacilityNamed) — never a silent skip. The
+// December fixture is Caleb's real calendar (Oct 17, 2026 baseline):
+// Dec 8/14/18 are the only "Holzer 1st" titles; before this round
+// they parsed to null and vanished into skippedNotShift.
+const holzCardV136 = normalizeFacilityRules([{
+  name: "HOLZ",
+  aliases: ["Holzer"],
+  hourlyRate: 250,
+  paidHours8: 8.5,
+  rate10: 2625,
+  hourlyCall1st: 175,
+  rateSecond: 3000,
+  weekendRateSecond: 2000,
+  rate24: 4800,
+  weekendRate24: 4200,
+  codeDefs: [
+    { code: "Holz-call 1", label: "24hr call", canonicalType: "24-hour call", weekdayPay: 4800, weekendPay: 4200 },
+    { code: "Holz-call 2", label: "2nd call", canonicalType: "Second call", weekdayPay: 3000, weekendPay: 2000 },
+    { code: "Holz-g main (8)", label: "8hr day shift", hours: 8, paidHours: 8.5 },
+    { code: "Holz-g main (10)", label: "10hour day shift", hours: 10, paidHours: 10.5 },
+    { code: "Holz PCDO", label: "post call day off", unpaid: true },
+  ],
+}]);
+
+Deno.test("v136: Caleb's December imports whole — bare 'Holzer 1st' binds Call 1 at $4,800", () => {
+  const dec: [string, string, string][] = [
+    ["2026-11-30", "Holzer 8", "2125"], ["2026-12-01", "Holzer 8", "2125"],
+    ["2026-12-02", "Holzer 8 2nd call", "3000"], ["2026-12-03", "Holzer 8", "2125"],
+    ["2026-12-04", "Holzer 1st call", "4800"], ["2026-12-05", "Holzer 8 2nd call", "2000"],
+    ["2026-12-06", "Holzer 1st call", "4200"], ["2026-12-08", "Holzer 1st ", "4800"],
+    ["2026-12-10", "Holzer 1st call", "4800"], ["2026-12-14", "Holzer 1st ", "4800"],
+    ["2026-12-16", "Holzer 1st call", "4800"], ["2026-12-18", "Holzer 1st ", "4800"],
+    ["2026-12-28", "Holzer 8 2nd call", "3000"], ["2026-12-29", "Holzer 8", "2125"],
+    ["2026-12-30", "Holzer 8", "2125"],
+  ];
+  let period = 0; // pay period Nov 30 – Dec 13 (the Dec 22 check)
+  for (const [d, title, pay] of dec) {
+    const p = parseWorkShiftEvent(title, "", d, holzCardV136);
+    assert(p !== null, `December event did not import: ${d} ${JSON.stringify(title)}`);
+    assertEquals(p?.pay, pay, `${d} ${JSON.stringify(title)}`);
+    if (d >= "2026-11-30" && d <= "2026-12-13") period += Number(p?.pay);
+  }
+  // The pinned Dec 22 occurrence, restored by the Dec 8 shift.
+  assertEquals(period, 29975);
+  for (const d of ["2026-12-08", "2026-12-14", "2026-12-18"]) {
+    const p = parseWorkShiftEvent("Holzer 1st ", "", d, holzCardV136);
+    assertEquals(p?.type, "24-hour call", d);
+    assertEquals(p?.facility, "HOLZ", d);
+  }
+});
+
+Deno.test("v136: ordinal title variants bind or are named — none silent", () => {
+  const binds: [string, string, string][] = [
+    ["Holzer 1st", "24-hour call", "4800"], ["Holzer 1st ", "24-hour call", "4800"],
+    ["HOLZER FIRST", "24-hour call", "4800"], ["Holzer first", "24-hour call", "4800"],
+    ["Holzer 2nd", "Second call", "3000"], ["Holzer second call", "Second call", "3000"],
+    ["1st call Holzer", "24-hour call", "4800"], ["1st Holzer", "24-hour call", "4800"],
+    ["Holzer FIRST CALL", "24-hour call", "4800"],
+  ];
+  for (const [title, type, pay] of binds) {
+    const p = parseWorkShiftEvent(title, "", "2026-12-08", holzCardV136);
+    assertEquals(p?.type, type, title);
+    assertEquals(p?.pay, pay, title);
+  }
+  // Facility rates alone (no definitions) classify the ordinal too.
+  const ratesOnly = normalizeFacilityRules([{
+    name: "HOLZ", aliases: ["Holzer"], hourlyRate: 250, rate24: 4800,
+    weekendRate24: 4200, rateSecond: 3000, weekendRateSecond: 2000,
+  }]);
+  assertEquals(parseWorkShiftEvent("Holzer 1st", "", "2026-12-08", ratesOnly)?.pay, "4800");
+  assertEquals(parseWorkShiftEvent("Holzer 2nd", "", "2026-12-08", ratesOnly)?.pay, "3000");
+  // No definition and no call rate: unbound — but NAMED for the
+  // sync result, never silently skipped.
+  const bare = normalizeFacilityRules([{ name: "HOLZ", aliases: ["Holzer"], hourlyRate: 250 }]);
+  assertEquals(parseWorkShiftEvent("Holzer 1st", "", "2026-12-08", bare), null);
+  assertEquals(knownFacilityNamed("Holzer 1st", "", bare), "HOLZ");
+  // Genuinely ambiguous (two 1st-call definitions): unbound + named.
+  const amb = normalizeFacilityRules([{
+    name: "HOLZ", aliases: ["Holzer"], hourlyRate: 250, rate24: 4800,
+    codeDefs: [
+      { code: "Holz-call 1", label: "24hr call", canonicalType: "24-hour call", weekdayPay: 4800 },
+      { code: "Call 1 wknd", label: "1st call weekends", canonicalType: "24-hour call", weekendPay: 4200 },
+    ],
+  }]);
+  assertEquals(parseWorkShiftEvent("Holzer 1st", "", "2026-12-08", amb), null);
+  assertEquals(knownFacilityNamed("Holzer 1st", "", amb), "HOLZ");
+  // A facility-named non-shift stays unimported but is named; an
+  // event naming no known facility is not the facility's business.
+  assertEquals(parseWorkShiftEvent("Lunch at Holzer", "", "2026-12-08", holzCardV136), null);
+  assertEquals(knownFacilityNamed("Lunch at Holzer", "", holzCardV136), "HOLZ");
+  assertEquals(knownFacilityNamed("Team lunch", "", holzCardV136), null);
 });

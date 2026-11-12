@@ -1016,6 +1016,61 @@ export function matchFacilityCodeDef(
   }
   return hits.size === 1 ? [...hits][0] : null;
 }
+// Bare ordinal call references (v136): a title remainder that is
+// JUST an ordinal — "1st", "first", "2nd", "second" — with or
+// without the word "call", in either order, is a call reference
+// missing its noun, not an unreadable title. Caleb's December 2026
+// calendar carries "Holzer 1st " (trailing space, no "call") on
+// Dec 8/14/18; every pattern above requires the word "call" and
+// every saved definition is spelled "call 1", so those three shifts
+// parsed to nothing and were counted as not-shifts, unnamed. The
+// ordinal names the KIND; which definition (or facility rate) it
+// binds to is resolved by the caller against the facility's own
+// card — never by a global guess.
+export function bareOrdinalCallKind(candidate: string): "first" | "second" | null {
+  const toks = codeIdentityKeyTs(candidate).split(" ").filter(Boolean);
+  if (!toks.length || toks.length > 2) return null;
+  if (toks.some((x) => x !== "call" && x !== "1st" && x !== "first" && x !== "2nd" && x !== "second")) return null;
+  const ord = toks.find((x) => x !== "call");
+  if (!ord) return null;
+  return ord === "1st" || ord === "first" ? "first" : "second";
+}
+// Which call kind a saved definition IS, read off its canonical
+// type, its label, or its own code spelling ("call 1", "1st call") —
+// the same identity the words reader writes. Null when the
+// definition is not a call definition at all.
+export function callKindOfCodeDef(def: FacilityCodeDef, rule: FacilityPayRule): "first" | "second" | null {
+  const ct = (def.canonicalType || "").trim().toLowerCase();
+  if (ct === "24-hour call") return "first";
+  if (ct === "second call") return "second";
+  const key = stripFacilityKeyTs(codeIdentityKeyTs(def.code), rule);
+  if (key === "call 1" || key === "1st call" || key === "first call") return "first";
+  if (key === "call 2" || key === "2nd call" || key === "second call") return "second";
+  const label = (def.label || "").toLowerCase();
+  if (/\b24\b|1st\s*call|first\s*call/.test(label)) return "first";
+  if (/2nd\s*call|second\s*call/.test(label)) return "second";
+  return null;
+}
+// The canonical facility a title or location NAMES, when any saved
+// rule's name/alias appears as a whole token — or null. The sync
+// loop uses this to NAME events that named a known facility but
+// bound no code: they are counted and listed in the sync result,
+// never silently skipped (v136, the v135 no-silent-degradation
+// standard applied to classification).
+export function knownFacilityNamed(
+  title: string,
+  location: string,
+  facilities: FacilityPayRule[] = [],
+): string | null {
+  const t = String(title || "");
+  const loc = String(location || "");
+  for (const rule of facilities) {
+    for (const n of [rule.name, ...(rule.aliases ?? [])]) {
+      if (containsToken(t, n) || (loc !== "" && containsToken(loc, n))) return rule.name;
+    }
+  }
+  return null;
+}
 // The self-describing-code rule (v134, Caleb's ask): a code token
 // that is PURELY a duration — "8", "8s", "8hr", "8 hr", "8-hour",
 // "8 hours" — describes itself: an N-hour day shift at the
@@ -1146,6 +1201,33 @@ export function parseWorkShiftEvent(
       type = typeFromCodeDef(def, rest);
       defPay = priceFromCodeDef(def, rule, type, date);
       defSpanKind = spanKindFromCodeDef(def, type);
+    }
+    // Bare ordinal call reference (v136): "Holzer 1st" names the
+    // facility's 1st call without the word "call". Bind it against
+    // THIS facility's own card: exactly one definition of that call
+    // kind owns it; with no such definition, the facility's own
+    // call rates classify it; with two or more definitions of the
+    // kind it is genuinely ambiguous and stays unbound — the sync
+    // loop then NAMES the event in its result (knownFacilityNamed)
+    // instead of skipping it silently, and the user clarifies once.
+    if (!type && rest) {
+      const kind = bareOrdinalCallKind(rest);
+      if (kind) {
+        const kindDefs = (rule.codeDefs ?? []).filter(
+          (d) => callKindOfCodeDef(d, rule) === kind,
+        );
+        if (kindDefs.length === 1) {
+          type = typeFromCodeDef(kindDefs[0], rest);
+          defPay = priceFromCodeDef(kindDefs[0], rule, type, date);
+          defSpanKind = spanKindFromCodeDef(kindDefs[0], type);
+        } else if (kindDefs.length === 0) {
+          if (kind === "first" && (rule.rate24 != null || rule.hourlyCall1st != null)) {
+            type = "24-hour call";
+          } else if (kind === "second" && rule.rateSecond != null) {
+            type = "Second call";
+          }
+        }
+      }
     }
     if (!type) type = shiftTypeFromPattern(t) ?? shiftTypeFromPattern(loc);
     if (!type) type = leadingNumberShiftType(rest);

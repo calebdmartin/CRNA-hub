@@ -240,6 +240,7 @@ import {
   nextDay,
   parseDescription,
   parseTitle,
+  knownFacilityNamed,
   parseWorkShiftEvent,
   normalizeFacilityRules,
   sameFacility,
@@ -1012,6 +1013,13 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
     // (visibly derived, user-editable; the user's own words replace
     // it). Deduped by facility + code.
     derivedCodes: { facility: string; code: string; hours: number }[];
+    // No silent skips (v136): dated events that NAME a facility the
+    // user has saved but bind no code — an ambiguous bare ordinal
+    // ("Holzer 1st" at a card with two 1st-call definitions), a
+    // facility-named non-shift — are counted and NAMED here so the
+    // client can list them in the sync result instead of the event
+    // vanishing into skippedNotShift. Deduped by facility+title+date.
+    unboundEvents: { facility: string; title: string; date: string }[];
     expandedExtraDays: number;
     keptCallBlocks: number;
     ambiguousBlocks: number;
@@ -1315,6 +1323,7 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
       skippedSuggested: 0,
       expandedBlocks: 0,
       derivedCodes: [],
+      unboundEvents: [],
       expandedExtraDays: 0,
       keptCallBlocks: 0,
       ambiguousBlocks: 0,
@@ -1476,6 +1485,26 @@ async function handleSync(userId: string, body: SyncBody): Promise<Response> {
           facilityRules,
         );
         if (parsed) imported.parsed++;
+        // No silent skips (v136): an unparsed event that still NAMES
+        // a saved facility bound no code — name it in the result so
+        // the user can see exactly what was not read as a shift.
+        if (!parsed) {
+          const namedFac = knownFacilityNamed(
+            ev.summary ?? "",
+            ev.location ?? "",
+            facilityRules,
+          );
+          if (namedFac) {
+            const entry = {
+              facility: namedFac,
+              title: String(ev.summary ?? "").trim(),
+              date: ev.date,
+            };
+            if (!imported.unboundEvents.some((u) =>
+              u.facility === entry.facility && u.title === entry.title && u.date === entry.date
+            )) imported.unboundEvents.push(entry);
+          }
+        }
         // A self-describing code the parser read off its own name
         // (v134): report it once per facility + code so the client
         // can persist the derived definition. Collected at parse

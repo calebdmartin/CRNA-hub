@@ -212,7 +212,7 @@ const HOLZ_ROW_REFINED = { date: '2026-08-22', facility: 'HOLZ', type: 'Second c
   t('pin: service worker update is re-checked when the app returns to the foreground',
     appSrc.includes('p2=reg.update()'));
   t('pin: service worker cache bumped to v98',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v135'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v136'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

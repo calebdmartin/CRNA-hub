@@ -141,9 +141,17 @@ function segments(html) {
     fresh.upload.includes('Read schedule — preview only') &&
     fresh.upload.includes('<details><summary>Manual fallback — import or export a .ics file</summary>') &&
     fresh.upload.includes('data-action="export-cal-all"'));
-  t('fresh user: live sync and upload panels start expanded, QGenda rests collapsed',
+  // v136 (Nov 11, 2026) — pin updated deliberately: Caleb's
+  // section-completion rule ("the next incomplete section is the
+  // one left open during onboarding") supersedes the Nov 6 default
+  // that opened BOTH step-2 panels for a fresh user. In the Account
+  // stack, Live calendar sync (the primary) starts expanded and
+  // Upload a schedule rests closed behind its header; standalone on
+  // the Facilities tab the upload panel keeps its fresh-user open
+  // (pinned in test-v136-sections.js).
+  t('fresh user: live sync panel starts expanded, upload + QGenda rest collapsed (v136)',
     sandbox.__fresh.includes('<details class="panel collapse-panel" id="live-sync-panel" open>') &&
-    sandbox.__fresh.includes('<details class="panel collapse-panel" id="schedule-import-panel" open>') &&
+    sandbox.__fresh.includes('<details class="panel collapse-panel" id="schedule-import-panel">') &&
     sandbox.__fresh.includes('<details class="panel collapse-panel" id="qgenda-panel">'));
 
   // ================= Connected user: summaries, panels rest =================
@@ -205,7 +213,7 @@ function segments(html) {
     sandbox.__step2.includes('<details class="panel collapse-panel" id="live-sync-panel" open>'));
 
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v135'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v136'));
 
   console.log(failures === 0 ? 'sync-panels-split test done: all passed' : 'sync-panels-split test done: FAILURES=' + failures);
 })();
