@@ -167,10 +167,14 @@ run(`delete db.nbcrnaCE[0].licState; delete db.nbcrnaCE[0].licType; delete db.nb
 t('ceAssignAttach restores assignment + category after a cloud round-trip',
   run(`db.nbcrnaCE[0].licState`) === 'West Virginia' && run(`db.nbcrnaCE[0].category`) === 'pharmacotherapeutics');
 
-// Form: two optional pickers on the EXISTING add-CE form; submitEntry splits countsToward.
-const form = run(`ceForm('nbcrnaCE', 'NBCRNA CE', {})`);
-t('add-CE form has the Counts toward + Category pickers',
-  form.includes('name="countsToward"') && form.includes('name="category"') && form.includes('Counts toward a license (optional)'), form.slice(0, 200));
+// v153 rewrite: the manual add-CE form (and its Counts toward /
+// Category pickers) was removed at Caleb's word (Nov 12, 2026) —
+// CE records arrive from portal reads with licState/licType/
+// category already set by the read. The submitEntry split pin
+// below stays: it is the record-save normalization those filed
+// fields ride through.
+t('v153: the manual add-CE form is gone (no ceForm, no Add CE record in the app)',
+  !appSrc.includes('function ceForm(') && !appSrc.includes('Add CE record'));
 t('submitEntry splits countsToward into licState/licType (source pin)',
   appSrc.includes("record.licState=ix>=0?tw.slice(0,ix):''") && appSrc.includes('delete record.countsToward'));
 

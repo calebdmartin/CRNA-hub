@@ -111,7 +111,7 @@ const VAPID_PUB = (() => {
 
 (async () => {
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-  t('sw: cache bumped to v118', swSrc.includes("crna-hub-shell-v152"));
+  t('sw: cache bumped to v118', swSrc.includes("crna-hub-shell-v153"));
   t('sw: push handler shows the notification', swSrc.includes("addEventListener('push'") && swSrc.includes('showNotification'));
   t('sw: notificationclick deep-links', swSrc.includes("addEventListener('notificationclick'") && swSrc.includes('navigate'));
   const fnSrc = fs.readFileSync(R + 'api/fn.js', 'utf8');

@@ -8,6 +8,12 @@
 //     documents, and Manual entry stops offering the CE types, so
 //     there is exactly ONE door for CE. A CE edit opens the new
 //     section, not the manual panel.
+//     v153 SUPERSEDES the Item 1 form/toggle/edit pins in this
+//     file: Caleb then removed the manual CE form entirely ("Let's
+//     get rid of the manual CE tab") — the section is READ-ONLY,
+//     both lists render at once, and the pins below assert that
+//     new shape (full pins in test-v153-no-manual-ce.js). Items
+//     2–4 (CE Broker, AANA headline, license CE lines) stand.
 //   Item 2 — CE Broker as a fifth monitored portal (agent-read
 //     model, same family as NBCRNA / AANA / state boards): a
 //     connCard card (Connect → cebroker.com sign-in → "I'm signed
@@ -85,7 +91,7 @@ const seg = (html, fromId, toId) => {
 };
 const RESET = `
   db = empty();
-  editId = null; manualType = 'NBCRNA'; ceType = 'NBCRNA CE'; onboardStep = 0;
+  editId = null; manualType = 'NBCRNA'; onboardStep = 0;
   portalCheck = null; portalCheckError = ''; portalCheckOcrStatus = '';
   portalOpened = {}; portalLeaveSheet = '';
   cloudSession = null; cloudActive = false; cloudPortals = []; cloudSyncTimes = {};
@@ -104,46 +110,56 @@ const RESET = `
     page.indexOf('id="credentials-ce-panel"') < page.indexOf('id="cert-documents"') &&
     page.indexOf('id="credentials-ce-panel"') < page.indexOf('id="credentials-manual-panel"'));
   const ceSeg = seg(page, 'credentials-ce-panel', 'cert-documents');
-  t('CE section: NOT nested in the manual panel (its form lives in its own panel)',
-    ceSeg.includes('id="ceTypeSelect"') && !seg(page, 'credentials-manual-panel', null).includes('ceTypeSelect'));
-  t('CE section: the existing ceForm renders inside it (Counts toward + Category pickers, Add CE record)',
-    ceSeg.includes('data-kind="nbcrnaCE"') && ceSeg.includes('name="countsToward"') &&
-    ceSeg.includes('name="category"') && ceSeg.includes('Add CE record'));
-  t('CE section: NBCRNA totals line renders inside it',
-    ceSeg.includes('Recorded totals — Class A:'));
+  // v153 rewrite: the manual CE form is gone — no ceTypeSelect
+  // exists anywhere on the page; the section is its own panel.
+  t('CE section: NOT nested in the manual panel (and no CE form exists anywhere — v153)',
+    !page.includes('ceTypeSelect') && ceSeg.includes('Continuing education'));
+  // v153 rewrite: no form renders in the section — it is the
+  // read-only home for records filed by reads (full pins in
+  // test-v153-no-manual-ce.js).
+  t('CE section: read-only — no CE form, no pickers, no Add CE record button (v153)',
+    !ceSeg.includes('data-kind="nbcrnaCE"') && !ceSeg.includes('data-kind="aanaCE"') &&
+    !ceSeg.includes('name="countsToward"') && !ceSeg.includes('name="category"') &&
+    !ceSeg.includes('Add CE record') && !ceSeg.includes('<form'));
+  // v153 rewrite: with zero records the section shows the empty
+  // state; the totals lines render once records are on file.
+  run(`db.nbcrnaCE = [{ id: 'c0', title: 'Seed course', date: '2026-01-01', credits: '3', class: 'Class A' }]; globalThis.__pageT = credentialsPage();`);
+  t('CE section: NBCRNA totals line renders inside it once records are on file',
+    seg(sandbox.__pageT, 'credentials-ce-panel', 'cert-documents').includes('Recorded totals — Class A:'));
+  run(RESET);
   t('CE section: fresh user (no courses) starts open, like the primary cards',
     panelTag(page, 'credentials-ce-panel').includes(' open'));
-  run(`ceType = 'AANA CE'; globalThis.__pageA = credentialsPage();`);
-  t('CE section: the toggle swaps in the AANA CE form + list (one component, two lists)',
-    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('data-kind="aanaCE"') &&
-    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('Recorded total:'));
+  // v153 rewrite: there is no toggle — BOTH lists render at once.
+  run(`db.nbcrnaCE = [{ id: 'c1', title: 'NB course', date: '2026-01-01', credits: '3', class: 'Class A' }];
+    db.aanaCE = [{ id: 'c2', title: 'AA course', date: '2026-02-01', credits: '5' }];
+    globalThis.__pageA = credentialsPage();`);
+  t('CE section: BOTH lists render at once — no toggle (v153)',
+    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('Recorded totals — Class A:') &&
+    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('Recorded total:') &&
+    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('NB course') &&
+    seg(sandbox.__pageA, 'credentials-ce-panel', 'cert-documents').includes('AA course'));
   run(RESET);
   t('manual dropdown: CE record types are gone — exactly one door for CE',
     !page.includes('>NBCRNA CE record<') && !page.includes('>AANA CE record<') &&
     page.includes('>NBCRNA</option>') && page.includes('>Other credential</option>'));
   t('manual panel source: no CE branches remain behind the Entry type dropdown',
     !appSrc.includes("manualType==='NBCRNA CE'") && !appSrc.includes("manualType==='AANA CE'"));
-  // Edit flow: a CE record's edit opens the CE section (open +
-  // form in edit mode), and the manual panel stays shut.
+  // v153 rewrite: the CE edit flow is GONE with the form. A stale
+  // editId naming a CE record opens nothing and renders no form;
+  // the record simply displays in the read-only list, and the
+  // manual panel stays shut.
   run(RESET + `
     db.aanaCE = [{ id: 'ce1', title: 'Airway course', date: '2026-05-01', credits: '6', note: '' }];
-    editId = 'ce1'; ceType = 'AANA CE';
+    editId = 'ce1';
     globalThis.__pageEdit = credentialsPage();
     editId = null;
   `);
-  t('CE edit: the CE section opens with the record loaded (Save CE record)',
-    panelTag(sandbox.__pageEdit, 'credentials-ce-panel').includes(' open') &&
-    seg(sandbox.__pageEdit, 'credentials-ce-panel', 'cert-documents').includes('Save CE record') &&
+  t('CE edit flow removed: a CE editId renders no form and does not open the section (v153)',
+    !seg(sandbox.__pageEdit, 'credentials-ce-panel', 'cert-documents').includes('<form') &&
+    !panelTag(sandbox.__pageEdit, 'credentials-ce-panel').includes(' open') &&
     seg(sandbox.__pageEdit, 'credentials-ce-panel', 'cert-documents').includes('Airway course'));
   t('CE edit: the manual panel does NOT force-open for a CE record anymore',
     !panelTag(sandbox.__pageEdit, 'credentials-manual-panel').includes(' open'));
-  run(RESET + `
-    actions('edit-aanaCE', 'zz');
-    globalThis.__editRoute = { tab, ceType };
-    editId = null;
-  `);
-  t('CE edit action: routes to Credentials with the AANA CE list selected',
-    sandbox.__editRoute.tab === 'Credentials' && sandbox.__editRoute.ceType === 'AANA CE');
   // A settled user (courses on file) sees the section resting as a
   // header with its one-line summary — still a visible section.
   run(RESET + `

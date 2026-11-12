@@ -198,7 +198,7 @@ const RESET = `db = { facilities: [], shifts: [], credentials: [], mileageTrips:
   t('item 2: a card-started stub read force-opens its panel',
     run(`paystubCardFacId = 'f1'; paystubStatus = 'Reading stub.pdf'; facilitiesPage()`).includes('paystub-card-f1" open'));
   // ---------- shell ----------
-  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v152'));
+  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v153'));
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILS:', fails.join(' | '));
   process.exit(fail ? 1 : 0);
