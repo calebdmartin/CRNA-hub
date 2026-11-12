@@ -175,7 +175,7 @@ const SIGNIN = `cloudSession = { access_token: 'tok' };`;
   // ---------- 5: shell cache bumped ----------
   {
     const sw = fs.readFileSync(R + 'sw.js', 'utf8');
-    t('5 service worker cache is v101', sw.includes('crna-hub-shell-v153'));
+    t('5 service worker cache is v101', sw.includes('crna-hub-shell-v154'));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

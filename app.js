@@ -7704,7 +7704,7 @@ function stateLicenseRowHTML(state) {
   const sessLine = sess.sessionState === 'live' ? ' · Session live' : sess.sessionState === 'needs_signin' ? ' · Needs your sign-in' : '';
   const connectLabel = sess.sessionState === 'needs_signin' ? ('Sign in to refresh — ' + state) : ('Connect ' + state + ' — open portal');
   const recs = (db.licenses || []).filter(x => (stateNameOf(x.state) || String(x.state || '').trim()) === state);
-  const strips = recs.map(x => credentialInfoStrip(licenseStripFacts(x), x.reminders) + licenseCeHeadlineHTML(x)).join('');
+  const strips = recs.map(x => `<span id="cred-license-${escapeHTML(x.id)}"></span>` + credentialInfoStrip(licenseStripFacts(x), x.reminders) + licenseCeHeadlineHTML(x)).join('');
   const opened = !!portalOpened[flowId];
   return `<div class="item"><p><strong>${escapeHTML(state)}</strong>${board ? ` <span class="muted">${escapeHTML(board.board)}</span>` : ''}</p><p><strong>Status: ${escapeHTML(st.label)}${sessLine}</strong>${st.detail ? ` — ${escapeHTML(st.detail)}` : ''}</p>${strips}${sess.readRequestedAt ? `<p class="hint">Read requested — we’ll read it from your signed-in session shortly.</p>` : ''}<p class="muted">Sign in on the board’s own page: <a href="${url}" target="_blank" rel="noopener">${escapeHTML(url.replace(/^https?:\/\//, '').replace(/\/$/, ''))}</a>. We never ask for your portal password.</p>${opened ? `<p><strong>Signed in over there?</strong> Tap “I’m signed in — read it now” and we’ll read it from your signed-in session.</p>` : ''}<div class="toolbar"><a class="button" href="${url}" target="_blank" rel="noopener" data-portal-connect="licenses" data-portal-state="${escapeHTML(state)}">${escapeHTML(connectLabel)}</a><button type="button" data-action="portal-read-request" data-id="licenses" data-date="${escapeHTML(state)}">I’m signed in — read it now</button><a class="button secondary" href="${url}" target="_blank" rel="noopener">Open in Safari</a>${recs.length ? '' : `<button type="button" class="secondary" data-action="portal-state-remove" data-id="${escapeHTML(state)}">Remove</button>`}</div>${portalLeaveSheet === flowId ? `<div class="item"><p><strong>One sec — the portal opens outside CRNA Hub.</strong></p><p class="muted">Over there: sign in on the portal’s own page, then come back here and tap “I’m signed in — read it now”.</p><p class="muted">CRNA Hub stays right here — come back to this tab and your check picks up where you left off.</p><div class="toolbar"><button type="button" data-action="portal-leave-go" data-id="licenses" data-date="${escapeHTML(state)}">Take me to ${escapeHTML(state)}</button><button type="button" class="secondary" data-action="portal-leave-cancel">Not now</button></div></div>` : ''}</div>`;
 }
@@ -7725,6 +7725,85 @@ function stateLicensesCardHTML() {
   return collapsePanelHTML('credentials-licenses-panel', summary ? 'State Licenses · ' + summary : 'State Licenses', `<p class="muted">State boards of nursing — RN and APRN licenses. Each state has its own board portal: pick your state below, then Connect opens that board.</p><p class="muted">${licManual}</p>${rows}${picker}${backup}<details><summary class="muted">About the CE requirements shown</summary><p class="muted">Requirements from each state board's published rules, checked Nov 2026. Your board is the final word.</p></details>`, open);
 }
 
+// --- Credential quick-view chips (v154, Nov 12, 2026) ---
+// Caleb: "Let's put tabs at the top of the credential page just
+// like the tabs at the top of this page, that has a quick view of
+// compliance for each portal and license. Something with the name
+// of the credential, active or lapsed, status of requirements
+// (either a green check mark, or a red x requiring attention) if
+// you click on the tab it should redirect you down the page to
+// the section of the credential."
+// The derivation invents NO new rules — credentialChipStatus
+// reads the app's existing truth: portalReadState (session),
+// monitorDisplay / monitorPromptVisible (newest read evidence +
+// due prompts), the filed records themselves (status + dates),
+// and for CE the SAME window logic the v150 watchdog block (g)
+// applies (evaluate.ts): tracked-short or untracked only needs
+// attention inside the 90-day reminder window — a shortfall with
+// plenty of time left is NOT attention (no crying wolf).
+function credentialChipCeAttention(lic){
+  const req=ceRequirementFor(lic);
+  if(!req||req.kind!=='hours')return false;
+  const days=daysUntil(lic.expiry);
+  if(days===null||days<0||days>90)return false;
+  const p=ceProgressFor(lic,req);
+  if(!p)return true;
+  if(p.total<req.total)return true;
+  return (p.subs||[]).some(s=>s.have<s.need);
+}
+function credentialChipReadAttention(mon,sess){
+  if(sess&&sess.sessionState==='needs_signin')return true;
+  if(sess&&['blocked','failed','needs-sign-in','not-found'].includes(String(sess.lastReadOutcome||'')))return true;
+  if(mon){
+    if(monitorPromptVisible(mon,localDate(new Date())))return true;
+    const disp=monitorDisplay(mon);
+    if(!disp.verified&&mon.lastAttempt&&['blocked','failed','needs_signin','not_found'].includes(String(mon.lastOutcome||'')))return true;
+  }
+  return false;
+}
+function credentialChipStatus(){
+  const chips=[];
+  const mons=ensurePortalMonitoring();
+  const monFor=(source)=>mons.find(m=>m.source===source);
+  const n=db.nbcrna||{},a=db.aana||{};
+  const nDays=daysUntil(n.periodEnd||n.renewalDeadline);
+  const nLapsed=(nDays!==null&&nDays<0)||/expired|not certified/i.test(String(n.status||''));
+  chips.push({key:'nbcrna',name:'NBCRNA',status:nLapsed?'Lapsed':(String(n.status||'').trim()||'Not on file'),
+    attention:nLapsed||credentialChipReadAttention(monFor('nbcrna'),portalReadState('nbcrna')),panel:'credentials-nbcrna-panel',anchor:''});
+  const aDays=daysUntil(a.expiration);
+  const aLapsed=(aDays!==null&&aDays<0)||/lapsed|expired/i.test(String(a.status||''));
+  chips.push({key:'aana',name:'AANA',status:aLapsed?'Lapsed':(String(a.status||'').trim()||'Not on file'),
+    attention:aLapsed||credentialChipReadAttention(monFor('aana'),portalReadState('aana')),panel:'credentials-aana-panel',anchor:''});
+  const cbSess=portalReadState('cebroker');
+  chips.push({key:'cebroker',name:'CE Broker',status:portalVerifiedRetrievedAt('cebroker')?'Verified':(cbSess.sessionState==='live'?'Connected':'Not connected'),
+    attention:credentialChipReadAttention(monFor('cebroker'),cbSess),panel:'credentials-cebroker-panel',anchor:''});
+  (db.licenses||[]).forEach(x=>{
+    const board=stateBoard(x.state);
+    const code=board?board.code:(stateNameOf(x.state)||String(x.state||''));
+    const days=daysUntil(x.expiry);
+    const lapsed=(days!==null&&days<0)||/lapsed|expired/i.test(String(x.status||''));
+    const st=stateNameOf(x.state)||String(x.state||'');
+    const mon=mons.find(m=>m.source==='licenses'&&m.key===monitorKey('licenses',x.state,x.type));
+    chips.push({key:'license:'+x.id,name:(code+' '+String(x.type||'')).trim(),status:lapsed?'Lapsed':(String(x.status||'').trim()||'Active'),
+      attention:lapsed||credentialChipReadAttention(mon,portalReadState('licenses',st))||credentialChipCeAttention(x),
+      panel:'credentials-licenses-panel',anchor:'cred-license-'+x.id});
+  });
+  return chips;
+}
+function credentialChipsHTML(){
+  const chips=credentialChipStatus();
+  if(!chips.length)return '';
+  return `<div class="cred-chips" role="navigation" aria-label="Credential quick view">${chips.map(c=>`<button type="button" class="cred-chip" data-action="credential-chip" data-id="${escapeHTML(c.key)}">${escapeHTML(c.name)} · ${escapeHTML(c.status)} <span class="cred-chip-icon ${c.attention?'bad':'ok'}" role="img" aria-label="${c.attention?'Needs attention':'All good'}">${c.attention?'✗':'✓'}</span></button>`).join('')}</div>`;
+}
+// Chip tap: open the credential's panel (facilityScrollTo opens a
+// collapsed <details>) and land on it — for a license, continue to
+// the license's own anchor inside the State Licenses panel.
+function credentialChipGo(key){
+  const chip=credentialChipStatus().find(c=>c.key===key);
+  if(!chip)return;
+  facilityScrollTo(chip.panel);
+  if(chip.anchor)facilityScrollTo(chip.anchor);
+}
 function credentialsPage(){
   if(!featureOn('featureCredentials'))return featureOffHTML('featureCredentials');
   const n=db.nbcrna||{},a=db.aana||{},lic=db.licenses.find(x=>x.id===editId)||{},doc=db.documents.find(x=>x.id===editId)||{},legacy=db.credentials.find(x=>x.id===editId)||{};
@@ -7785,7 +7864,7 @@ function credentialsPage(){
   const ceBrokerCount=ceBrokerRecs.length;
   const ceBrokerManual=ceBrokerCount?(ceBrokerCount+' CE course'+(ceBrokerCount===1?'':'s')+' on file — read from CE Broker.'):'No CE Broker read on file yet.';
   const ceBrokerSummary=ceBrokerCount?(ceBrokerCount+' course'+(ceBrokerCount===1?'':'s')+' read'):'';
-  return `${onboardDirectionHTML(4)}<p class="hint">Tap Connect and sign in on the portal’s own page — we never see your password.${profileName()?` Portal records are matched to the name from step 1 — “${escapeHTML(profileName())}”.`:``} Records a check brings back are labelled with their source; the rest is user-entered, not verified.</p>
+  return `${onboardStep===4?'':credentialChipsHTML()}${onboardDirectionHTML(4)}<p class="hint">Tap Connect and sign in on the portal’s own page — we never see your password.${profileName()?` Portal records are matched to the name from step 1 — “${escapeHTML(profileName())}”.`:``} Records a check brings back are labelled with their source; the rest is user-entered, not verified.</p>
   ${portalReturnGreetingHTML()}
   ${monitorDuePromptsHTML()}
   ${connCard('NBCRNA','National Board of Certification and Recertification for Nurse Anesthetists — your certification record.','certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status.',nbcrnaManual,'portal.nbcrna.com','https://portal.nbcrna.com/','nbcrna',[n.status,(n.periodEnd||n.renewalDeadline)?('ends '+fmt(n.periodEnd||n.renewalDeadline)):''].filter(Boolean).join(' · '),!(n.status||n.number||n.periodEnd||n.renewalDeadline),credentialInfoStrip(nbcrnaStripFacts(n),n.reminders))}
@@ -10099,7 +10178,7 @@ if(action==='portal-return-read'){portalRequestRead(entry,{state:date||''});retu
 if(action==='portal-state-add'){const sel=$('licStatePicker');portalStateAdd(sel?sel.value:'');return;}
 if(action==='portal-state-remove'){portalStateRemove(entry);return;}
 if(action==='portal-return-dismiss'){const pd=portalDepartureGet();if(pd){pd.dismissed=true;portalDeparturePersist();}return render();}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses','CE Broker':'cebroker'})[entry]||entry;return startPortalCheck(src);}if(action==='ce-section-goto'){tab='Credentials';render();facilityScrollTo('credentials-ce-panel');return;}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry,date||'');}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses','CE Broker':'cebroker'})[entry]||entry;return startPortalCheck(src);}if(action==='ce-section-goto'){tab='Credentials';render();facilityScrollTo('credentials-ce-panel');return;}if(action==='credential-chip'){credentialChipGo(entry);return;}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry,date||'');}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
 if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}
