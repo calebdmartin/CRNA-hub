@@ -5,8 +5,9 @@
 // Covers the parent task's acceptance checks without a live calendar:
 //   * an unknown hospital is suggested once (count + date range), and a
 //     repeat sync refreshes it instead of duplicating it;
-//   * "Not now" dismisses it — the next sync does not re-ask — and the
-//     dismissed suggestion stays visible with an "Ask again" button;
+//   * "Not a hospital" (v121; formerly "Not now") dismisses it — the
+//     next sync does not re-ask — and the dismissed suggestion stays
+//     visible with an "Ask again" button;
 //   * Yes (and each of the path buttons) opens the facility form
 //     pre-filled with the hospital name and address;
 //   * adding the facility clears its suggestion, so the next sync
@@ -102,20 +103,25 @@ t('no facility created silently by the sync',
   run(`db.facilities.length`) === 1 && run(`db.facilities[0].name`) === 'Holzer');
 t('no shift imported for the held hospital',
   run(`db.shifts.length`) === 0);
-t('suggestion card asks the question with name, count and date range',
-  run(`facilitySuggestionsHTML().includes('We noticed shifts at CAMC in your calendar. Add it as a facility?')`) &&
-  run(`facilitySuggestionsHTML().includes('3 shift(s)')`));
-t('two paths appear together, in order (sync, manual) \u2014 no contract item (Nov 6 cleanup: it only scrolled to the panel below)',
+// v121 (Caleb, Nov 11, 2026): per-hospital cards — name as the
+// title, waiting count, the three rate paths inline (contract /
+// words / manual), and "Not a hospital" for dismissal. The old
+// full-sentence question, Yes / Not now buttons, and the Nov 6
+// two-path list are superseded by the post-sync handoff design.
+t('suggestion card shows the hospital name with its waiting count and date range',
+  run(`facilitySuggestionsHTML().includes('CAMC')`) &&
+  run(`facilitySuggestionsHTML().includes('3 shift(s) waiting')`));
+t('three paths appear together, in order (contract, words, manual)',
   (() => {
     const h = run(`facilitySuggestionsHTML()`);
-    const a = h.indexOf('Sync your calendar or manually enter a facility');
-    const s = h.indexOf('data-date=\"sync\"', a);
-    const m = h.indexOf('data-date=\"manual\"', s);
-    return a > -1 && s > a && m > s && !h.includes('data-date=\"contract\"') && !h.includes('<strong>Upload a contract</strong>');
+    const c = h.indexOf('data-date=\"contract\"');
+    const w = h.indexOf('data-action=\"facility-suggestion-words\"', c);
+    const m = h.indexOf('data-date=\"manual\"', w);
+    return c > -1 && w > c && m > w && h.includes('Upload a contract') && h.includes('Describe rates in your words') && h.includes('Enter hourly rate manually');
   })());
-t('Yes / Not now buttons present on the suggestion card',
-  run(`facilitySuggestionsHTML().includes('data-action="facility-suggestion-yes"')`) &&
-  run(`facilitySuggestionsHTML().includes('data-action="facility-suggestion-dismiss"')`));
+t('"Not a hospital" dismissal present on the suggestion card',
+  run(`facilitySuggestionsHTML().includes('data-action="facility-suggestion-dismiss"')`) &&
+  run(`facilitySuggestionsHTML().includes('Not a hospital')`));
 
 // --- 2. "Not now" dismisses; the next sync does not re-ask; dismissed stays visible.
 run(`
@@ -154,13 +160,13 @@ t('Yes pre-fills the address from the calendar location',
   sandbox.__facPageYes.includes('value="3200 MacCorkle Ave, Charleston, WV 25304"'));
 t('facility form shows the paths chooser after Yes',
   sandbox.__facPageYes.includes('id="facility-three-ways-panel"') &&
-  sandbox.__facPageYes.includes('Sync your calendar or manually enter a facility'));
+  sandbox.__facPageYes.includes('Upload a contract') &&
+  sandbox.__facPageYes.includes('Describe rates in your words'));
 t('contract-upload option and manual entry both available on the form',
   sandbox.__facPageYes.includes('id="facility-contract-panel"') &&
   sandbox.__facPageYes.includes('id="facility-manual-panel"'));
-t('manual path states it is the fallback for rates the other paths did not provide',
-  sandbox.__facPageYes.includes('Manually enter the facility') &&
-  sandbox.__facPageYes.includes('the fallback when sync or a contract did not provide them'));
+t('three-ways panel promises the automatic re-check after save (v121 close-the-loop)',
+  sandbox.__facPageYes.includes("As soon as it's saved, we re-check your calendar"));
 // Path button: manual path pre-fills the form (the contract item was
 // removed Nov 6 — it only scrolled to the contract panel below).
 run(`

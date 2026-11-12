@@ -15,7 +15,22 @@ from dynamic_credentials import add_surrogate_to_request  # noqa: E402
 BASE = "https://api.supabase.com"
 REF = "xgoghgihfhtnyevgapyp"
 ALLOWED = ["api.supabase.com"]
-ROOT = "/home/hatch/workspace/crnahub-neutrality/supabase/functions/"
+# ROOT is THIS tree's functions directory, resolved from the
+# script's own location (Nov 11, 2026, v135): it used to be a
+# hardcoded path to a shared snapshot tree
+# (crnahub-neutrality) whose sources lag the rounds — no
+# mode "rules" in its extract-contract, QGENDA_PARSER_VERSION
+# 6, no v130/v134 calendar code — so any deploy run through
+# the old helper would silently ship THAT tree instead of
+# the round being built. (Verified Nov 11, 2026: the live
+# extract-contract does carry mode "rules", so this hazard
+# is stated as what the helper WOULD ship, not as the cause
+# of the Nov 11 CAMC read failure.) A deploy must ship the
+# tree the script sits in, never a snapshot that happens to
+# share the name.
+import os
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                    "supabase", "functions") + os.sep
 
 
 def _req(method, path, body=None, headers=None):

@@ -1550,11 +1550,22 @@ function paystubParseDateStr(s){if(!s)return '';const p=contractParseSingle(Stri
 function parsePaystubText(text){const t=String(text||'');const out={agency:'',facility:'',frequency:'',periodStart:'',periodEnd:'',payDate:'',gross:null,net:null,found:[]};
   const ag=t.match(/(?:employer|employer name|company name|company|agency|payroll company|organization)\s*[:\-]\s*([A-Za-z0-9][^\n\r]{1,70})/i);
   if(ag){out.agency=ag[1].trim().replace(/\s{2,}.*$/,'').trim();out.found.push('Agency / employer')}
-  const per=t.match(/(?:pay period|period)\s*(?:ending|ended)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})\s*(?:-|–|—|to|through|thru)\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
+  const per=t.match(/(?:pay period|period)\s*(?:ending|ended)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})\s*(?:-|–|—|to|through|thru)\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
   if(per){out.periodStart=paystubParseDateStr(per[1]);out.periodEnd=paystubParseDateStr(per[2]);if(out.periodStart&&out.periodEnd)out.found.push('Pay period')}
-  const pd=t.match(/(?:pay date|check date|payment date|date paid)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
+  if(!out.periodStart||!out.periodEnd){
+    // Split period labels (Nov 11, 2026, v135 sweep): many
+    // stubs print the bounds on separate lines — "Period
+    // Beginning: …" / "Period Ending: …" — which the
+    // one-line range pattern above can never see.
+    const pb=t.match(/(?:period\s+begin(?:ning)?|period\s+start|begin(?:ning)?\s+date|start\s+date)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
+    const pe=t.match(/(?:period\s+end(?:ing)?|period\s+ended|end(?:ing)?\s+date|end\s+date)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
+    if(pb)out.periodStart=paystubParseDateStr(pb[1]);
+    if(pe)out.periodEnd=paystubParseDateStr(pe[1]);
+    if(out.periodStart&&out.periodEnd&&!out.found.includes('Pay period'))out.found.push('Pay period');
+  }
+  const pd=t.match(/(?:pay date|check date|payment date|date paid)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})/i);
   if(pd){out.payDate=paystubParseDateStr(pd[1]);if(out.payDate)out.found.push('Pay date')}
-  const g=paystubMoneyOnLine(t,/gross\s+(pay|earnings|amount)|total\s+gross/i);
+  const g=paystubMoneyOnLine(t,/gross\s+(pay|earnings|amount)|total\s+gross|^\s*gross\s*:/i);
   if(g!=null){out.gross=g;out.found.push('Gross pay')}
   const n=paystubMoneyOnLine(t,/net\s+(pay|amount|earnings|check)|take[\s\-]?home/i);
   if(n!=null){out.net=n;out.found.push('Net pay')}
@@ -4198,7 +4209,7 @@ function describeCodeBlocks(text,codes){
       // poisoned the next clause, and "8 is $2,000 a shift"
       // lost its $2,000 without a trace.
       const amounts=[...String(chunk).matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g)].map(x=>({v:Number(x[1].replace(/,/g,'')),start:x.index,end:x.index+x[0].length,scope:null}))
-        .filter(a=>!/^\s*(?:\/|per\s+)?(?:hrs?|hours?|hourly)\b/i.test(String(chunk).slice(a.end,a.end+12))&&!/hourly(?:\s+rate)?\s*(?:is|:|=)?\s*$/i.test(String(chunk).slice(Math.max(0,a.start-16),a.start)));
+        .filter(a=>!/^\s*(?:\/|per\s+|an?\s+)?(?:hrs?|hours?|hourly)\b/i.test(String(chunk).slice(a.end,a.end+12))&&!/hourly(?:\s+rate)?\s*(?:is|:|=)?\s*$/i.test(String(chunk).slice(Math.max(0,a.start-16),a.start)));
       const kws=[...String(chunk).matchAll(new RegExp(scopeRx.source,'gi'))].map(x=>({kind:/^(?:weeke|wknd)/i.test(x[1])?'we':'wd',start:x.index,end:x.index+x[0].length}));
       for(const kw of kws){let best=null,bd=Infinity;for(const a of amounts){const d=kw.start>=a.end?kw.start-a.end:(kw.end<=a.start?a.start-kw.end:0);if(d<bd){bd=d;best=a}}if(best&&!best.scope)best.scope=kw.kind}
       for(const a of amounts)if(isFinite(a.v)&&a.v>0)e.amounts.push(a);
@@ -4231,7 +4242,17 @@ function describeCodeBlocks(text,codes){
   // collapse's business, below).
   const dropDurations=(seg,list)=>list.filter((mn,i)=>{
     if(i===0)return true;
-    if(!/^\d+$/.test(seg.slice(mn.start,mn.end)))return true;
+    const mtxt=seg.slice(mn.start,mn.end);
+    // A code whose name IS a duration spelling ("8HR")
+    // collides with its own definition value: "8S = 8hr
+    // shift" mentions 8HR inside 8S's statement, and the
+    // chunk cutter used to hand the statement to the
+    // value, shifting every phrase one code over (Nov 11,
+    // 2026, v135). A non-first mention that reads as a
+    // duration and is immediately followed by the shift /
+    // day noun is the VALUE being defined, not a subject.
+    if(/^\d+(?:\.\d+)?\s*(?:-\s*)?(?:hr|hrs|hours?)$/i.test(mtxt)&&/^\s*(?:shifts?|days?)\b/i.test(seg.slice(mn.end,mn.end+12)))return false;
+    if(!/^\d+$/.test(mtxt))return true;
     return !/^\s*-?\s*(?:hrs?|hours?)\b/i.test(seg.slice(mn.end,mn.end+12));
   });
   let current=null,lead='',leadCodes='';
@@ -4581,6 +4602,15 @@ function describeParseLocal(text,fac,codes){
       callerKeys.add(k);codeList.push(e);
     }
   }
+  // v135: a code-less surface (nothing on the schedule, no
+  // saved definitions) keeps the v128 ask-first rule for
+  // telegraphic "=" lists — that shape is how foreign /
+  // contract material arrives, and naming the subjects for
+  // confirmation beats inventing definitions for codes the
+  // app has never seen. Sentence-form statements (is / are
+  // / means / colon) define on every surface: that is the
+  // user describing their own facility in their own words.
+  const universeEmptyS=codeList.length===0;
   const ex=contractExtractRates(t);
   const rates={};
   const put=(k,v)=>{const n=rateOrNull(v);if(n!=null)rates[k]=n};
@@ -4814,14 +4844,151 @@ function describeParseLocal(text,fac,codes){
     };
     for(const clause of t.split(/[.;\n;]+|\s+\/\s+/)){
       if(unanswered.length>=12)break;
-      const m=clause.match(/^\s*"?\(?\s*([A-Za-z0-9][A-Za-z0-9*()\- ]{0,26}?)\s*(?:=|:|\bis\b|\bare\b|\bmeans\b|\bpays?\b)/);
+      const m=clause.match(/^\s*"?\(?\s*([A-Za-z0-9][A-Za-z0-9*()\- ]{0,26}?)\s*(?:=|:|\bis\b|\bare\b|\bmeans\b|\bpays?\b|\bruns\b|\blasts\b)/i);
       if(!m)continue;
-      const subj=m[1].replace(/\s+/g,' ').replace(/[\s()]+$/,'').trim();
+      const subj=m[1].replace(/\s+/g,' ').replace(/[\s()]+$/,'').replace(/^(?:an?|the)\s+(?=[A-Za-z0-9])/i,'').trim();
       if(!subj||subj.split(' ').length>4)continue;
       if(!(/\d|\*/.test(subj)||/(?:^|\s)[A-Z]{2,}(?:\s|$)/.test(subj)))continue;
       if(/(?:^|\s)(?:shifts?|rates?|pay|hours?|days?|per)(?:\s|$)/i.test(subj))continue;
       if(isKnownS(subj)||callCoveredS(subj)||answeredS.has(normS(subj)))continue;
       answeredS.add(normS(subj));unanswered.push(subj);
+    }
+  }
+  // Copula length binding for net subjects (Nov 11, 2026,
+  // v135): the net above NAMES a subject nothing resolved,
+  // but a plain length statement about it — "10s is 10 hour
+  // shift", "5* and 5** are 10 hour shifts" — was never
+  // BOUND: the per-code loop only serves codes already in
+  // the universe, and its label pattern cannot start at a
+  // digit, so article-less and plural-copula shapes fell
+  // through entirely (live, Nov 11, 2026: with the AI read
+  // not landing, Caleb's CAMC text read back "still don't
+  // know" for exactly these two sentences). When the text
+  // states a shift length for a named subject and an hourly
+  // rate stands behind it (length x hourly is the pricing
+  // model), the statement IS the definition: bind it, per
+  // code, splitting glued subjects so each code binds on
+  // its own. A subject whose length never appears — or a
+  // call subject, or one with no hourly rate to price it —
+  // stays asked about, as before.
+  if(eff.hourlyRate!=null){
+    const segForS=subj=>{
+      const sLow=String(subj||'').toLowerCase();if(!sLow)return null;
+      const i=low.indexOf(' '+sLow)>=0?low.indexOf(' '+sLow)+1:(low.startsWith(sLow)?0:-1);
+      if(i<0||/[a-z0-9*]/.test(low.charAt(i+sLow.length)))return null;
+      return t.slice(Math.max(0,i-1),Math.max(0,i-1)+160).split(/[.;\n]/)[0].toLowerCase();
+    };
+    // On a code-less surface the "=" verb is not a
+    // statement (v128 ask-first for telegraphic lists) —
+    // the length patterns then only fire on sentence verbs.
+    const verbS=universeEmptyS?'(?:\\bis\\b|\\bare\\b|\\bmeans\\b|:)':'(?:\\bis\\b|\\bare\\b|\\bmeans\\b|=|:)';
+    const verbS3=universeEmptyS?'(?:\\bis\\b|\\bare\\b|\\bmeans\\b|:|\\bruns\\b|\\blasts\\b)':'(?:\\bis\\b|\\bare\\b|\\bmeans\\b|=|:|\\bruns\\b|\\blasts\\b)';
+    const lenForS=seg=>{
+      if(!seg)return null;
+      let m=seg.match(new RegExp(verbS+'\\s*(?:(?:either|both|each)\\s+(?:one\\s+)?(?:is\\s+|are\\s+)?)?(?:an?\\s+|the\\s+)?(\\d+(?:\\.\\d+)?)\\s*(?:-\\s*|\\s+)hours?\\s+(?:shifts?|days?)\\b'));
+      if(m)return Number(m[1]);
+      m=seg.match(new RegExp(verbS+'\\s*(?:an?\\s+|the\\s+)?(\\d+(?:\\.\\d+)?)\\s*(?:hr|hrs)\\s+(?:shifts?|days?)\\b'));
+      if(m)return Number(m[1]);
+      // Bare duration after a verb ("8s runs 8 hours",
+      // "10s is 10 hours"): the length with no shift noun.
+      // Last resort only — the shift-noun shapes above win,
+      // and a paid-hours rider cannot reach this pattern
+      // (its figure follows "paid", not a statement verb).
+      m=seg.match(new RegExp(verbS3+'\\s*(?:an?\\s+|the\\s+)?(\\d+(?:\\.\\d+)?)\\s*(?:-\\s*|\\s+)?hours?\\b'));
+      if(m)return Number(m[1]);
+      return null;
+    };
+    const codeLikeS=s=>{const x=String(s||'').trim();return x.length>=1&&x.length<=26&&(/\d|\*/.test(x)||/(?:^|\s)[A-Z]{2,}(?:\s|$)/.test(x))&&!/\b(?:shifts?|rates?|pay|hours?|days?|per)\b/i.test(x)&&!/\bcall\b/i.test(x)};
+    // A bindable subject is a CODE: one token, no spaces,
+    // no dangling parenthesis. A multi-word fragment the
+    // net caught ("Holz-g main (8") is a name piece, not a
+    // code — it stays NAMED in "still don't know" for the
+    // user to clarify, never defined behind a mangled key
+    // (v125's preview read-back pinned this).
+    const bindableS=p=>codeLikeS(p)&&!/\s/.test(p)&&(p.split('(').length-1)<=(p.split(')').length-1);
+    const normS2=s=>String(s||'').toLowerCase().replace(/[^a-z0-9*]+/g,' ').trim();
+    const facNamesS=new Set([fac?fac.name:'',...String((fac&&fac.aliases)||'').split(',')].map(normS2).filter(Boolean));
+    // Global statement scan (Nov 11, 2026, v135):
+    // assignment-shaped length statements ANYWHERE in the
+    // text — the mid-list items a clause-initial net cannot
+    // see ("8S = 8hr shift, 8HR = 8hr shift, ...", comma
+    // lists, colon lists, run-together sentences). Same
+    // guards as the net: the subject must look like a code,
+    // must not be the facility itself (the narrator of
+    // "CAMC pays ..." is not a code), not a call subject,
+    // and not a code the per-code loop already owns; a
+    // bare-number subject binds only in the explicit
+    // assignment forms ("8 = ...", "10: ..."), never from
+    // prose ("2026 is ..." is a year, not a code).
+    const scanRx=[
+      // Glued subjects first ("5* and 5** are 10 hour
+      // shifts" mid-list): the single-subject patterns can
+      // only bind the LAST name before the verb, so the
+      // glued forms run ahead of them and bind every part.
+      {glue:true,rx:/([A-Za-z0-9][A-Za-z0-9*]{0,15}(?:\s*(?:,|&|\/|\band\b|\bor\b)\s*[A-Za-z0-9][A-Za-z0-9*]{0,15})+)\s*(=|:|\bis\b|\bare\b|\bmeans\b|\bruns\b|\blasts\b)\s*(?:(?:either|both|each)\s+(?:one\s+)?(?:is\s+|are\s+)?)?(?:an?\s+|the\s+)?(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)hours?\s+(?:shifts?|days?)\b/gi},
+      {glue:true,rx:/([A-Za-z0-9][A-Za-z0-9*]{0,15}(?:\s*(?:,|&|\/|\band\b|\bor\b)\s*[A-Za-z0-9][A-Za-z0-9*]{0,15})+)\s*(=|:|\bis\b|\bare\b|\bmeans\b|\bruns\b|\blasts\b)\s*(?:an?\s+|the\s+)?(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)?hours?\b/gi},
+      {glue:false,rx:/([A-Za-z0-9][A-Za-z0-9*]{0,15})\s*(=|:|\bis\b|\bare\b|\bmeans\b|\bruns\b|\blasts\b)\s*(?:(?:either|both|each)\s+(?:one\s+)?(?:is\s+|are\s+)?)?(?:an?\s+|the\s+)?(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)hours?\s+(?:shifts?|days?)\b/gi},
+      {glue:false,rx:/([A-Za-z0-9][A-Za-z0-9*]{0,15})\s*(=|:|\bis\b|\bare\b|\bmeans\b|\bruns\b|\blasts\b)\s*(?:an?\s+|the\s+)?(\d+(?:\.\d+)?)\s*(?:hr|hrs)\s+(?:shifts?|days?)\b/gi},
+      {glue:false,rx:/([A-Za-z0-9][A-Za-z0-9*]{0,15})\s*(=|:|\bis\b|\bare\b|\bmeans\b|\bruns\b|\blasts\b)\s*(?:an?\s+|the\s+)?(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)?hours?\b/gi},
+    ];
+    for(const {glue,rx} of scanRx){
+      let mm;rx.lastIndex=0;
+      while((mm=rx.exec(t))!==null){
+        const verb=String(mm[2]).trim(),N=Number(mm[3]);
+        if(verb==='='&&universeEmptyS)continue;
+        const ct=canonicalTypeOf(N+'-hour shift');
+        if(!ct||/call/i.test(ct))continue;
+        const subjects=glue?describeSubjectParts(mm[1]):[mm[1]];
+        for(const subj of subjects){
+          if(defs[subj]||codeList.some(c=>c.code===subj))continue;
+          if(/^\d+$/.test(subj)&&verb!=='='&&verb!==':')continue;
+          if(!bindableS(subj)||facNamesS.has(normS2(subj)))continue;
+          defs[subj]={label:ct,hours:String(N),canonicalType:ct,paidHours:null};
+          const ui=unanswered.indexOf(subj);if(ui>=0)unanswered.splice(ui,1);
+        }
+      }
+    }
+    // Verb-less list items (Nov 11, 2026, v135): a header
+    // list — "Codes at CAMC ($250/hr): 8s 8 hours, 10s 10
+    // hours, 5* 10 hours" — states each length with nothing
+    // but a space between the code and its hours. No verb
+    // means the net never names these codes and the
+    // statement scan never sees them; the whole list used
+    // to vanish. An item is a single code-like token right
+    // after a list separator (or the start), followed
+    // directly by "N hours" — prose durations ("worked 8
+    // hours") fail the code test and stay prose.
+    {
+      const listRx=/(?:^|[,:;]\s*)([A-Za-z0-9][A-Za-z0-9*]{0,15})\s+(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)?hours?\b/g;
+      let lm;listRx.lastIndex=0;
+      while((lm=listRx.exec(t))!==null){
+        const subj=lm[1],N=Number(lm[2]);
+        if(defs[subj]||codeList.some(c=>c.code===subj))continue;
+        if(!bindableS(subj)||facNamesS.has(normS2(subj)))continue;
+        const ct=canonicalTypeOf(N+'-hour shift');
+        if(!ct||/call/i.test(ct))continue;
+        defs[subj]={label:ct,hours:String(N),canonicalType:ct,paidHours:null};
+        const ui=unanswered.indexOf(subj);if(ui>=0)unanswered.splice(ui,1);
+      }
+    }
+    for(let i=unanswered.length-1;i>=0;i--){
+      const cand=unanswered[i];
+      if(facNamesS.has(normS2(cand))){unanswered.splice(i,1);continue}
+      if(defs[cand]||codeList.some(c=>c.code===cand))continue;
+      const parts=describeSubjectParts(cand).map(p=>p.replace(/^(?:an?|the)\s+(?=[A-Za-z0-9])/i,''));
+      if(!parts.length||!parts.every(bindableS))continue;
+      const gluedLen=lenForS(segForS(cand));
+      const bound=[];
+      for(const p of parts){
+        if(defs[p]){bound.push(p);continue}
+        const N=lenForS(segForS(p))!=null?lenForS(segForS(p)):gluedLen;
+        const ct=N!=null?canonicalTypeOf(N+'-hour shift'):'';
+        if(N!=null&&ct&&!/call/i.test(ct)){defs[p]={label:ct,hours:String(N),canonicalType:ct,paidHours:null};bound.push(p)}
+      }
+      if(bound.length){
+        unanswered.splice(i,1);
+        for(const p of parts)if(!bound.includes(p)&&!unanswered.includes(p))unanswered.push(p);
+      }
     }
   }
   const question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
@@ -5107,6 +5274,23 @@ function applyDescribedRules(fac,parsed){
 // Pricing itself stays 100% deterministic — this only changes
 // who READS the words.
 function describeQuoteNorm(s){return String(s||'').toLowerCase().replace(/[’‘]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim()}
+// A subject naming SEVERAL codes at once (Nov 11, 2026,
+// v135): "5* and 5**", "8s or 8", "8, 10, 12". Readers meet
+// these everywhere — the user's own sentences glue codes
+// together, the unknown-subject net extracts the glued
+// subject whole, and the AI sometimes mirrors the glue in
+// an entry name or its unknown list. Split into the parts
+// whenever every part still looks like a code name (short,
+// carries a digit or an asterisk, no sentence words); a
+// name that does not split cleanly stands as-is.
+function describeSubjectParts(name){
+  const raw=String(name||'').trim();if(!raw)return[];
+  if(!/(,|&|\/|\band\b|\bor\b)/i.test(raw))return[raw];
+  const parts=raw.split(/\s*(?:,|&|\/)\s*|\s+\band\b\s+|\s+\bor\b\s+/i).map(s=>s.trim()).filter(Boolean);
+  if(parts.length<2)return[raw];
+  const codeLike=s=>s.length<=26&&/\d|\*/.test(s)&&!/\b(?:shifts?|rates?|pay|hours?|days?|per|the|a|an)\b/i.test(s);
+  return parts.every(codeLike)?parts:[raw];
+}
 function describeQuoteNumbers(quote){
   const out=[];
   for(const m of String(quote||'').matchAll(/\d[\d,]*\.?\d*/g)){const n=Number(m[0].replace(/,/g,''));if(isFinite(n))out.push(n)}
@@ -5126,7 +5310,7 @@ function describeTakeQuoted(text,textNorm,qv,label,rejected){
   rejected.push(moneyShort(v)+' for '+label);
   return null;
 }
-async function describeReadWithAI(text,ctx,local){
+async function describeReadWithAI(text,ctx,local,status){
   const fac=ctx.fac||null;
   const uniMap=new Map();
   const addUni=c=>{if(!c||!String(c.code||'').trim())return;const k=codeIdentityKey(c.code);if(k&&!uniMap.has(k))uniMap.set(k,{code:String(c.code),ctype:c.ctype||'',hours:c.hours||''})};
@@ -5139,9 +5323,25 @@ async function describeReadWithAI(text,ctx,local){
     const fdefs=facilityCodeDefs(fac);
     for(const code of Object.keys(fdefs))card.defs.push({code,label:fdefs[code].label||'',type:fdefs[code].canonicalType||''});
   }
-  const data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'rules',ruleText:text,ruleCodes:uniList.map(c=>({code:c.code,ctype:c.ctype,hours:c.hours})),ruleCard:card,facilityName:ctx.facName||(fac?fac.name:'')});
+  // One automatic retry (Nov 11, 2026, v135): a transient
+  // failure — device network, a cold function — must not
+  // silently demote the read to the deterministic path,
+  // which is what hid the Nov 11 CAMC failure (the AI read
+  // never landed and the read-back said nothing about it).
+  let data=null;
+  for(let attempt=0;attempt<2;attempt++){
+    try{data=await liveSyncPost('extract-contract',{action:'extract-contract',mode:'rules',ruleText:text,ruleCodes:uniList.map(c=>({code:c.code,ctype:c.ctype,hours:c.hours})),ruleCard:card,facilityName:ctx.facName||(fac?fac.name:'')})}catch(aiCallErr){data=null}
+    if(data&&data.read)break;
+    data=null;
+  }
   if(!data||!data.read)return null;
   const read=data.read;
+  // The caller tracks whether the AI reader actually answered
+  // (Nov 11, 2026, v135): a read that arrives but contributes
+  // nothing usable — or never arrives — must surface as a
+  // visible "basic read" in the read-back, never as a silent
+  // demotion to the deterministic path.
+  if(status)status.responded=true;
   const textNorm=describeQuoteNorm(text);
   const rejected=[];
   const rates={};
@@ -5172,13 +5372,58 @@ async function describeReadWithAI(text,ctx,local){
     return ['day shift','day shifts',gn(ct),gn(ct).replace(' day',' shift')].includes(gn(name));
   };
   const defs={};
-  for(const e of (Array.isArray(read.codes)?read.codes:[])){
-    if(!e||!String(e.code||'').trim())continue;
+  // A glued entry name ("5* and 5**" — the model mirroring
+  // the user's own glue) becomes one entry per code, same
+  // reading (Nov 11, 2026, v135): keyed whole, it could
+  // never match either code's identity and both codes fell
+  // out of the read.
+  const codeEntries=[];
+  for(const e0 of (Array.isArray(read.codes)?read.codes:[])){
+    if(!e0||!String(e0.code||'').trim())continue;
+    const parts=describeSubjectParts(e0.code);
+    if(parts.length===1)codeEntries.push(e0);
+    else for(const p of parts)codeEntries.push({...e0,code:p});
+  }
+  for(const e of codeEntries){
     const key=resolveKey(e.code);if(!key)continue;
-    const ct=canonicalTypeOf(e.label||'')||e.type||canonicalTypeOf(e.code)||'';
-    const label=String(e.label||'').trim()||ct||key;
+    let ct=canonicalTypeOf(e.label||'')||e.type||canonicalTypeOf(e.code)||'';
     let hours=e.hours!=null&&rateOrNull(e.hours)!=null?String(rateOrNull(e.hours)):'';
     if(!hours){const hm=String(ct||'').match(/(\d+)-hour/);if(hm)hours=hm[1]}
+    // Traceability covers the LENGTH claim too (Nov 11,
+    // 2026, v135): the money fields and the no-pay denial
+    // were quote-checked, but a day entry's type/hours were
+    // taken at face value — a reading whose quote comes
+    // from other words entirely (a stale or mismatched
+    // response) landed as a definition the user never
+    // stated. A day-shift length now stands only when the
+    // entry's own quote is verbatim in the text AND carries
+    // the stated figure; otherwise the claim is rejected
+    // and NAMED, and the entry may still contribute any
+    // money that does trace. Call entries are exempt: their
+    // kind is their NAME ("1st call"), which the universe
+    // resolution above already vouches for.
+    let lenRejected=false;
+    if(ct&&!/call/i.test(ct)&&rateOrNull(hours)!=null){
+      const qn=describeQuoteNorm(e.quote||'');
+      const fig=String(rateOrNull(hours)).replace('.','\\.');
+      if(!qn||!textNorm.includes(qn)||!new RegExp('(^|[^0-9])'+fig+'([^0-9]|$)').test(qn)){
+        hours='';ct='';lenRejected=true;rejected.push('a length reading for \u201C'+key+'\u201D');
+      }
+    }
+    // A stated LENGTH names the kind (Nov 11, 2026, v135):
+    // when neither the label nor the model's type classified
+    // the entry, the length itself does, through the app's
+    // own number map (8 -> "8-hour day", 10 -> "10-hour
+    // shift", 12 -> "12-hour shift"). Live, the model read
+    // "10s is 10 hour shift" with type null and the unhyphen-
+    // ated label "10 hour shift" — the entry survived only by
+    // the label regex's luck. A definition carrying a length
+    // is COMPLETE at an hourly facility (length x hourly is
+    // the pricing model), so no entry with a length may be
+    // dropped for lacking a $ figure of its own (keep rule,
+    // below).
+    if(!ct&&rateOrNull(hours)!=null)ct=canonicalTypeOf(rateOrNull(hours)+'-hour shift');
+    const label=String(e.label||'').trim()||ct||key;
     const def={label,hours,canonicalType:ct,paidHours:null};
     if(e.unpaid){
       // The denial itself must be traceable too: the entry's own
@@ -5214,8 +5459,8 @@ async function describeReadWithAI(text,ctx,local){
       const tgt=dh!=null?byLen.find(x=>x.len===dh):null;
       if(tgt){def.paidHours=tgt.paid;def.paidHoursOwn=true}
     }
-    if(def.weekdayPay!=null||def.weekendPay!=null||def.paidHours!=null||ct)defs[key]=def;
-    else if(label&&label!==key)defs[key]=def;
+    if(def.weekdayPay!=null||def.weekendPay!=null||def.paidHours!=null||ct||rateOrNull(def.hours)!=null)defs[key]=def;
+    else if(label&&label!==key&&!lenRejected)defs[key]=def;
   }
   let weekendDays=null,weekendStated=false;
   if(read.weekend&&read.weekend.stated&&Array.isArray(read.weekend.days)&&read.weekend.days.length){
@@ -5285,12 +5530,22 @@ async function describeReadWithAI(text,ctx,local){
     if(d.canonicalType==='Second call'){defAlias.add('call 2');defAlias.add('2nd call');defAlias.add('second call')}
     if(d.label)defAlias.add(codeIdentityKey(d.label));
   }
+  // Plural-fold twin (Nov 11, 2026, v135): the calendar
+  // classifier adopted plural-tolerant identity in v134
+  // ("8s" IS the "8" code); coverage uses the same fold, so
+  // a candidate spelled "10s" is covered by a definition
+  // saved as "10" (and the reverse) — asking about a code
+  // the card already prices is the confusion this budget
+  // exists to prevent. Coverage only: pricing and saving
+  // keep their exact keys.
+  const foldKey=s=>codeIdentityKey(s).replace(/(\d+)(?:hr|hrs)$/,'$1').replace(/(\d+)s$/,'$1');
+  for(const k of Object.keys(mergedDefs))defAlias.add(foldKey(k));
   const subjectCovered=name=>{
     const ik=codeIdentityKey(name);
     if(!ik)return true;
-    if(defAlias.has(ik))return true;
+    if(defAlias.has(ik)||defAlias.has(foldKey(name)))return true;
     const stripped=codeIdentityKey(String(name||'').replace(/\b(?:weekdays?|weekends?|weeknights?)\b/gi,' '));
-    if(stripped&&defAlias.has(stripped))return true;
+    if(stripped&&(defAlias.has(stripped)||defAlias.has(foldKey(stripped))))return true;
     if(/\bhours?\s+paid\s+for\b/i.test(name)){
       const lm=String(name).match(/(\d+(?:\.\d+)?)\s*hours?\s+paid\s+for\s+(\d+(?:\.\d+)?)/i);
       if(lm)return Object.values(mergedDefs).some(d=>rateOrNull(d.paidHours)===Number(lm[1])&&rateOrNull(d.hours)===Number(lm[2]));
@@ -5298,7 +5553,15 @@ async function describeReadWithAI(text,ctx,local){
     }
     return false;
   };
-  const candSet=new Set([...(local.unanswered||[]),...aiUnknown]);
+  // Glued candidates split before coverage (Nov 11, 2026,
+  // v135): the local net names "5* and 5**" as ONE subject;
+  // checked whole it matched no definition and survived as
+  // a false unknown even when both codes had resolved and
+  // priced — live in the Nov 11 CAMC read-back once the AI
+  // read landed. Split, each part is covered on its own,
+  // and anything genuinely unresolved is named per code.
+  const candSet=new Set();
+  for(const n of [...(local.unanswered||[]),...aiUnknown])for(const p of describeSubjectParts(n))candSet.add(p);
   const unanswered=[...candSet].filter(n=>!subjectCovered(n));
   let question=unanswered.length?('One thing I couldn\'t tell from that: what '+(unanswered.length===1?'is':'are')+' '+unanswered.map(c=>'“'+c+'”').join(', ')+' — and how does it pay? Add a sentence about '+(unanswered.length===1?'it':'them')+' and make the rules again, or use these rules as-is.'):'';
   const aiQ=read.clarifying_question?String(read.clarifying_question).trim():'';
@@ -5319,11 +5582,19 @@ async function submitDescribe(key){
     // failure — endpoint down, no key, an unusable read — falls
     // through to the standing deterministic path below, exactly
     // as it behaved before this round.
-    let aiPrimary=null;
+    let aiPrimary=null,aiStatus=null;
     if(typeof SUPABASE_CONFIGURED!=='undefined'&&SUPABASE_CONFIGURED&&typeof cloudSession!=='undefined'&&cloudSession){
-      try{aiPrimary=await describeReadWithAI(text,ctx,parsed)}catch(aiErr){aiPrimary=null}
+      aiStatus={responded:false};
+      try{aiPrimary=await describeReadWithAI(text,ctx,parsed,aiStatus)}catch(aiErr){aiPrimary=null}
     }
     if(aiPrimary)parsed=aiPrimary;
+    // No silent degradation (Nov 11, 2026, v135): the AI
+    // reader was expected (signed in) but produced no usable
+    // read — the deterministic result below is the BASIC
+    // read, and the read-back says so on its face. The Nov
+    // 11 CAMC failure shipped exactly this state with no
+    // marker, indistinguishable from a full AI read.
+    else if(aiStatus)parsed.aiBasic=true;
     // FALLBACK ONLY (pre-v133 path, kept verbatim): the old
     // single-rule AI read merges over the deterministic parse.
     // Runs only when the AI-primary read above produced nothing
@@ -5485,7 +5756,7 @@ function describeRulesHTML(key,opts){
   const derivedNote=derivedDefs.length?`<p class="hint">Learned from the code itself: ${derivedDefs.map(([c,d])=>'“'+escapeHTML(c)+'” = '+escapeHTML(d.label||((d.hours||'')+'-hour shift'))).join(' · ')}. Edit the words above any time — your own definition replaces it.</p>`:'';
   const confirmLabel=isFacPrev?'Use these rules':(key.indexOf('imp:')===0?'Use these rules & approve import':'Use these rules — save & reprice');
   const confirmNote=isFacPrev?'These rules join the preview — “Save facilities” below saves them with the facility.':(key.indexOf('imp:')===0?'Approving saves these rules and imports the shifts above in one go.':'Saving updates the rate card and reprices the shifts these rules cover.');
-  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
+  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.aiBasic?`<p class="hint">The AI reader didn't answer that time, so this is the basic read — tap “Make my rules” again to retry it, or use these rules as-is.</p>`:''}${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
 }
 // A facility whose priced shifts rest on rules the user never
 // confirmed in the read-back sense: a day code defined by the old
@@ -8593,6 +8864,7 @@ function contractValidISO(y,m,d){if(!y||m<1||m>12||d<1||d>31)return null;const d
 function contractParseSingle(raw,defaultYear){const s=String(raw||'').trim().replace(/(st|nd|rd|th)\b/gi,'');let m;
  if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/)))return {iso:contractValidISO(+m[1],+m[2],+m[3]),ambiguous:false};
  if((m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)))return {iso:contractValidISO(+m[3],+m[1],+m[2]),ambiguous:false};
+ if((m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/)))return {iso:contractValidISO(2000+(+m[3]),+m[1],+m[2]),ambiguous:false};
  if((m=s.match(/^(\d{1,2})\/(\d{1,2})$/)))return {iso:contractValidISO(defaultYear||new Date().getFullYear(),+m[1],+m[2]),ambiguous:true};
  if((m=s.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:\s*,\s*(\d{4}))?$/))&&CMONTHS[m[1].toLowerCase()])return {iso:contractValidISO(+(m[3]||defaultYear||new Date().getFullYear()),CMONTHS[m[1].toLowerCase()],+m[2]),ambiguous:!m[3]};
  if((m=s.match(/^(\d{1,2})\s+([A-Za-z]+)\.?(?:\s+(\d{4}))?$/))&&CMONTHS[m[2].toLowerCase()])return {iso:contractValidISO(+(m[3]||defaultYear||new Date().getFullYear()),CMONTHS[m[2].toLowerCase()],+m[1]),ambiguous:!m[3]};
@@ -8650,13 +8922,20 @@ function contractFacilityForLine(line,globalFacility){const l=line;
  if(globalFacility)return {name:globalFacility,fromHeader:true};
  return {name:'',fromSaved:false}}
 function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+: [^\n]* ---/g,' ').replace(/\$[^\n]{0,14}/g,seg=>seg.replace(/O/g,'0').replace(/[lI](?=[0-9])/g,'1'));const rates={};let m;
- const textNoWeekend=String(text).split(/\r?\n/).filter(l=>!/weekend|saturday|sunday/i.test(l)).join('\n');
+ // The no-weekend view filters at SENTENCE level, not
+ // just line level (Nov 11, 2026, v135 sweep): a contract
+ // written as prose paragraphs puts weekday and weekend
+ // rates in sibling sentences on ONE line, and dropping
+ // the whole line for mentioning "weekend" took every
+ // weekday flat with it — the surviving weekend values
+ // then filed themselves as the weekday rates.
+ const textNoWeekend=String(text).split(/\r?\n|(?<=[.;])\s+/).filter(l=>!/weekend|saturday|sunday/i.test(l)).join('\n');
  const flatBase=text;
  if((m=text.match(/\$([\d,]+(?:\.\d{2})?)\s*(?:\/\s*hr|per hour|an hour|\/hour|hourly)/i)))rates.hourly=Number(m[1].replace(/,/g,''));
  const flat=(label,rx)=>{const hit=textNoWeekend.match(rx);if(hit)rates[label]=Number(hit[1].replace(/,/g,''))};
  const flatWeekend=(label,rx)=>{const hit=text.match(rx);if(hit)rates[label]=Number(hit[1].replace(/,/g,''))};
- flat('rate24',/\$([\d,]+(?:\.\d{2})?)(?:(?!hourly)[^$\n.;]){0,60}?(?:24\s*-?\s*hour|24h|1st call|first call)/i);
- flat('rate24',/(?:24\s*-?\s*hour|24h|1st call|first call)(?:(?!hourly)[^$\n.;]){0,60}?\$([\d,]+(?:\.\d{2})?)/i);
+ flat('rate24',/\$([\d,]+(?:\.\d{2})?)(?:(?!(?:hourly|per\s+hour|\/\s*hr|an\s+hour))[^$\n.;]){0,60}?(?:24\s*-?\s*hour|24h|1st call|first call)/i);
+ flat('rate24',/(?:24\s*-?\s*hour|24h|1st call|first call)(?:(?!(?:hourly|per\s+hour|\/\s*hr|an\s+hour))[^$\n.;]){0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  flat('rateSecond',/\$([\d,]+(?:\.\d{2})?)[^$\n.;]{0,60}?(?:(?:2nd|21d|20d) call|second call)/i);
  flat('rateSecond',/(?:(?:2nd|21d|20d) call|second call)[^$\n.;]{0,60}?\$([\d,]+(?:\.\d{2})?)/i);
  // A flat DAY rate must be stated per day: the amount's own clause
@@ -8843,6 +9122,12 @@ function contractExtractRates(text){text=String(text||'').replace(/--- Page \d+:
    for(const o of occ){const v=claimNearest(o.index,spec.after,spec.before);if(v!=null){rates[spec.key]=v;break}}
   }
  }catch(e){/* table pairing is a fallback only — never break parsing */}
+ // The label-first hourly form, LAST (Nov 11, 2026, v135):
+ // "The hourly is $250", "hourly rate: $250" — the amount
+ // follows its label instead of preceding it. It runs after
+ // every other pass so it only ever fills a gap the standing
+ // patterns left, never reorders what they found.
+ if(rates.hourly==null&&(m=text.match(/(?:hourly(?:\s+rate)?|rate\s+per\s+hour)\b[^$\n]{0,24}?\$([\d,]+(?:\.\d{2})?)/i)))rates.hourly=Number(m[1].replace(/,/g,''));
  return rates}
 // --- Rates a photo did NOT read vs rates the contract did NOT state ---
 // On Caleb's actual photos (Nov 5, 2026) the Regular Daily Rate ($2,000),

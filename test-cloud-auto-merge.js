@@ -177,5 +177,5 @@ run(`globalThis.__mergeDone = cloudAfterSignIn()`);
   const acct2 = run(`accountPage()`);
   t('after sign-in the Account tab shows the slim signed-in panel',
     acct2.includes('Signed in as crna@example.com') && !acct2.includes('choose how to sync'));
-  t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v134'));
+  t('service worker cache bumped to v65', swSrc.includes('crna-hub-shell-v135'));
 })();

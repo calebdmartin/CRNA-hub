@@ -90,9 +90,13 @@ t('(a) sync result names CAMC as a suggestion',
 t('(a) Dashboard card asks the question with count and range',
   sandbox.__dashCard.includes('We noticed shifts at <strong>CAMC</strong>') &&
   sandbox.__dashCard.includes('4 shift(s)'));
+// v121 (Caleb, Nov 11, 2026): the card title is now the hospital's
+// name with a waiting count ("CAMC — 4 shift(s) waiting"), not the
+// old full-sentence question — per-hospital cards, never lumped.
 t('(a) Facilities tab shows the suggestion too (not only a transient alert)',
-  sandbox.__facPagePast.includes('We noticed shifts at CAMC in your calendar. Add it as a facility?') &&
-  sandbox.__facPagePast.includes('4 shift(s)'));
+  sandbox.__facPagePast.includes('id="facility-suggestions-panel"') &&
+  sandbox.__facPagePast.includes('CAMC') &&
+  sandbox.__facPagePast.includes('4 shift(s) waiting'));
 
 // --- (c) Dismissed suggestion stays findable on the Facilities tab, re-askable.
 run(`
@@ -109,7 +113,8 @@ t('(c) dismissed suggestion stays on the Facilities tab with Ask again',
   sandbox.__facPageDismissed.includes('CAMC') &&
   sandbox.__facPageDismissed.includes('data-action="facility-suggestion-undismiss"'));
 t('(c) Ask again restores the suggestion on the Facilities tab',
-  sandbox.__facPageUndismissed.includes('We noticed shifts at CAMC in your calendar. Add it as a facility?'));
+  sandbox.__facPageUndismissed.includes('id="facility-suggestions-panel"') &&
+  sandbox.__facPageUndismissed.includes('CAMC'));
 
 // --- (b) Add CAMC (screenshot rates, test-only) — next sync imports past shifts confirmed + priced.
 run(`

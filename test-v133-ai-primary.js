@@ -313,8 +313,16 @@ const stubAI = (read) => `
   };
   await downRun(WORDS, '');
   const pf2 = await downRun(SHOT, 'facilityContractPreview.facilities[0].codes = [];');
-  t('F2 the screenshot text under fallback keeps the v132 result verbatim (incl. the known miss)',
-    !!pf2 && pf2.unanswered.length === 1 && pf2.unanswered[0] === '1st call weekday', J(pf2 && pf2.unanswered));
+  // v135 supersedes the v132 verbatim pin: the deterministic
+  // reader was deliberately strengthened this round (sentence-
+  // level weekend filtering in contract extraction, copula
+  // length binding), so the fallback now LANDS the 1st-call
+  // rates the v132 reader missed and asks about nothing.
+  // The F assertion above still guarantees the fallback IS
+  // the deterministic parse, exactly.
+  t('F2 the screenshot text under fallback now lands weekday 1st call (v135 reader)',
+    !!pf2 && pf2.unanswered.length === 0 && pf2.rates.rate24 === 4800,
+    J(pf2 && { u: pf2.unanswered, r: pf2.rates }));
 
   // ============ (g) rules mode missing server-side -> old merge still serves ============
   run(RESET + `facilityContractPreview = parseFacilityContract(${J(ADDENDUM)}, 'addendum.pdf');` + HOLZER_ENTRY + `

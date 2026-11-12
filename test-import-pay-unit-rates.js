@@ -149,9 +149,16 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
        facilityContractPreview = { fileName:'camc.pdf', isPhoto:false, aiRead:true, contract:{id:'ct-n', facility:'CAMC', rates:{hourlyRate:'250', rate8:'2000'}}, facilities:[{include:true, name:'CAMC', aliases:'', address:'', effectiveStart:'', effectiveEnd:'', rates:{hourlyRate:'250', rate8:'2000'}, found:['Hourly rate $250.00','8-hour shift rate $2,000.00'], missing:['10-hour shift rate','12-hour shift rate','24-hour call rate','1st call hourly rate','Second call rate','Overnight call bonus','Weekend 24-hour call rate','Weekend second call rate','Paid hours for an 8-hour shift'], unreadable:[]}] };
        facilityContractPendingImages = []; facilityContractConfirmCreate = false;`);
   const html8 = run(`facilityContractPreviewHTML()`);
-  t('contract preview clarifies the extracted lines', html8.includes('f_facPrev_0_hourlyRate') && html8.includes('f_facPrev_0_rate8') && html8.includes('facContractKind'));
-  t('contract lines the read never mentioned never appear', !html8.includes('f_facPrev_0_rate10') && !html8.includes('f_facPrev_0_rate12') && !html8.includes('f_facPrev_0_rate24') && !html8.includes('f_facPrev_0_rateSecond') && !html8.includes('f_facPrev_0_callBonus') && !html8.includes('f_facPrev_0_weekendRate24') && !html8.includes('f_facPrev_0_weekendRateSecond') && !html8.includes('f_facPrev_0_paidHours8'));
-  t('each contract line keeps its own basis visible (hourly stays per-hour, flat stays per-shift)', html8.includes('per hour') && html8.includes('per shift — flat'));
+  // v123 expectation change (Caleb, Nov 11, 2026 — disclosed, not
+  // silent): the per-line clarification grids ("What is this
+  // rate?" selector + $ input per extracted line) are REPLACED by
+  // the describe-in-your-own-words box, prefilled with the
+  // extracted rates as plain sentences. Correcting a rate is now
+  // editing the prose and re-making the rules; the full flow is
+  // pinned in test-v123-import-preview-words.js.
+  t('contract preview clarifies through the words box, not field grids', html8.includes('Pay rules at CAMC — in your words') && html8.includes('Make my rules') && !html8.includes('facContractKind') && !html8.includes('What is this rate?') && !html8.includes('f_facPrev_0_hourlyRate') && !html8.includes('f_facPrev_0_rate8'));
+  t('words box is prefilled with the extracted rates as sentences', html8.includes('Day shifts pay $250/hr') && html8.includes('An 8-hour shift pays $2,000 per shift.'));
+  t('contract lines the read never mentioned never appear in the prose', !/10-hour shift pays/.test(html8) && !/12-hour shift pays/.test(html8) && !/Call 1 is/.test(html8) && !/Call 2 is/.test(html8) && !html8.includes('Overnight call bonus is'));
   run(`facilityContractPreview.facilities[0].rates.rate8 = '2100';`);
   await run(`approveFacilityContract()`);
   t('confirm/correct saves only the extracted rates onto the facility', run(`db.facilities.length`) === 1 && run(`db.facilities[0].rate8`) === '2100' && run(`db.facilities[0].hourlyRate`) === '250' && run(`db.facilities[0].rate24 == null || db.facilities[0].rate24 === ''`));

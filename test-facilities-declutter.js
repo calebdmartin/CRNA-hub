@@ -4,7 +4,8 @@
 // Covers:
 //   * Facilities: pay stub panel and manual facility panel collapsed by
 //     default (tappable <details> header), contract panel open and
-//     primary; no read-method buttons anywhere; AI rule chat intact.
+//     primary; no read-method buttons anywhere. (v123: the standalone AI rule chat is retired — the contract
+//     preview's own words box is the only clarification path.)
 //   * One read action: contract + pay stub photos go to AI automatically;
 //     with AI unavailable the on-device read takes over automatically and
 //     says so (honest status line), producing the same preview flow.
@@ -100,10 +101,12 @@ const t = (name, cond) => {
     !appSrc.includes("action==='facility-contract-ocr'") &&
     !appSrc.includes("action==='paystub-read-text'") &&
     !appSrc.includes('async function importPaystubText'));
-  t('AI rule chat still on the page, inside the contract panel',
-    page.includes('Describe it in your own words') && page.includes('ruleChatForm') &&
-    page.indexOf('Describe it in your own words') > page.indexOf('facility-contract-panel') &&
-    page.indexOf('Describe it in your own words') < page.indexOf('paystub-panel'));
+  // v123 expectation change (Caleb, Nov 11, 2026 — disclosed, not
+  // silent): the standalone AI rule chat under the contract panel
+  // is retired; the words box now lives inside the contract
+  // preview itself (see test-v123-import-preview-words.js).
+  t('standalone AI rule chat is retired from the page',
+    !page.includes('ruleChatForm') && !page.includes('Make my rule with AI'));
   t('facilities list and manual form fields survive inside the collapse',
     page.includes('My facilities') && page.includes('Holzer') &&
     page.includes('id="f_name"') && page.includes('Hourly rate ($)'));

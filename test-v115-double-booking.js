@@ -77,7 +77,7 @@ let fails = 0;
 const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? ' — ' + extra : '')); if (!cond) { fails++; process.exitCode = 1; } };
 const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-t('service worker cache is v116', swSrc.includes('crna-hub-shell-v134'));
+t('service worker cache is v116', swSrc.includes('crna-hub-shell-v135'));
 
 const G = 'HOLZ - G Main (8)', C2 = 'HOLZ - Call 2', C1 = 'HOLZ - Call 1';
 const HOLZER_FAC = `{id:'fh',name:'Holzer',aliases:'',address:'',hourlyRate:'250',paidHours8:'8.5',rate8:'',rate10:'2625',rate12:'',rate24:'4800',weekendRate24:'4200',rateSecond:'3000',weekendRateSecond:'2000',hourlyCall1st:'',callBonus:'',distance:'',notes:'',codeMap:{}}`;

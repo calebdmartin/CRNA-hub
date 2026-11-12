@@ -66,7 +66,6 @@ const RESET = `
   editId = null; facilitySuggestionPrefill = null;
   facilityContractPreview = null; facilityContractError = ''; facilityContractOcrStatus = '';
   facilityContractPendingImages = []; facilityContractOcrPages = [];
-  ruleChatPreview = null; ruleChatError = ''; ruleChatMessages = [];
   paystubPreview = null; paystubError = ''; paystubStatus = '';
 `;
 
@@ -83,11 +82,9 @@ const RESET = `
     settled.indexOf('id="my-facilities-panel"') < settled.indexOf('id="facility-contract-panel"') &&
     settled.indexOf('id="facility-contract-panel"') < settled.indexOf('id="paystub-panel"') &&
     settled.indexOf('id="paystub-panel"') < settled.indexOf('id="facility-manual-panel"'));
-  t('contract controls live inside the panel (form, read button, rule chat)',
+  t('contract controls live inside the panel (form, read button)',
     settled.indexOf('id="facilityContractForm"') > settled.indexOf('id="facility-contract-panel"') &&
-    settled.indexOf('Read my contract') > settled.indexOf('id="facility-contract-panel"') &&
-    settled.indexOf('Describe it in your own words') > settled.indexOf('id="facility-contract-panel"') &&
-    settled.indexOf('Describe it in your own words') < settled.indexOf('id="paystub-panel"'));
+    settled.indexOf('Read my contract') > settled.indexOf('id="facility-contract-panel"'));
 
   // ============ No facilities yet: expanded (actionable path) =========
   run(RESET + `globalThis.__page = facilitiesPage();`);

@@ -165,7 +165,14 @@ const t = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name
   run(`healPaystubRecordShapes(); db.payStubs = db.payStubs.filter(s=>s.source!=='import'); persist();`);
   const healHTML = run(`dashboardRulesHealHTML()`);
   t('words: the Dashboard surfaces the describe prompt for Holzer on plain open', healHTML.includes('Quick check — pay rules at Holzer') && healHTML.includes('describeText') && healHTML.includes('Make my rules'), healHTML.slice(0, 120));
-  t('words: the box is prefilled with current beliefs (incl. the wrong 8 paid hours, his to correct)', healHTML.includes('paid for 8 hours') && healHTML.includes('Weekend is Saturday and Sunday'), healHTML.slice(healHTML.indexOf('Pay rules at'), healHTML.indexOf('Pay rules at') + 300));
+  // v122 expectation change (explained, not silent): this
+  // fixture's facility carries weekend-differentiated pricing
+  // but NO stated weekend definition — exactly the heal-prompt
+  // scenario. The old prefill asserted "Weekend is Saturday
+  // and Sunday." as if it were his rule; v122 labels it a
+  // default instead (Caleb, Nov 11, 2026: the read-back/prefill
+  // may only state what the user stated).
+  t('words: the box is prefilled with current beliefs (incl. the wrong 8 paid hours, his to correct)', healHTML.includes('paid for 8 hours') && healHTML.includes('didn&#39;t say which days count as the weekend — Saturday and Sunday are being used unless you say otherwise.'), healHTML.slice(healHTML.indexOf('Pay rules at'), healHTML.indexOf('Pay rules at') + 300));
   t('words: NO field grids anywhere in the prompt', !healHTML.includes('clarifyCode') && !healHTML.includes('clarifyHourly') && !healHTML.includes('impCodePaidHours'));
   const WORDS = "Day shifts pay $250/hr and I'm paid for 8.5 hours. Call 2 is $3,000 on weekdays, $2,000 on weekends. Call 1 is $4,800 weekdays, $4,200 weekends. Weekend is Saturday and Sunday.";
   run(`window.__codes = facilityRulesUnverified(db.facilities[0]).codes; window.__parsed = describeParseLocal(${JSON.stringify(WORDS)}, db.facilities[0], window.__codes);`);

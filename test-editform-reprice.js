@@ -203,7 +203,7 @@ t('save pass: per-code amounts price the blanks (Fri $1,500 / Sat $1,800)', rep.
 const src = fs.readFileSync(R + 'app.js', 'utf8');
 t('wiring: the cloud merge runs the same heal after merging', /cloudAutoMerge\(\)[^]*?healUnpricedShiftPays\(\)/.test(src.slice(src.indexOf('async function cloudAutoMerge'), src.indexOf('async function cloudAutoMerge') + 800)));
 t('wiring: the paycheck live price and the repair pass share resolveShiftPrice', src.includes('function resolveShiftPrice') && (src.match(/resolveShiftPrice\(/g) || []).length >= 3);
-t('sw: cache bumped to v109', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v134'));
+t('sw: cache bumped to v109', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v135'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);
