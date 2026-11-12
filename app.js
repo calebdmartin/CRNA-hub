@@ -216,6 +216,7 @@ function facilityRescanResultHTML(){
 try{const bootDedupe=dedupeShiftsInPlace();if(bootDedupe.collapsed)persist()}catch(e){}
 try{const bootPairs=healDayCallShiftPairs();if(bootPairs.merged)persist()}catch(e){}
 try{const bootFold=healVariantFacilityRecords();if(bootFold)persist()}catch(e){}
+try{const bootWs=healFacilityWhitespace();if(bootWs)persist()}catch(e){}
 try{const bootStubs=healPaystubRecordShapes();if(bootStubs)persist()}catch(e){}
 try{const bootPrices=healUnpricedShiftPays();if(bootPrices)persist()}catch(e){}
 function localDate(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
@@ -505,6 +506,22 @@ function healVariantFacilityRecords(onFold){
   }
   return folded;
 }
+// Facility-string whitespace heal (Nov 12, 2026, v144): a shift
+// whose stored facility text carries stray leading/trailing space
+// ("Holzer ") IS the Holzer shift — for chips, totals, and grouping
+// alike. Matching already ignored the space (facilityNameKey
+// normalizes), but surfaces that group or label by the raw string
+// split it into a phantom second hospital. Trim the stored strings
+// — shifts' facility text and facility records' names — so the
+// bytes agree with the match. Interior spacing is untouched. Runs
+// at boot and inside healShiftsAfterChange, and both save paths
+// trim on the way in, so the stray space does not come back.
+function healFacilityWhitespace(){
+  let n=0;
+  for(const x of (db.shifts||[])){if(!x)continue;const f=String(x.facility||''),t=f.trim();if(f!==t){x.facility=t;n++}}
+  for(const f of (db.facilities||[])){if(!f)continue;const nm=String(f.name||''),t=nm.trim();if(nm!==t){f.name=t;n++}}
+  return n;
+}
 // Post-materialization heal (Nov 10, 2026, v116): the dedupe pass
 // used to run only at script load and inside the cloud merge, so a
 // duplicate pair landing MID-SESSION (a calendar sync applying
@@ -518,6 +535,7 @@ function healShiftsAfterChange(onAbsorb,onFold){
   try{const d=dedupeShiftsInPlace(onAbsorb);if(d&&d.collapsed)changed=true}catch(e){}
   try{const p=healDayCallShiftPairs(onAbsorb);if(p&&p.merged)changed=true}catch(e){}
   try{if(healVariantFacilityRecords(onFold))changed=true}catch(e){}
+  try{if(healFacilityWhitespace())changed=true}catch(e){}
   try{if(linkStoredSuggestions())changed=true}catch(e){}
   if(changed)persist();
   return changed;
@@ -2751,6 +2769,7 @@ function parsePortalCheckText(text,source,opts){
 }
 function startPortalCheck(source){
   const meta=PORTAL_CHECK_SOURCES[source]; if(!meta) return;
+  portalDepartureClear(source);
   // Straight to the check step (Nov 6, 2026): the button promises a
   // check, so it opens the upload/paste panel for THIS portal — no
   // canned instruction essay, no restart of step 1. One short chat
@@ -3275,11 +3294,22 @@ function shiftChipLabel(x){
   // himself is named the way he thinks of it. (Live, the borrow
   // also failed his real rows — the first matching definition in
   // map order was the duration-named "8s", so his Apr 5/6, 2027
-  // chips still read as bare durations.) Hand-added = every
-  // recorded source is his own entry; a merged row that picked up
-  // any feed source is not hand-added and keeps the paths below.
-  const srcs=shiftSourcesList(x);
-  if(srcs.length&&srcs.every(v=>v==='user-entered')){
+  // chips still read as bare durations.)
+  // v144 correction (Nov 12, 2026 — Caleb's screenshot: Apr 5 read
+  // "Holzer 8hr" but Apr 6–9 read bare "8hr"): the v138 test asked
+  // that EVERY recorded source be his own entry, and merges poison
+  // it from either field — shiftSourcesList unions `sources` and
+  // the scalar `source`, so a hand-added row that later merged with
+  // a calendar row (Apr 6: sources gained 'calendar-apple'; Apr 9:
+  // the scalar source did) fell out of this branch into the borrow
+  // below and came back wearing a duration code. What decides the
+  // chip is the row's PRIMARY origin: it was born as his own entry
+  // when `source` is 'user-entered' OR the first recorded source
+  // is. Later merges never rename what he typed in. The facility
+  // text is trimmed for display (and healed in storage), so a stray
+  // trailing space in the stored string can't cost the name either.
+  const primaryUser=String(x.source||'').trim()==='user-entered'||(Array.isArray(x.sources)&&String(x.sources[0]||'').trim()==='user-entered');
+  if(primaryUser){
     const nm=String(x.facility||(fac?fac.name:'')||'').trim();
     const st=shortTypeForChip(String(x.type||'').trim());
     if(nm&&st)return nm+' '+st;
@@ -7021,6 +7051,7 @@ function credentialsPage(){
     manualList=`<p class="muted">Generic credentials from earlier versions are preserved here, unchanged.</p>`+list('credentials',db.credentials.slice().sort((a,b)=>a.expiry.localeCompare(b.expiry)),x=>`<strong>${escapeHTML(x.name)}</strong> · ${fmt(x.expiry)} <span class="${x.expiry<localDate(new Date())?'expired':x.expiry<=localDate(new Date(Date.now()+30*864e5))?'warning':'success'}">${x.expiry<localDate(new Date())?'EXPIRED':x.expiry<=localDate(new Date(Date.now()+30*864e5))?'Due within 30 days':'Current'}</span><div class="muted">${escapeHTML(x.issuer||'')} ${escapeHTML(x.note||'')}</div>`);
   }
   return `${onboardDirectionHTML(4)}<p class="hint">Tap Connect and sign in on the portal’s own page — we never see your password.${profileName()?` Portal records are matched to the name from step 1 — “${escapeHTML(profileName())}”.`:``} Records a check brings back are labelled with their source; the rest is user-entered, not verified.</p>
+  ${portalReturnGreetingHTML()}
   ${monitorDuePromptsHTML()}
   ${connCard('NBCRNA','National Board of Certification and Recertification for Nurse Anesthetists — your certification record.','certification status, certification period, renewal / recertification deadline, MAC Ed / MAC Dev progress, and CPC check-in status.',nbcrnaManual,'portal.nbcrna.com','https://portal.nbcrna.com/','nbcrna',[n.status,(n.periodEnd||n.renewalDeadline)?('ends '+fmt(n.periodEnd||n.renewalDeadline)):''].filter(Boolean).join(' · '),!(n.status||n.number||n.periodEnd||n.renewalDeadline))}
   ${connCard('AANA','American Association of Nurse Anesthesiology — your membership and CE transcript. Kept separate from NBCRNA certification.','membership status, membership expiration, and CE transcript totals (Class A / Class B).',aanaManual,'aana.com/login','https://www.aana.com/login','aana',[a.status,a.expiration?('expires '+fmt(a.expiration)):''].filter(Boolean).join(' · '),!(a.status||a.number||a.expiration))}
@@ -9102,7 +9133,7 @@ if(typeof document!=='undefined'&&document&&typeof document.addEventListener==='
     qgendaStatusLoaded=false; qgendaStatusRefresh();
   });
 }
-function submitEntry(e){e.preventDefault();const kind=e.currentTarget.dataset.kind;if(kind==='documents'){submitDocument(e);return;}if(kind==='home-address'){submitHomeAddress(e);return;}if(kind==='portal-check'){submitPortalCheck(e);return;}if(kind==='portal-check-approve'){approvePortalCheck(e);return;}if(kind==='monitor-cadence'){const rec=Object.fromEntries(new FormData(e.currentTarget));const m=(db.portalMonitoring||[]).find(x=>x.key===rec.key);if(m){const v=parseInt(rec.cadenceDays,10);if(Number.isFinite(v)&&v>0)m.cadenceDays=v;persist();}render();return;}if(kind==='paycheck-edit'){submitPaycheckEdit(e);return;}const record=Object.fromEntries(new FormData(e.currentTarget));if(kind==='nbcrna'||kind==='aana'){db[kind]={...(db[kind]||{}),...record,source:'user_entered',updatedAt:new Date().toISOString()};persist();cloudSaveKind(kind);render();return;}if(kind==='licenses')record.source='user_entered';if(kind==='payStubs'){record.agency=String(record.agency||'').trim();record.facility=String(record.facility||'').trim();record.frequency=normalizePayFrequency(record.frequency);for(const d of ['periodStart','periodEnd','payDate'])record[d]=psValidISO(record[d]);for(const a of ['gross','net'])record[a]=rateOrNull(record[a])==null?'':String(rateOrNull(record[a]));if(!record.agency){alert('Enter the agency / employer name first.');return}if(!record.frequency||!record.payDate){alert('A pay schedule needs a pay frequency and a pay date — the calendar dates come from those.');return}if(!editId)record.source='manual';}if(kind==='vehicles'){record.name=String(record.name||'').trim();record.make=String(record.make||'').trim();record.model=String(record.model||'').trim();record.year=String(record.year||'').trim();delete record.plate;record.isDefault=record.isDefault==='on';if(!record.name){alert('Give the vehicle a name first \u2014 e.g. 2022 Silverado.');return}}if(kind==='shifts'&&!String(record.pay).trim()){const f=facilityByNameOrAlias(record.facility);const p=f?facilityPayFor(f,record.type,record.date):0;if(p>0){record.pay=String(Math.round(p*100)/100);record.incomplete=false}else{record.pay='';record.incomplete=true}}if(kind==='shifts'&&String(record.pay).trim()){record.incomplete=false;
+function submitEntry(e){e.preventDefault();const kind=e.currentTarget.dataset.kind;if(kind==='documents'){submitDocument(e);return;}if(kind==='home-address'){submitHomeAddress(e);return;}if(kind==='portal-check'){submitPortalCheck(e);return;}if(kind==='portal-check-approve'){approvePortalCheck(e);return;}if(kind==='monitor-cadence'){const rec=Object.fromEntries(new FormData(e.currentTarget));const m=(db.portalMonitoring||[]).find(x=>x.key===rec.key);if(m){const v=parseInt(rec.cadenceDays,10);if(Number.isFinite(v)&&v>0)m.cadenceDays=v;persist();}render();return;}if(kind==='paycheck-edit'){submitPaycheckEdit(e);return;}const record=Object.fromEntries(new FormData(e.currentTarget));if(kind==='facilities')record.name=String(record.name||'').trim();if(kind==='shifts')record.facility=String(record.facility||'').trim();if(kind==='nbcrna'||kind==='aana'){db[kind]={...(db[kind]||{}),...record,source:'user_entered',updatedAt:new Date().toISOString()};persist();cloudSaveKind(kind);render();return;}if(kind==='licenses')record.source='user_entered';if(kind==='payStubs'){record.agency=String(record.agency||'').trim();record.facility=String(record.facility||'').trim();record.frequency=normalizePayFrequency(record.frequency);for(const d of ['periodStart','periodEnd','payDate'])record[d]=psValidISO(record[d]);for(const a of ['gross','net'])record[a]=rateOrNull(record[a])==null?'':String(rateOrNull(record[a]));if(!record.agency){alert('Enter the agency / employer name first.');return}if(!record.frequency||!record.payDate){alert('A pay schedule needs a pay frequency and a pay date — the calendar dates come from those.');return}if(!editId)record.source='manual';}if(kind==='vehicles'){record.name=String(record.name||'').trim();record.make=String(record.make||'').trim();record.model=String(record.model||'').trim();record.year=String(record.year||'').trim();delete record.plate;record.isDefault=record.isDefault==='on';if(!record.name){alert('Give the vehicle a name first \u2014 e.g. 2022 Silverado.');return}}if(kind==='shifts'&&!String(record.pay).trim()){const f=facilityByNameOrAlias(record.facility);const p=f?facilityPayFor(f,record.type,record.date):0;if(p>0){record.pay=String(Math.round(p*100)/100);record.incomplete=false}else{record.pay='';record.incomplete=true}}if(kind==='shifts'&&String(record.pay).trim()){record.incomplete=false;
 // A pay typed by hand in this form is the user's own number, not a
 // formula result — clear the derived markers so a later rate edit
 // never reprices over it (derived pays carry payUnit hourly /
@@ -9166,6 +9197,8 @@ if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===ent
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
 if(action==='monitor-signin'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);const key=m?(m.source==='licenses'?'licenses':m.source):entry;tab='Credentials';render();portalConnectClick(key);return;}
 if(action==='portal-read-request'){portalRequestRead(entry);return render();}
+if(action==='portal-return-read'){portalRequestRead(entry);return render();}
+if(action==='portal-return-dismiss'){const pd=portalDepartureGet();if(pd){pd.dismissed=true;portalDeparturePersist();}return render();}
 if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry);}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
 if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
@@ -11191,6 +11224,7 @@ function portalPatchRow(row, fields) {
 // With no row yet (first run), the portals upsert creates it first
 // and the stamp lands on the fresh row.
 function portalRequestRead(key, opts) {
+  portalDepartureClear(key);
   const state = (opts && opts.state) || '';
   const stamp = cloudNow();
   portalReadRequests[key] = stamp;
@@ -11209,6 +11243,7 @@ function portalRequestRead(key, opts) {
 // (unknown outcome / empty read) clears the request and writes
 // nothing else.
 function portalReadFileResult(source, state, outcome) {
+  portalDepartureClear(source);
   const row = portalRowFor(source, state);
   delete portalReadRequests[source];
   if (!row) return;
@@ -11220,6 +11255,66 @@ function portalReadFileResult(source, state, outcome) {
     if (outcome === 'needs-sign-in') { patch.session_state = 'needs_signin'; row.session_state = 'needs_signin'; }
   }
   portalPatchRow(row, patch);
+}
+// --- Return greeting (v144, Nov 12, 2026) ---
+// Caleb's ask: returning from a portal sign-in shouldn't require
+// hunting for the next step. Leaving for a portal (the Connect /
+// "Sign in to refresh" tap — the flow knows which source and when)
+// stamps a DEPARTURE on this device. When the app is seen again
+// (the focus/visibility hook, or the next launch) with that
+// departure still pending — no read requested for the source yet —
+// the Credentials view greets him ONCE at the top: "Welcome back —
+// tap to run your <Source> read", the button performing exactly
+// the v143 "I'm signed in — read it now" action (portalRequestRead).
+// One showing per departure: the stamp is cleared when the read is
+// requested, the banner is dismissed, a guided check starts for the
+// source, or a read result lands. Device-local on purpose — the
+// return happens on the device he left from.
+const PORTAL_DEPARTURE_STORAGE = 'crna-hub-portal-departure';
+let portalDepartureCache = null, portalDepartureLoaded = false;
+function portalDepartureGet() {
+  if (!portalDepartureLoaded) {
+    portalDepartureLoaded = true;
+    try { const raw = localStorage.getItem(PORTAL_DEPARTURE_STORAGE); const d = raw ? JSON.parse(raw) : null; portalDepartureCache = (d && typeof d === 'object' && PORTAL_CHECK_SOURCES[d.source]) ? { source: d.source, at: d.at || '', shownAt: d.shownAt || '', dismissed: !!d.dismissed } : null; } catch (e) { portalDepartureCache = null; }
+  }
+  return portalDepartureCache;
+}
+function portalDeparturePersist() {
+  try { const d = portalDepartureGet(); if (d) localStorage.setItem(PORTAL_DEPARTURE_STORAGE, JSON.stringify(d)); else localStorage.removeItem(PORTAL_DEPARTURE_STORAGE); } catch (e) {}
+}
+function portalDepartureStamp(key) {
+  if (!PORTAL_CHECK_SOURCES[key]) return;
+  portalDepartureLoaded = true;
+  portalDepartureCache = { source: key, at: new Date().toISOString(), shownAt: '', dismissed: false };
+  portalDeparturePersist();
+}
+function portalDepartureClear(key) {
+  const d = portalDepartureGet();
+  if (d && (!key || d.source === key)) { portalDepartureCache = null; portalDeparturePersist(); }
+}
+// A departure still awaiting its read: not dismissed, and no read
+// requested for the source (local tap or cloud row) since.
+function portalDeparturePending() {
+  const d = portalDepartureGet();
+  if (!d || d.dismissed) return null;
+  if (portalReadState(d.source).readRequestedAt) return null;
+  return d;
+}
+// Mark the pending departure as surfaced — called from the return
+// hook and at boot, so the greeting paints with the first render
+// after he is back. Returns true when this call surfaced it.
+function portalReturnSurface() {
+  const d = portalDeparturePending();
+  if (!d || d.shownAt) return false;
+  d.shownAt = new Date().toISOString();
+  portalDeparturePersist();
+  return true;
+}
+function portalReturnGreetingHTML() {
+  const d = portalDeparturePending();
+  if (!d || !d.shownAt) return '';
+  const title = (PORTAL_CHECK_SOURCES[d.source] || {}).title || d.source;
+  return `<section class="panel portal-return-greeting"><p><strong>Welcome back — tap to run your ${escapeHTML(title)} read.</strong></p><p class="muted">You signed in at ${escapeHTML(title)}; one tap queues the read from your signed-in session.</p><div class="toolbar"><button type="button" data-action="portal-return-read" data-id="${escapeHTML(d.source)}">Run my ${escapeHTML(title)} read</button><button type="button" class="secondary" data-action="portal-return-dismiss">Not now</button></div></section>`;
 }
 function monitorSessionState(mon) { return portalReadState(mon.source === 'licenses' ? 'licenses' : mon.source, mon.state || ''); }
 function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Sign-in isn’t available yet' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (!cloudActive) return { label: 'Not connected', detail: 'Signed in — records are merging with your account automatically' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
@@ -11321,6 +11416,7 @@ function portalConnectFlow(key) {
           // State is persisted; the return prompt is waiting when he
           // comes back (the focus/visibility hook re-renders).
           portalOpened[key] = true;
+          portalDepartureStamp(key);
           portalStatePersist();
           return 'link';
         }
@@ -11331,6 +11427,7 @@ function portalConnectFlow(key) {
           try { win.opener = null; } catch (e) {}
           this.win = win;
           portalOpened[key] = true;
+          portalDepartureStamp(key);
           portalLeaveSheet = '';
           portalStatePersist();
           render();
@@ -11364,6 +11461,7 @@ function portalLeaveGo(key) {
   const f = portalConnectFlow(key);
   if (f) { f.openedAt = new Date().toISOString(); f.returnedAt = ''; }
   portalOpened[key] = true;
+  portalDepartureStamp(key);
   portalLeaveSheet = '';
   portalStatePersist();
   try { if (typeof location !== 'undefined' && location && typeof location.assign === 'function') { location.assign(meta.url); return; } } catch (e) {}
@@ -11377,6 +11475,7 @@ function portalLeaveGo(key) {
 function portalNoteReturn() {
   let any = false;
   Object.values(portalFlows).forEach((f) => { if (f.openedAt && !f.returnedAt) { f.returnedAt = new Date().toISOString(); any = true; } });
+  if (portalReturnSurface()) any = true;
   if (any) render();
 }
 if (typeof document !== 'undefined' && document && typeof document.addEventListener === 'function') {
@@ -11454,7 +11553,7 @@ async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; 
 // panel with a reload button, never a silent blank page (the boot watchdog
 // in index.html is the second net, for failures before this file runs).
 function bootRender(){try{render()}catch(e){try{console.error(e)}catch(_){ } const navEl=$('nav');if(navEl&&!navEl.innerHTML){navEl.innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');try{navEl.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)))}catch(_){ }} const appEl=$('app');if(appEl)appEl.innerHTML=`<section class="panel"><h2>Something went wrong starting CRNA Hub</h2><p class="muted">${escapeHTML(String((e&&e.message)||e))}</p><p class="muted">Your saved data on this device is not affected. Tap a tab above to try that page, or reload.</p><p><button type="button" onclick="location.reload()">Reload</button></p></section>`}}
-portalCheckRestore();pushDeepLinkApply();bootRender();cloudInit();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').then(reg=>{const promptReload=()=>{if(confirm('A newer version of CRNA Hub is available. Reload now to use it?'))window.location.reload()};if(reg.waiting)promptReload();reg.addEventListener('updatefound',()=>{const sw=reg.installing;if(!sw)return;sw.addEventListener('statechange',()=>{if(sw.state==='installed'&&navigator.serviceWorker.controller)promptReload()})});try{document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){try{const p2=reg.update();if(p2&&p2.catch)p2.catch(()=>{})}catch(e){}}})}catch(e){}try{const p=reg.update();if(p&&p.catch)p.catch(()=>{})}catch(e){}}).catch(()=>{});
+portalCheckRestore();pushDeepLinkApply();portalReturnSurface();bootRender();cloudInit();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').then(reg=>{const promptReload=()=>{if(confirm('A newer version of CRNA Hub is available. Reload now to use it?'))window.location.reload()};if(reg.waiting)promptReload();reg.addEventListener('updatefound',()=>{const sw=reg.installing;if(!sw)return;sw.addEventListener('statechange',()=>{if(sw.state==='installed'&&navigator.serviceWorker.controller)promptReload()})});try{document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){try{const p2=reg.update();if(p2&&p2.catch)p2.catch(()=>{})}catch(e){}}})}catch(e){}try{const p=reg.update();if(p&&p.catch)p.catch(()=>{})}catch(e){}}).catch(()=>{});
 
 // Notification taps carry ?go=<screen> so a tap lands on the exact
 // screen where the action is taken (watchdog payloads + sw.js).
