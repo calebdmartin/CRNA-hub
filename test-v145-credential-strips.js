@@ -95,8 +95,13 @@ const stripsOf = (html) => [...html.matchAll(/<p class="cred-strip">([^<]*)<\/p>
   t('NBCRNA strip: ID + period + short check-in + reminders', strips.includes(nbcrnaStrip), J(strips));
   t('NBCRNA strip: the long tail of the check-in text stays out', !page.includes('full MAC program starts May 1, 2027 · Reminders'));
   t('AANA strip: member + dues + CE totals + reminders', strips.includes(aanaStrip), J(strips));
-  t('license strip: number · status · expires · reminders', strips.includes('103459 · Active · Expires ' + F('2027-06-30') + ' · Reminders at 90, 60, 30, 7 days'), J(strips));
-  t('sparse license: missing number/status omitted, no placeholders', strips.includes('Expires ' + F('2028-06-30') + ' · Reminders at 90, 60, 30, 7 days'), J(strips));
+  // v150 (Nov 12, 2026): license strips now carry the state CE
+  // requirement + progress segment between Expires and Reminders
+  // (Caleb: the app must show all required CE for all states) — the
+  // two pins below were updated to the extended strip; the CE
+  // segment itself is pinned in test-v150-ce-requirements.js.
+  t('license strip: number · status · expires · CE · reminders', strips.includes('103459 · Active · Expires ' + F('2027-06-30') + ' · CE 24 hrs / 2 yrs · 12 pharmacotherapeutics · 12 clinical management · CE not tracked yet · Reminders at 90, 60, 30, 7 days'), J(strips));
+  t('sparse license: missing number/status omitted, no placeholders', strips.includes('Expires ' + F('2028-06-30') + ' · CE 24 hrs / 2 yrs · 1 Category A · CE not tracked yet · Reminders at 90, 60, 30, 7 days'), J(strips));
   t('doc strip: expires + issued + reminders', strips.includes('Expires ' + F('2028-01-31') + ' · Issued ' + F('2026-02-01') + ' · Reminders at 90, 60, 30, 7 days'), J(strips));
   t('doc without an issue date: Issued omitted', strips.some(s => s === 'Expires ' + F('2028-01-31') + ' · Reminders at 90, 60, 30, 7 days'), J(strips));
   t('no strip carries junk (no undefined / NaN / doubled separators)', strips.every(s => !/undefined|NaN|·\s*·/.test(s)), J(strips));

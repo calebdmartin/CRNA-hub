@@ -87,7 +87,13 @@ t('no dashboardMonitoringPanel function or call remains',
 t('Credentials tab still carries the full portal monitoring panel',
   sandbox.__cred.includes('id="credentials-monitoring-panel"') && sandbox.__cred.includes('Portal monitoring'));
 t('Dashboard still renders its other sections',
-  sandbox.__dash.includes('Overview') && sandbox.__dash.includes('Quick actions') && sandbox.__dash.includes('Upcoming shifts'));
+  sandbox.__dash.includes('Overview') && sandbox.__dash.includes('Quick actions'));
+// v150 (Nov 12, 2026): Caleb asked to remove the Dashboard "Upcoming
+// shifts" section ("Just to clean things up" — it duplicated the
+// calendar), so the pin that required it is superseded by the
+// removal pins in test-v150-ce-requirements.js.
+t('Dashboard no longer renders Upcoming shifts (removed in v150)',
+  !sandbox.__dash.includes('Upcoming shifts'));
 
 // --- Credentials manual entry collapsed ---
 t('manual entry is a collapse panel on Credentials',

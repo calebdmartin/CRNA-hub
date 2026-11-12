@@ -2113,7 +2113,15 @@ function credentialDeadlinesPanel(){
 }
 function ceTotal(records,type){return records.filter(r=>!type||r.class===type).reduce((s,r)=>s+num(r.credits),0)}
 function ceForm(kind,label,record){
-  return `<form data-kind="${kind}"><div class="form-grid">${field('title','Course / activity','text',record.title||'','required')}${field('date','Date','date',record.date||localDate(new Date()))}${field('credits','Credits','number',record.credits??'','min="0" step="0.25"')}${kind==='nbcrnaCE'?select('class','Class',['Class A','Class B','Other'],record.class||'Class A'):field('note','Notes','text',record.note||'')}</div>${formEnd(editId?'Save CE record':'Add CE record')}</form>`;
+  // v150: two OPTIONAL pickers extend the existing form — which
+  // license this record counts toward, and its category (a
+  // sub-requirement label or General). Both ride the normal record
+  // save path; the assignment is mirrored to settings.ceAssign so
+  // it survives the ce_records cloud round-trip (fixed columns).
+  const toward=record.licState?(stateNameOf(record.licState)||record.licState)+'|'+(record.licType||''):'';
+  const licPicker=selectLabeled('countsToward','Counts toward',ceCountsTowardPairs(),toward);
+  const catPicker=select('category','Category',ceCategoryLabels(),record.category||'General');
+  return `<form data-kind="${kind}"><div class="form-grid">${field('title','Course / activity','text',record.title||'','required')}${field('date','Date','date',record.date||localDate(new Date()))}${field('credits','Credits','number',record.credits??'','min="0" step="0.25"')}${kind==='nbcrnaCE'?select('class','Class',['Class A','Class B','Other'],record.class||'Class A'):field('note','Notes','text',record.note||'')}${licPicker}${catPicker}</div>${formEnd(editId?'Save CE record':'Add CE record')}</form>`;
 }
 
 // --- Ask Assistant: deterministic answer engine (FALLBACK) ---
@@ -2556,6 +2564,258 @@ const STATE_BOARD_URLS_PRE_V149=[
   'https://wvrn.boardsofnursing.org/licenselookup',
   'https://wsbn.wyo.gov/'
 ];
+// v150 (Nov 12, 2026): state CE requirements for license renewal,
+// transcribed from the Nov 2026 audit of every board's published
+// rules (state-ce-requirements.md — 36 verified · 10 likely · 5
+// conflict). Requirements ONLY: no portal shows completed hours, so
+// progress comes from the user's own CE records (see ceProgressFor).
+// Encoding, per jurisdiction:
+//   rn / aprn / lpn: a role rule —
+//     'none'                  no CE hours required for renewal
+//     {h, y, s?, add?, note?} h total hours per y-year cycle;
+//                             s = mandated sub-topics inside the
+//                             total, [label, hours, flag?] — flag
+//                             'noCrna' = the sub does not apply to
+//                             CRNAs (Ohio pharmacology); add = RN
+//                             hours owed ON TOP of (additive APRN)
+//     {model, ceOpt?, y, s?}  competency model — CE is one path,
+//                             not a set total (ceOpt = the CE-path
+//                             hours when the audit gives one)
+//     {useRN:true}            (APRN) renews on the RN rule
+//   crna: an override rule in the same shapes, present only where
+//     the audit gives CRNAs their own track ({useRN:true} = the
+//     CRNA practices on the RN license — PA, NY, IN).
+//   conf: 'verified' | 'likely'. A jurisdiction whose sources
+//     conflict carries conflict:true and NO numbers at all — the
+//     app shows "check with your board" and never asserts a figure
+//     it does not trust (AK, DE, DC, ID, WY).
+//   note: the audit's CRNA/structure detail, kept with the data.
+// Conditional sub-topics (prescriptive authority, DEA, first
+// renewal, one-time courses) live in notes, never in s — a flat
+// sub list feeds progress math and must only hold what every
+// holder of the license owes every cycle.
+const STATE_CE_REQUIREMENTS=[
+{state:'Alabama',conf:'verified',rn:{h:24,y:2,s:[['Board mandatory class',4]]},aprn:{h:24,y:2,s:[['pharmacology',6]]},lpn:{h:24,y:2},note:'APRN hours concurrent with RN. CRNAs expressly owe the 6 pharmacology hours; QACSC holders add 4 controlled-substance hours.'},
+{state:'Alaska',conf:'conflict',conflict:true,note:'Continuing competency is a menu (30 CE hrs is one of three methods); sources conflict on whether 15 pharmacology hours are owed at renewal by prescribers. CRNAs: only Class A credits count toward the CE method.'},
+{state:'Arizona',conf:'verified',rn:'none',aprn:'none',lpn:'none',note:'No CE hours — renewal rests on 960 practice hours in 5 years, a degree, or a refresher course. APRNs also keep national certification; DEA holders owe 3 opioid-related hours.'},
+{state:'Arkansas',conf:'verified',rn:{h:15,y:2},aprn:{h:15,y:2},lpn:{h:15,y:2},note:'Certification or an academic course can meet the 15 instead. Prescriptive authority adds 5 pharmacotherapeutics; CRNAs generally hold no prescriptive authority and owe only the base 15.'},
+{state:'California',conf:'verified',rn:{h:30,y:2},aprn:{h:30,y:2},lpn:{h:30,y:2},note:'APRN certificates renew with the RN license — no separate total. The CRNA certificate adds nothing; the Schedule II and gerontology sub-topics apply to NPs, not CRNAs.'},
+{state:'Colorado',conf:'likely',rn:'none',aprn:'none',lpn:'none',note:'No CE hours; APRNs keep current national certification. Prescriptive authority carries a 2-hour substance-use training.'},
+{state:'Connecticut',conf:'verified',rn:{h:2,y:6,s:[['screening & suicide prevention',2]]},aprn:{h:50,y:2,s:[['pharmacotherapeutics',5],['infectious diseases',1],['risk management',1],['sexual assault',1],['domestic violence',1],['cultural competency',1],['substance abuse',1]]},lpn:{h:2,y:6,s:[['screening & suicide prevention',2]]},note:'The APRN 50 is a separate license requirement (the RN 2 hrs / 6 yrs is also owed). The 5 pharmacotherapeutics hours apply to every APRN, CRNAs included.'},
+{state:'Delaware',conf:'conflict',conflict:true,note:'RN 30 hrs / 2 yrs incl. 3 substance abuse is settled, but sources conflict on APRN pharmacology (none stated vs 10 for prescribers) — no number asserted.'},
+{state:'District of Columbia',conf:'conflict',conflict:true,note:'DC Health guidance applies a 24-hour total incl. 15 pharmacology to all APRNs, while the codified CRNA chapter still reads 15 hours — the two cannot both be the operative CRNA total.'},
+{state:'Florida',conf:'verified',rn:{h:24,y:2,s:[['general hours',16],['prevention of medical errors',2],['Florida laws & rules',2],['human trafficking',2],['recognizing impairment',2]]},aprn:{h:27,y:2,s:[['general hours',16],['prevention of medical errors',2],['Florida laws & rules',2],['safe & effective prescription of controlled substances',3],['human trafficking',2],['recognizing impairment',2]]},lpn:{h:24,y:2},crna:{h:5,y:2,s:[['human trafficking',2],['safe & effective prescription of controlled substances',3]]},note:'NBCRNA-certified CRNAs are exempt from the general hours — only human trafficking (2) and controlled substances (3) remain. Domestic violence 2 is in addition every third cycle; HIV/AIDS 1 is one-time.'},
+{state:'Georgia',conf:'likely',rn:{model:'one of five continuing-competency options',ceOpt:30,y:2},aprn:{model:'RN renewal + current national certification',y:2},lpn:{h:20,y:2},crna:{model:'current NBCRNA certification',y:2},note:'Maintaining national certification is itself one of the RN competency options, so a CRNA keeping NBCRNA current owes no separate state CE hours.'},
+{state:'Hawaii',conf:'verified',rn:{model:'one of ten learning activities',ceOpt:30,y:2},aprn:{model:'one of ten learning activities',ceOpt:30,y:2},lpn:{model:'one of ten learning activities',ceOpt:30,y:2},crna:{model:'current NBCRNA certification',y:2},note:'A non-prescribing CRNA owes no numeric hours — NBCRNA certification satisfies the base requirement. Prescriptive authority (APRN-RX) adds 30 hrs incl. 8 pharmacology.'},
+{state:'Idaho',conf:'conflict',conflict:true,note:'The current rule text reads one competency activity for RN/LPN and 30 hrs for APRNs, but other sources describe two activities or no CE at all — no number asserted.'},
+{state:'Illinois',conf:'verified',rn:{h:20,y:2,s:[['sexual harassment prevention',1],['implicit bias awareness',1]]},aprn:{h:80,y:2,s:[['pharmacotherapeutics',20],['sexual harassment prevention',1],['implicit bias awareness',1]]},lpn:{h:20,y:2},note:'The 80 APRN hours satisfy the RN requirement too. 10 of the 20 pharmacotherapeutics hours are opioid prescribing / substance abuse education. No CRNA carve-out — CRNAs owe the full 80.'},
+{state:'Indiana',conf:'verified',rn:'none',aprn:'none',lpn:'none',crna:{useRN:true},note:'No CE for licensure itself. The 30 hrs incl. 8 pharmacology attach only to APRN prescriptive authority, which CRNAs do not hold — CRNAs practice on the RN license.'},
+{state:'Iowa',conf:'verified',rn:{h:36,y:3},aprn:{h:36,y:3},lpn:{h:36,y:3},note:'National certification/recertification counts as the full 36 for both licenses. Mandatory-reporter abuse training counts inside the 36 where applicable.'},
+{state:'Kansas',conf:'verified',rn:{h:30,y:2},aprn:{h:30,y:2},lpn:{h:30,y:2},crna:{h:30,y:2},note:'CRNAs hold a separate Registered Nurse Anesthetist (RNA) license: the 30 hours must be anesthesia-related CNE, and they also satisfy the RN renewal. No pharmacology sub-requirement.'},
+{state:'Kentucky',conf:'verified',rn:{h:14,y:1},aprn:{h:5,y:1,s:[['pharmacology',5]]},lpn:{h:14,y:1},note:'The APRN 5 pharmacology hours are annual and apply to every APRN, CRNAs included; national certification covers the RN 14. DEA/KASPER holders make 3 of the 5 pain management or addiction disorders.'},
+{state:'Louisiana',conf:'likely',rn:{h:30,y:2},aprn:{h:30,y:2},lpn:'none',note:'No added general APRN hours — current national certification satisfies the RN requirement. Pharmacotherapeutics (6/yr) only with prescriptive authority, CRNAs included when they hold it.'},
+{state:'Maine',conf:'verified',rn:'none',aprn:{h:50,y:2},lpn:'none',crna:{h:50,y:2,s:[['pharmacology',15]]},note:'CRNAs are the pharmacology exception: 15 of the 50 must be pharmacology at every renewal. Other APRNs owe pharmacology only after a gap in prescribing.'},
+{state:'Maryland',conf:'likely',rn:{model:'1,000 practice hours, a nursing degree, or CE',ceOpt:30,y:2},aprn:{model:'RN renewal + current national certification',y:2},lpn:{model:'1,000 practice hours, a nursing degree, or CE',ceOpt:30,y:2},note:'No state-set APRN hours — CE volume is set by the certifying body.'},
+{state:'Massachusetts',conf:'verified',rn:{h:15,y:2},aprn:{h:15,y:2},lpn:{h:15,y:2},note:'Same 15 hours for APRNs, plus current national certification. Prescribers add the statutory pain-management/opioid training (no set hour count).'},
+{state:'Michigan',conf:'verified',rn:{h:25,y:2,s:[['pain & pain symptom management',2],['implicit bias',2]]},aprn:{h:25,y:2,s:[['pain & pain symptom management',2],['implicit bias',2]]},lpn:{h:25,y:2,s:[['pain & pain symptom management',2],['implicit bias',2]]},note:'APRN specialty certification adds no state hours — CRNA renewal rests on maintained NBCRNA recertification, which can itself be credited as 25 hours toward the RN requirement.'},
+{state:'Minnesota',conf:'verified',rn:{h:24,y:2},aprn:{h:24,y:2},lpn:{h:12,y:2},note:'Current national certification satisfies the RN 24 for APRNs; further CE is set by the certifying organization.'},
+{state:'Mississippi',conf:'verified',rn:'none',aprn:{h:5,y:2,s:[['controlled substances',5]]},lpn:'none',note:'The 5 controlled-substance hours apply to every APRN, CRNAs included, prescriptive authority or not. (The old 20/40-hour rule was repealed in 2020.)'},
+{state:'Missouri',conf:'likely',rn:'none',aprn:'none',lpn:'none',note:'No state-counted hours — APRN renewal rests on current national certification (NBCRNA for CRNAs). A grandfathered uncertified-APRN path (60 hrs) does not apply to CRNAs.'},
+{state:'Montana',conf:'verified',rn:'none',aprn:'none',lpn:'none',note:'All CE requirements were repealed effective Nov 18, 2023. APRNs keep national certification and a quality-assurance plan instead.'},
+{state:'Nebraska',conf:'verified',rn:{h:20,y:2},aprn:{model:'current national certification',y:2},lpn:{h:20,y:2},crna:{model:'current NBCRNA certification',y:2},note:'RN hours pair with 500 practice hours in 5 years. APRN-CRNA renewal requires only current NBCRNA certification — the opiate-prescribing CE applies to NPs and CNMs, not CRNAs.'},
+{state:'Nevada',conf:'verified',rn:{h:30,y:2,s:[['cultural competency',4]]},aprn:{h:15,y:2,add:30,s:[['specialty',15]]},lpn:{h:30,y:2,s:[['cultural competency',4]]},crna:{h:15,y:2,add:30,s:[['pharmacology',15]]},note:'APRNs add 15 specialty hours on top of the RN 30 (45 total); CRNAs instead add 15 hours of pharmacology.'},
+{state:'New Hampshire',conf:'likely',rn:{h:30,y:2},aprn:{h:30,y:2,add:30,s:[['pharmacology',5]]},lpn:{h:30,y:2},note:'60 total for APRNs (30 RN + 30 more); the 5 pharmacology hours sit inside the added 30 and apply to CRNAs. National certification may count as 30 of the 60.'},
+{state:'New Jersey',conf:'verified',rn:{h:30,y:2,s:[['prescription opioid drugs',1]]},aprn:{h:30,y:2,s:[['end-of-life care',2],['prescription opioid drugs',1]]},lpn:{h:30,y:2,s:[['prescription opioid drugs',1]]},note:'APRNs owe the state 30 PLUS their certifying body\u2019s CE — for CRNAs, NBCRNA CPC compliance is itself part of NJ renewal.'},
+{state:'New Mexico',conf:'verified',rn:{h:30,y:2},aprn:{model:'current national certification',y:2},lpn:{h:30,y:2},note:'Certification is accepted in lieu of the 30 RN hours for both licenses (the Board names NBCRNA expressly). DEA holders add 5 non-cancer pain management hours; an uncertified-APRN fallback (30 + 10 pharmacology + 10 practice) cannot apply to a CRNA.'},
+{state:'New York',conf:'likely',rn:'none',aprn:'none',lpn:'none',crna:{useRN:true},note:'No CE hours — only mandated trainings (infection control every 4 years; child-abuse reporting once). New York does not license CRNAs at all; CRNAs practice on the RN license.'},
+{state:'North Carolina',conf:'verified',rn:{model:'one of eight continuing-competence options',ceOpt:30,y:2},aprn:{h:50,y:2},lpn:{model:'one of eight continuing-competence options',ceOpt:30,y:2},crna:{model:'current NBCRNA certification',y:2},note:'The 50-hour rule is NP-only — CRNAs, CNSs and CNMs maintain recognition through national certification, which also satisfies RN continuing competence.'},
+{state:'North Dakota',conf:'verified',rn:{h:12,y:2},aprn:{h:12,y:2},lpn:{h:12,y:2},note:'APRN hours are concurrent and national certification must be maintained. Prescriptive authority swaps in 15 pharmacotherapy hours (which also cover the RN 12).'},
+{state:'Ohio',conf:'likely',rn:{h:24,y:2,s:[['Category A',1]]},aprn:{h:24,y:2,add:24,s:[['advanced pharmacology',12,'noCrna']]},lpn:{h:24,y:2,s:[['Category A',1]]},note:'APRN hours are in addition to the RN hours — 48 combined. The 12-hour advanced pharmacology clause (OAC 4723-8-10) lists CNP, CNS and CNM only: it does not apply to CRNAs.'},
+{state:'Oklahoma',conf:'verified',rn:{model:'one of five continuing qualifications',ceOpt:24,y:2},aprn:{model:'one of five continuing qualifications',ceOpt:24,y:2},lpn:{model:'one of five continuing qualifications',ceOpt:24,y:2},crna:{h:8,y:2,s:[['advanced pharmacology',8]]},note:'CRNAs are excluded from the CNP/CNS/CNM prescriptive-authority tracks; the CRNA drug-administration authority renews on 8 units of advanced pharmacology CE related to anesthesia.'},
+{state:'Oregon',conf:'verified',rn:{model:'mandated topics only — no set total',y:2,s:[['pain management',1],['cultural competency',2]]},aprn:{model:'mandated topics only — no set total',y:2,s:[['pain management',1],['cultural competency',2]]},lpn:{model:'mandated topics only — no set total',y:2,s:[['pain management',1],['cultural competency',2]]},note:'Current rule (Jan 1, 2026). From Jan 1, 2028: 20 hrs / 2 yrs for RN/LPN, while CRNAs and NPs satisfy CE by holding current national certification; the two mandated topics remain.'},
+{state:'Pennsylvania',conf:'verified',rn:{h:30,y:2,s:[['child abuse recognition & reporting',2]]},aprn:{h:30,y:2,s:[['child abuse recognition & reporting',2]]},lpn:{h:2,y:2,s:[['child abuse recognition & reporting',2]]},crna:{useRN:true},note:'Pennsylvania does not certify CRNAs as APRNs — CRNAs practice on the RN license, so only the RN 30 applies (plus NBCRNA). The CRNP 16 pharmacology hours attach to prescriptive authority and do not apply to CRNAs.'},
+{state:'Rhode Island',conf:'likely',rn:{h:10,y:2,s:[['substance abuse',2]]},aprn:{h:10,y:2,s:[['substance abuse',2]]},lpn:{h:10,y:2,s:[['substance abuse',2]]},note:'One requirement serves both licenses, plus national certification for APRNs. The 30 pharmacology hours every 6 years are written for CNP (and psychotropic, CNS) prescriptive privileges — CRNAs are not named.'},
+{state:'South Carolina',conf:'verified',rn:{model:'one of four competency options',ceOpt:30,y:2},aprn:{model:'current national certification + RN competency',y:2},lpn:{model:'one of four competency options',ceOpt:30,y:2},note:'Prescriptive authority adds 20 pharmacotherapeutics incl. 2 on controlled substances.'},
+{state:'South Dakota',conf:'verified',rn:'none',aprn:'none',lpn:'none',note:'No CE hours for either license — renewal rests on practice verification and, for APRNs, current national certification (NBCRNA evidence for CRNAs).'},
+{state:'Tennessee',conf:'verified',rn:{model:'two items from the competence list',ceOpt:5,y:2},aprn:{model:'current national certification + one competence item',y:2},lpn:{model:'two items from the competence list',ceOpt:5,y:2},note:'The CE item on the list is 5 contact hours (10 for non-practicing nurses). Certificate-of-Fitness holders add 2 controlled-substance hours.'},
+{state:'Texas',conf:'verified',rn:{h:20,y:2},aprn:{h:20,y:2},lpn:{h:20,y:2},note:'The same 20 hours (or national certification) satisfy RN and APRN. Prescriptive authority adds 5 pharmacotherapeutics (25 total for prescribers).'},
+{state:'Utah',conf:'verified',rn:{model:'practice hours, practice + CE, or CE alone',ceOpt:30,y:2},aprn:{model:'current national certification',y:2},lpn:{model:'practice hours, practice + CE, or CE alone',ceOpt:30,y:2},note:'APRNs with a controlled substance license add 4 controlled-substance hours per cycle.'},
+{state:'Vermont',conf:'likely',rn:{model:'practice hours, CE, or national certification',ceOpt:20,y:2},aprn:{model:'RN renewal + practice hours + national certification',y:2},lpn:{model:'practice hours, CE, or national certification',ceOpt:20,y:2},note:'DEA holders add 2 controlled-substance hours per renewal.'},
+{state:'Virginia',conf:'verified',rn:{model:'one board learning activity',ceOpt:30,y:2},aprn:{model:'current national certification',y:2},lpn:{model:'one board learning activity',ceOpt:30,y:2},note:'Prescriptive authority adds 8 pharmacology hours per biennium. A pre-2002 legacy APRN path (40 specialty hours) exists.'},
+{state:'Washington',conf:'verified',rn:{h:8,y:1,s:[['health equity',2]]},aprn:{h:46,y:2},lpn:{h:8,y:1,s:[['health equity',2]]},note:'APRN total combines 30 APRN hours / 2 yrs with the RN 8 hrs / yr. Prescriptive authority adds 15 pharmacotherapeutics (45-style total for prescribers). CRNAs are expressly exempt from the one-time 6-hour suicide training.'},
+{state:'West Virginia',conf:'verified',rn:{h:12,y:2},aprn:{h:24,y:2,s:[['pharmacotherapeutics',12],['clinical management',12]]},lpn:{h:24,y:2,s:[['substance abuse / drug diversion',3],['mental health — veterans & families',2]]},note:'12 of the 24 APRN hours may also count toward the RN 12. The 12 pharmacotherapeutics hours apply to CRNAs even without prescriptive authority; NBCRNA certification is also required at APRN renewal.'},
+{state:'Wisconsin',conf:'verified',rn:'none',aprn:{h:16,y:2,s:[['clinical pharmacology / therapeutics',16]]},lpn:'none',note:'All 16 APRN hours are in clinical pharmacology/therapeutics, incl. 2 on responsible prescribing of controlled substances. Under the 2025 APRN licensure act every APRN owes them, CRNAs included.'},
+{state:'Wyoming',conf:'conflict',conflict:true,note:'The Board states Wyoming has no mandatory CE — CE is one optional competency path, and the figures conflict (40 hrs on the current renewal page vs 30 in the codified rule).'}
+];
+function stateCeOf(state){
+  const nm=stateNameOf(state);if(!nm)return null;
+  return STATE_CE_REQUIREMENTS.find(j=>j.state===nm)||null;
+}
+// Which CE rule a license record follows. Returns null when the
+// state is unknown; otherwise {kind, ...} where kind is:
+//   'hours'    {total, years, subs:[[label, hours]...], addRn}
+//   'none'     no CE required for renewal
+//   'model'    competency model {text, ceOpt}
+//   'conflict' the audit's sources disagree — never a number
+// A CRNA record follows the jurisdiction's crna override when one
+// exists, else the APRN rule with CRNA-exempt subs removed.
+function ceRequirementFor(lic){
+  const j=stateCeOf(lic&&lic.state);if(!j)return null;
+  if(j.conflict)return {kind:'conflict'};
+  const type=String((lic&&lic.type)||'').toUpperCase();
+  const isCrna=/CRNA/.test(type)||type==='RNA';
+  const role=/LPN|LVN/.test(type)?'lpn':(/RN/.test(type)&&!/APRN|ARNP|CRNA|RNA/.test(type)?'rn':'aprn');
+  let rule=null,viaCrna=false;
+  if(isCrna&&j.crna!==undefined){rule=j.crna;viaCrna=true;}
+  else if(role==='aprn'&&j.aprn&&typeof j.aprn==='object'&&j.aprn.useRN){rule=j.rn;}
+  else rule=j[role];
+  if(rule===undefined||rule===null)return null;
+  if(rule==='none')return {kind:'none'};
+  if(typeof rule==='object'&&rule.useRN){
+    // Practices on the RN license (PA / NY / IN CRNAs).
+    const rn=j.rn;
+    if(rn==='none')return {kind:'none',onRn:true};
+    if(rn&&typeof rn==='object'&&rn.model)return {kind:'model',text:rn.model,ceOpt:rn.ceOpt||null,years:rn.y||2,onRn:true};
+    if(rn&&typeof rn==='object')return {kind:'hours',total:rn.h,years:rn.y||2,subs:(rn.s||[]).map(s0=>[s0[0],s0[1]]),addRn:0,onRn:true};
+    return null;
+  }
+  if(typeof rule==='object'&&rule.model)return {kind:'model',text:rule.model,ceOpt:rule.ceOpt||null,years:rule.y||2};
+  if(typeof rule==='object'&&typeof rule.h==='number'){
+    const subs=(rule.s||[]).filter(s0=>!(isCrna&&s0[2]==='noCrna')).map(s0=>[s0[0],s0[1]]);
+    return {kind:'hours',total:rule.h+(rule.add||0),years:rule.y||2,subs,addRn:rule.add?rule.h:0,rnBase:rule.add||0};
+  }
+  return null;
+}
+// The requirement in plain words, for the license strip:
+// "CE 24 hrs / 2 yrs · 12 pharmacotherapeutics · 12 clinical
+// management" / "CE 48 hrs / 2 yrs (24 RN + 24 APRN)" /
+// "Practices on the RN license — CE 30 hrs / 2 yrs" /
+// "No CE required for renewal" / "CE rules unclear — check with
+// your board".
+function ceRequirementText(req){
+  if(!req)return '';
+  if(req.kind==='conflict')return 'CE rules unclear — check with your board';
+  if(req.kind==='none')return req.onRn?'Practices on the RN license — no CE required for renewal':'No CE required for renewal';
+  if(req.kind==='model'){
+    const base='CE by '+req.text+(req.ceOpt?' (one option: '+req.ceOpt+' hrs)':'');
+    return (req.onRn?'Practices on the RN license — ':'')+base+' — no set number of hours';
+  }
+  let t='CE '+req.total+' hrs / '+req.years+(req.years===1?' yr':' yrs');
+  if(req.rnBase)t+=' ('+req.rnBase+' RN + '+req.addRn+' APRN)';
+  (req.subs||[]).forEach(s0=>{t+=' · '+s0[1]+' '+s0[0];});
+  return (req.onRn?'Practices on the RN license — ':'')+t;
+}
+// CE on file for one license: records from BOTH CE lists carrying
+// this license's assignment (licState + licType, saved by the add-CE
+// form and mirrored in settings.ceAssign for cloud round-trips),
+// completed inside the current cycle window [expiry − years,
+// expiry]. Returns null when nothing is assigned — the strip then
+// shows the requirement alone with "CE not tracked yet", never a
+// fake zero. Sub counts match the record's category against the
+// sub label (case-insensitive); any other category counts toward
+// the total only.
+function ceProgressFor(lic,req){
+  if(!req||req.kind!=='hours')return null;
+  const st=stateNameOf(lic.state);if(!st)return null;
+  const ty=String(lic.type||'').toUpperCase();
+  const exp=String(lic.expiry||'').slice(0,10);
+  let start='';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(exp)){
+    const d=new Date(exp+'T12:00:00');d.setFullYear(d.getFullYear()-(req.years||2));
+    start=d.toISOString().slice(0,10);
+  }
+  let total=0;const subHave={};let assigned=0;
+  const scan=(arr)=>{(arr||[]).forEach(r=>{
+    if(!r||stateNameOf(r.licState||'')!==st||String(r.licType||'').toUpperCase()!==ty)return;
+    assigned++;
+    const dt=String(r.date||'').slice(0,10);
+    if(exp&&(!dt||dt<start||dt>exp))return;
+    const c=parseFloat(r.credits)||0;if(!(c>0))return;
+    total+=c;
+    const cat=String(r.category||'').trim().toLowerCase();
+    (req.subs||[]).forEach(s0=>{if(cat&&cat===String(s0[0]).toLowerCase())subHave[s0[0]]=(subHave[s0[0]]||0)+c;});
+  });};
+  scan(db.nbcrnaCE);scan(db.aanaCE);
+  if(!assigned)return null;
+  return {total:Math.round(total*100)/100,subs:(req.subs||[]).map(s0=>({label:s0[0],need:s0[1],have:Math.round((subHave[s0[0]]||0)*100)/100}))};
+}
+function ceProgressText(p,req){
+  if(!p||!req)return '';
+  let t='CE on file: '+p.total+' of '+req.total+' hrs';
+  (p.subs||[]).forEach(s0=>{t+=' · '+s0.label+' '+s0.have+' of '+s0.need;});
+  return t;
+}
+// The full CE segment of a license strip: the requirement, then
+// either the tracked progress or the honest "not tracked yet".
+function licenseCeText(lic){
+  const req=ceRequirementFor(lic);if(!req)return '';
+  const base=ceRequirementText(req);
+  if(req.kind!=='hours')return base;
+  const p=ceProgressFor(lic,req);
+  return p?base+' · '+ceProgressText(p,req):base+' · CE not tracked yet';
+}
+// The assignment sidecar: ce_records rows carry fixed columns only
+// (no data payload), so a record's licState / licType / category
+// ride the settings payload (user_settings.data) as a map keyed by
+// record id, and are re-attached after every cloud apply — the
+// aanaCE note field is the local-only precedent. Rebuilt wholesale
+// from the records whenever CE changes, so deletes clean up too.
+function ceAssignRebuild(){
+  db.settings=(db.settings&&typeof db.settings==='object')?db.settings:{};
+  const map={};
+  const scan=(arr)=>{(arr||[]).forEach(r=>{if(r&&r.id&&String(r.licState||'').trim())map[r.id]={s:String(r.licState||''),t:String(r.licType||''),c:String(r.category||'')};});};
+  scan(db.nbcrnaCE);scan(db.aanaCE);
+  db.settings.ceAssign=map;
+}
+function ceAssignAttach(){
+  const map=(db.settings&&db.settings.ceAssign)||{};
+  const scan=(arr)=>{(arr||[]).forEach(r=>{
+    if(!r||!r.id)return;const a=map[r.id];if(!a)return;
+    r.licState=a.s||'';r.licType=a.t||'';r.category=a.c||'';
+  });};
+  scan(db.nbcrnaCE);scan(db.aanaCE);
+}
+// The CE form's two optional pickers (v150): which license a
+// record counts toward (one option per license on file, value
+// "State|Type") and its category — 'General' plus the sub-topics
+// of the user's own licenses' requirements.
+function ceCountsTowardPairs(){
+  const out=[['','Counts toward a license (optional)']];
+  (db.licenses||[]).forEach(x=>{
+    const st=stateNameOf(x.state||'');if(!st)return;
+    out.push([st+'|'+String(x.type||''),st+' '+String(x.type||'')]);
+  });
+  return out;
+}
+function ceCategoryLabels(){
+  const labels=['General'];const seen=new Set(['general']);
+  (db.licenses||[]).forEach(x=>{
+    const req=ceRequirementFor(x);if(!req||req.kind!=='hours')return;
+    (req.subs||[]).forEach(s0=>{const k=String(s0[0]).toLowerCase();if(!seen.has(k)){seen.add(k);labels.push(s0[0]);}});
+  });
+  return labels;
+}
+// The watchdog mirror for CE (v150): the client computes each
+// license's requirement + tracked progress (it owns the records)
+// and mirrors a compact summary into settings.watch.ceLicenses;
+// push-watchdog/evaluate.ts applies the 90/60/30/7 windows to it.
+// Only licenses with an hours rule appear — conflict / no-CE /
+// competency-model licenses never alert.
+function pushWatchRefreshCE(){
+  try{
+    const list=[];
+    (db.licenses||[]).forEach(x=>{
+      const req=ceRequirementFor(x);if(!req)return;
+      const exp=String(x.expiry||'').slice(0,10);if(!exp)return;
+      const key=String(x.state||'').trim().toUpperCase()+'|'+String(x.type||'').trim().toUpperCase();
+      const label=(stateNameOf(x.state)||x.state)+' '+String(x.type||'');
+      if(req.kind!=='hours'){list.push({label:label,key:key,expiry:exp,excluded:true});return;}
+      const p=ceProgressFor(x,req);
+      list.push({label:label,key:key,expiry:exp,total:req.total,subs:req.subs.map(s0=>({label:s0[0],need:s0[1]})),tracked:p?{total:p.total,subs:p.subs}:null});
+    });
+    pushWatchSet({ceLicenses:list});
+  }catch(e){}
+}
 function healLicensePortalUrls(){
   let fixed=0;
   (db.licenses||[]).forEach(x=>{
@@ -3439,7 +3699,7 @@ function profileMetadata(){
 // (buildAssistantSummary month context). No Dashboard widget any more.
 function monthlyIncomeGoal(){return num(db.settings&&db.settings.monthlyIncomeGoal)}
 
-function dashboard(){const now=localDate(new Date()),prefix=now.slice(0,7),current=db.shifts.filter(x=>x.date?.startsWith(prefix)),gross=monthHeadline(prefix).gross,upcoming=db.shifts.filter(x=>x.date>=now).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,6),expiring=deadlinesWithin90().length,ytdSplit=reconciledYearSplit(currentYear());return `<section class="panel"><h2>Overview · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><div class="stats"><div class="stat"><strong>${current.length}</strong>Shifts this month</div><div class="stat"><strong>${currency(gross)}</strong>Expected gross · this month (all statuses)</div><div class="stat"><strong>${db.facilities.length}</strong>Facilities</div>${featureOn('featureCredentials')?`<div class="stat"><strong>${expiring}</strong>Credential & certification deadlines (90 days)</div>`:''}</div></section>${dashboardConflictAlertsHTML()}${dashboardFacilitySuggestionsHTML()}${dashboardRulesHealHTML()}${dashboardQgendaNoticeHTML()}${dashboardIcsNoticeHTML()}${onboardingHTML()}${calendar()}${dayViewHTML()}${paystubUpcomingHTML()}${incomeCSPHTML(currentYear(),ytdSplit)}<div class="two"><section class="panel"><h2>Upcoming shifts</h2>${upcoming.length?upcoming.map(x=>`<div class="item"><strong>${fmt(x.date)}</strong> · ${escapeHTML(shiftFacilityLabel(x))}<div class="muted">${escapeHTML(x.type)} · ${x.pay===''||x.incomplete?'Pay not yet priced':currency(x.pay)} · ${shiftStatusLabel(x.status)}</div></div>`).join(''):'<p class="muted">No upcoming shifts.</p>'}</section><section class="panel"><h2>Quick actions</h2><div class="toolbar"><button data-action="add-shift">Add shift</button><button class="secondary" data-action="export-shifts">Export shifts</button><button class="secondary" data-action="backup">Back up data</button><button class="secondary" data-action="ask-assistant">Ask Assistant</button></div><p class="hint">${cloudModeHint()} Export backups regularly.</p></section></div>${shiftFormOverlayHTML()}${paycheckOverlayHTML()}${shiftDeleteOverlayHTML()}${proposedEmailSheetHTML()}`}
+function dashboard(){const now=localDate(new Date()),prefix=now.slice(0,7),current=db.shifts.filter(x=>x.date?.startsWith(prefix)),gross=monthHeadline(prefix).gross,expiring=deadlinesWithin90().length,ytdSplit=reconciledYearSplit(currentYear());return `<section class="panel"><h2>Overview · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2><div class="stats"><div class="stat"><strong>${current.length}</strong>Shifts this month</div><div class="stat"><strong>${currency(gross)}</strong>Expected gross · this month (all statuses)</div><div class="stat"><strong>${db.facilities.length}</strong>Facilities</div>${featureOn('featureCredentials')?`<div class="stat"><strong>${expiring}</strong>Credential & certification deadlines (90 days)</div>`:''}</div></section>${dashboardConflictAlertsHTML()}${dashboardFacilitySuggestionsHTML()}${dashboardRulesHealHTML()}${dashboardQgendaNoticeHTML()}${dashboardIcsNoticeHTML()}${onboardingHTML()}${calendar()}${dayViewHTML()}${paystubUpcomingHTML()}${incomeCSPHTML(currentYear(),ytdSplit)}<section class="panel"><h2>Quick actions</h2><div class="toolbar"><button data-action="add-shift">Add shift</button><button class="secondary" data-action="export-shifts">Export shifts</button><button class="secondary" data-action="backup">Back up data</button><button class="secondary" data-action="ask-assistant">Ask Assistant</button></div><p class="hint">${cloudModeHint()} Export backups regularly.</p></section>${shiftFormOverlayHTML()}${paycheckOverlayHTML()}${shiftDeleteOverlayHTML()}${proposedEmailSheetHTML()}`}
 // The shift editor opens as a sheet over the page (Nov 7, 2026 overlay
 // model), stacked over the day sheet when one is open; Cancel or a
 // backdrop tap closes it back to the day sheet.
@@ -7137,6 +7397,10 @@ function licenseStripFacts(x) {
   if (x.number) f.push(String(x.number));
   if (x.status) f.push(String(x.status));
   if (x.expiry) f.push('Expires ' + fmt(x.expiry));
+  // v150: the state's CE requirement for this license (+ tracked
+  // progress) rides the same strip — one component, both surfaces
+  // (state rows and the manual-entry list).
+  try { const ce = licenseCeText(x); if (ce) f.push(ce); } catch (e) {}
   return f;
 }
 function docStripFacts(x) {
@@ -7341,7 +7605,7 @@ function stateLicensesCardHTML() {
     ? `<div class="item"><p><strong>Add a state</strong></p><div class="form-grid"><div class="field"><label for="licStatePicker">State</label><select id="licStatePicker" name="licState">${avail.map(s => `<option value="${escapeHTML(s)}">${escapeHTML(s)}</option>`).join('')}</select></div></div><div class="toolbar"><button type="button" data-action="portal-state-add">Add state</button></div></div>`
     : '<p class="muted">All 50 states + DC are on your list.</p>';
   const backup = `<details><summary class="muted">Or add it another way</summary><p class="muted">The backups, for when a read can’t run: a guided check — you show the assistant the record page and approve a preview before anything saves — the official manual lookup, or typing it in yourself. Manual entry is at the bottom of this page; records saved there are user-entered, not verified.</p><div class="toolbar">${anyOpened ? `<button type="button" data-action="portal-return" data-id="licenses">I’m back — run my check</button>` : ''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="State Licenses">I signed in — check it</button></div>${PORTAL_LOOKUP_LINKS}</details>`;
-  return collapsePanelHTML('credentials-licenses-panel', summary ? 'State Licenses · ' + summary : 'State Licenses', `<p class="muted">State boards of nursing — RN and APRN licenses. Each state has its own board portal: pick your state below, then Connect opens that board.</p><p class="muted">${licManual}</p>${rows}${picker}${backup}`, open);
+  return collapsePanelHTML('credentials-licenses-panel', summary ? 'State Licenses · ' + summary : 'State Licenses', `<p class="muted">State boards of nursing — RN and APRN licenses. Each state has its own board portal: pick your state below, then Connect opens that board.</p><p class="muted">${licManual}</p>${rows}${picker}${backup}<details><summary class="muted">About the CE requirements shown</summary><p class="muted">Requirements from each state board's published rules, checked Nov 2026. Your board is the final word.</p></details>`, open);
 }
 
 function credentialsPage(){
@@ -9652,6 +9916,7 @@ if(['shifts','licenses','nbcrnaCE','aanaCE','credentials','vehicles'].includes(k
   }
   pendingManualShift=null;
 }
+if(kind==='nbcrnaCE'||kind==='aanaCE'){const tw=String(record.countsToward||'');const ix=tw.indexOf('|');record.licState=ix>=0?tw.slice(0,ix):'';record.licType=ix>=0?tw.slice(ix+1):'';record.category=String(record.category||'General');delete record.countsToward;}
 const shiftSaveIsEdit=kind==='shifts'&&!!editId;let savedId=editId;if(editId){const i=db[kind].findIndex(x=>x.id===editId);if(i>=0)db[kind][i]={...db[kind][i],...record};else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}}else{const rec={...record,id:id(),...(kind==='shifts'?{source:'user-entered'}:{})};if(kind==='shifts'){savedId=addShiftDeduped(rec).shift.id}else{db[kind].push(rec);savedId=rec.id}}editId=null;if(kind==='shifts')showShiftForm=false;
 // Close-and-return (v137, widened v140): a shift ADD lands on
 // the calendar showing the saved day, flashed — the form closing
@@ -9663,7 +9928,7 @@ const shiftSaveIsEdit=kind==='shifts'&&!!editId;let savedId=editId;if(editId){co
 // is unchanged. The double-booking path returned earlier, so
 // it still wins.
 let navShiftDay='';if(kind==='shifts'&&(!shiftSaveIsEdit||shiftFormOrigin!=='daysheet')){const sv=(db.shifts||[]).find(s=>s.id===savedId);if(sv){tab='Dashboard';returnToCalendarDay(sv.date);navShiftDay=sv.date}}if(kind==='mileage'){mileageFormDraft=null;mileageDraftHold=true;mileageCalcStatus=''}persist();if(kind==='vehicles'){const savedV=(db.vehicles||[]).find(v=>v.id===savedId);if(savedV&&savedV.isDefault){let clearedV=false;(db.vehicles||[]).forEach(v=>{if(v.id!==savedId&&v.isDefault){v.isDefault=false;clearedV=true;cloudSaveKind('vehicles',v.id)}});if(clearedV)persist();}}let repriced=0;let priceFix={priced:0,updated:0};if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved&&String(saved.geocodedAddress||'').trim()&&String(saved.geocodedAddress||'').trim()!==String(saved.address||'').trim()){saved.lat='';saved.lng='';saved.geocodedAddress='';if(saved.distanceSource==='auto'){saved.distance='';saved.distanceSource=''}persist();}if(saved){priceFix=repairShiftPaysForFacility(saved);repriced=priceFix.priced+priceFix.updated;if(repriced>0)persist();}}if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(savedId);
-if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(kind==='facilities'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(['licenses','nbcrnaCE','aanaCE','shifts','facilities','mileage','payStubs','vehicles'].includes(kind))cloudSaveKind(kind,savedId);if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved){const sgRec=(db.facilitySuggestions||[]).find(x=>normFacilityName(x.name)===normFacilityName(saved.name));const sgProvider=(sgRec&&sgRec.provider)||suggestionBornProviders[saved.id]||'';const hadSuggestion=clearFacilitySuggestion(saved.name);if(hadSuggestion||suggestionBornProviders[saved.id]){delete suggestionBornProviders[saved.id];if(typeof window!=='undefined'&&typeof window.liveSyncRescanAfterFacilitySave==='function')window.liveSyncRescanAfterFacilitySave(sgProvider||'apple',saved.name);}if(facilitySuggestionPrefill&&normFacilityName(facilitySuggestionPrefill.name)===normFacilityName(saved.name))facilitySuggestionPrefill=null;
+if(kind==='shifts'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(kind==='facilities'&&typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();if(['licenses','nbcrnaCE','aanaCE','shifts','facilities','mileage','payStubs','vehicles'].includes(kind))cloudSaveKind(kind,savedId);if(kind==='nbcrnaCE'||kind==='aanaCE'){try{ceAssignRebuild();persist();}catch(e){}try{pushWatchRefreshCE();}catch(e){}}if(kind==='licenses'){try{pushWatchRefreshCE();}catch(e){}}if(kind==='facilities'){const saved=(db.facilities||[]).find(x=>x.id===savedId);if(saved){const sgRec=(db.facilitySuggestions||[]).find(x=>normFacilityName(x.name)===normFacilityName(saved.name));const sgProvider=(sgRec&&sgRec.provider)||suggestionBornProviders[saved.id]||'';const hadSuggestion=clearFacilitySuggestion(saved.name);if(hadSuggestion||suggestionBornProviders[saved.id]){delete suggestionBornProviders[saved.id];if(typeof window!=='undefined'&&typeof window.liveSyncRescanAfterFacilitySave==='function')window.liveSyncRescanAfterFacilitySave(sgProvider||'apple',saved.name);}if(facilitySuggestionPrefill&&normFacilityName(facilitySuggestionPrefill.name)===normFacilityName(saved.name))facilitySuggestionPrefill=null;
   // Bug 2: a suggestion cleared by adding the facility means held
   // shifts exist for it. If the last import also skipped shifts as
   // legacy (paired by an earlier interrupted sync, migration 005 not
@@ -9712,7 +9977,7 @@ if(action==='close-day'){dayViewOpen=false;if(paycheckEdit&&paycheckEdit.from===
   if(action==='delete-shifts'){const x=(db.shifts||[]).find(s=>s.id===entry);if(!x)return;shiftDeleteConfirm={id:entry,also:!!(db.settings&&db.settings.deleteAlsoFromCalendar)};render();return}
   if(action==='shift-delete-cancel'){shiftDeleteConfirm=null;render();return}
   if(action==='shift-delete-confirm'){return confirmShiftDelete(entry)}
-  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',vehicles:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts'){shiftFormOrigin=dayViewOpen?'daysheet':'standalone';showShiftForm=true}render();if(kind==='facilities')facilityScrollTo('facility-manual-panel');else if(kind==='vehicles'){const vel=document.getElementById('vehicles-panel');if(vel&&vel.scrollIntoView)vel.scrollIntoView({block:'start'})}else if(kind==='mileage'){const mel=document.getElementById('mileage-log-panel');if(mel&&mel.scrollIntoView)mel.scrollIntoView({block:'start'})}else if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='vehicles-goto'){tab='Mileage';editId=null;render();facilityScrollTo('vehicles-panel');return}if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-fix-facility')return mileageReviewFixAddress('facility',entry);if(action==='mileage-review-fix-home')return mileageReviewFixAddress('home','');if(action==='mileage-review-link-facility')return linkMileageFacility(entry,date);if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-vehicle-apply'){const wk=selectedMileageReviewWeek();const selEl=$('mileageReviewVehicleSelect');const vid=(selEl&&selEl.value)||mileageReviewVehicleForWeek(wk);applyMileageReviewEdits(wk);if(vid){mileageReviewVehicleWeek=wk;mileageReviewVehicleId=vid;stampWeekVehicle(wk,vid)}persist();return render()}
+  if(action.startsWith('edit-')){facilitySuggestionPrefill=null;const kind=action.slice(5);tab=({shifts:'Dashboard',facilities:'Facilities',credentials:'Credentials',mileage:'Mileage',hotelStays:'Mileage',vehicles:'Mileage',licenses:'Credentials',nbcrnaCE:'Credentials',aanaCE:'Credentials',documents:'Credentials'})[kind]||'Dashboard';if(['nbcrna','aana','licenses','credentials','nbcrnaCE','aanaCE'].includes(kind))manualType=({nbcrna:'NBCRNA',aana:'AANA',licenses:'State license',credentials:'Other credential',nbcrnaCE:'NBCRNA CE',aanaCE:'AANA CE'})[kind];editId=entry;if(kind==='shifts'){shiftFormOrigin=dayViewOpen?'daysheet':'standalone';showShiftForm=true}render();if(kind==='facilities')facilityScrollTo('facility-manual-panel');else if(kind==='vehicles'){const vel=document.getElementById('vehicles-panel');if(vel&&vel.scrollIntoView)vel.scrollIntoView({block:'start'})}else if(kind==='mileage'){const mel=document.getElementById('mileage-log-panel');if(mel&&mel.scrollIntoView)mel.scrollIntoView({block:'start'})}else if(kind!=='shifts')window.scrollTo(0,0);return}if(action.startsWith('delete-')){const kind=action.slice(7);if(!confirm(kind==='shifts'?'Delete this shift? It is removed from CRNA Hub right away. A shift imported from your calendar is not deleted from that calendar.':'Delete this record?'))return;if(kind==='shifts'){const gone=(db.shifts||[]).find(x=>x.id===entry);if(typeof window!=='undefined'&&typeof window.liveSyncRecordTombstone==='function')window.liveSyncRecordTombstone(entry);if(gone&&Array.isArray(db.mileage))db.mileage=db.mileage.filter(m=>!(m.status==='draft'&&mileageTripMatchesShift(m,gone)));}db[kind]=db[kind].filter(x=>x.id!==entry);persist();if(kind==='nbcrnaCE'||kind==='aanaCE'){try{ceAssignRebuild();persist();}catch(e){}}if(kind==='licenses'||kind==='nbcrnaCE'||kind==='aanaCE'){try{pushWatchRefreshCE();}catch(e){}}if(['licenses','nbcrnaCE','aanaCE'].includes(kind))cloudDeleteKind(kind,entry);if(kind==='documents')cloudDeleteDocument(entry);cloudRecordTombstone(kind,entry);return render()}if(action==='download-doc'){downloadDocument(entry);return;}if(action==='mileage-drafts')return makeMileageDrafts();if(action==='vehicles-goto'){tab='Mileage';editId=null;render();facilityScrollTo('vehicles-panel');return}if(action==='mileage-review-goto'){mileageReviewWeek=entry||'';tab='Mileage';editId=null;render();window.scrollTo(0,0);return}if(action==='mileage-review-prev')return mileageReviewStep(1);if(action==='mileage-review-next')return mileageReviewStep(-1);if(action==='mileage-review-generate')return generateWeeklyMileageDrafts(selectedMileageReviewWeek());if(action==='mileage-review-fix-facility')return mileageReviewFixAddress('facility',entry);if(action==='mileage-review-fix-home')return mileageReviewFixAddress('home','');if(action==='mileage-review-link-facility')return linkMileageFacility(entry,date);if(action==='mileage-review-confirm')return confirmWeeklyMileage(selectedMileageReviewWeek());if(action==='mileage-review-vehicle-apply'){const wk=selectedMileageReviewWeek();const selEl=$('mileageReviewVehicleSelect');const vid=(selEl&&selEl.value)||mileageReviewVehicleForWeek(wk);applyMileageReviewEdits(wk);if(vid){mileageReviewVehicleWeek=wk;mileageReviewVehicleId=vid;stampWeekVehicle(wk,vid)}persist();return render()}
 if(action==='mileage-review-save'){applyMileageReviewEdits(selectedMileageReviewWeek());persist();return render()}if(action==='mileage-review-skip'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='skipped';persist()}return render()}if(action==='mileage-review-restore'){const m=(db.mileage||[]).find(x=>x.id===entry);if(m){m.status='draft';persist()}return render()}if(action==='mileage-clear-backlog'){const n=clearMileageBacklog();mileageClearStatus=n>0?('Cleared '+n+' older trip'+(n===1?'':'s')+' \u2014 they won\u2019t count toward mileage.'):'';return render()}if(action==='cloud-show-create'){cloudAuthMode='create';return render()}if(action==='cloud-show-signin'){cloudAuthMode='signin';return render()}if(action==='cloud-signup'){const em=$('f_email'),pw=$('f_password'),sn=$('f_scheduleName'),et=$('f_employmentType'),gl=$('f_incomeGoalStep1');if(!em||!pw||!em.value.trim()||!pw.value)return alert('Enter an email and password first.');cloudSignUp(em.value.trim(),pw.value,sn?String(sn.value||'').trim():'',et?String(et.value||'').trim():'',gl&&String(gl.value||'').trim()!==''?num(gl.value):undefined);return}
 if(action==='skip-income-goal'){const gl=$('f_incomeGoalStep1');if(gl)gl.value='';cloudAuthStatus='No income goal set — you can set it later on the Account tab (Profile — step 1).';return render()}
 if(action==='save-profile'){const nm=$('f_profileName'),et=$('f_profileEmploymentType'),gl=$('f_profileIncomeGoal');applyProfileValues({name:nm?String(nm.value||'').trim():'',employmentType:et?String(et.value||'').trim():'',monthlyIncomeGoal:gl&&String(gl.value||'').trim()!==''?num(gl.value):0});cloudSaveProfile();profileEditing=false;return render()}
@@ -11387,7 +11652,9 @@ function cloudApplyData(data) { cloudPortals = data.portals || []; // v147: a st
   { const boardStates = (data.portals || []).filter(r => r && r.portal === 'state_board' && r.state).map(r => stateNameOf(r.state)).filter(Boolean); if (boardStates.length) { db.settings = (db.settings && typeof db.settings === 'object') ? db.settings : {}; const cur = Array.isArray(db.settings.licStates) ? db.settings.licStates.slice() : []; let grew = false; boardStates.forEach(s => { if (!cur.includes(s)) { cur.push(s); grew = true; } }); if (grew) db.settings.licStates = cur; } }
   if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', classA: r.ce_class_a === null || r.ce_class_a === undefined ? '' : String(r.ce_class_a), classB: r.ce_class_b === null || r.ce_class_b === undefined ? '' : String(r.ce_class_b), source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); try { healLicensePortalUrls(); } catch (e) {} if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
-cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
+try { ceAssignAttach(); } catch (e) {}
+  try { pushWatchRefreshCE(); } catch (e) {}
+  cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }, (shellId, twin) => { cloudRecordTombstone('facilities', shellId); if (twin && twin.id) { try { cloudSaveKind('facilities', twin.id); } catch (e) {} } }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
 async function cloudAfterSignIn() { cloudAuthResetForm(); await cloudAutoMerge(); render(); setTab('Account'); monitorBackgroundSweep(); qgendaBootCheck(); icsBootCheck(); pushWatchSyncHealth(); }
 async function submitCloudAuth(e) { e.preventDefault(); const fd = new FormData(e.currentTarget); const email = String(fd.get('email') || '').trim(), password = String(fd.get('password') || ''); const sn = String(fd.get('scheduleName') || '').trim(); const et = String(fd.get('employmentType') || '').trim(); const goalRaw = String(fd.get('incomeGoalStep1') || '').trim(); if (cloudAuthMode === 'create') { // The create form's submit IS the old Create account button: same

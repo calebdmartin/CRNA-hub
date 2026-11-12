@@ -184,8 +184,14 @@ export function evaluateUser(input) {
     // State licenses: the app holds no per-license CE linkage, so the
     // honest signal is "renewal is near and we have no CE records on
     // file at all" — never a claimed deficiency.
+    // v150: licenses the app mirrors CE progress for
+    // (settings.watch.ceLicenses) are handled by the per-license block
+    // (g) below — never double-alert for the same license here.
+    const ceMirrorKeys = new Set((((settings.watch || {}).ceLicenses) || []).map((e) => String((e && e.key) || "")));
     if (!input.ceRecordCount) {
       for (const lic of rows.licenses || []) {
+        const licKey = (String(lic.state || "").trim().toUpperCase() + "|" + String(lic.license_type || "").trim().toUpperCase());
+        if (ceMirrorKeys.has(licKey)) continue;
         const days = daysUntilISO(lic.expiration_date, todayStr);
         if (days === null || days > 90 || days < 0) continue;
         const label = ((lic.state || "License") + " " +
@@ -262,6 +268,56 @@ export function evaluateUser(input) {
         "so your shifts keep flowing both ways.",
       url: "?go=account",
     });
+  }
+
+  // (g) v150 — per-license state CE progress, mirrored by the app in
+  // settings.watch.ceLicenses (built from the state requirements table
+  // + the CE records the user assigned to each license). Hours-rule
+  // licenses only: conflict / no-CE / competency-model licenses arrive
+  // flagged `excluded` and are never alerted. Tracked-but-short fires
+  // once per reminder window (90/60/30/7) with the numbers; nothing
+  // tracked fires once, at the 90-day window only; fully met is silent.
+  if (types.ce && Array.isArray(watch.ceLicenses)) {
+    for (const e of watch.ceLicenses) {
+      if (!e || e.excluded || !e.label || !e.expiry) continue;
+      const days = daysUntilISO(e.expiry, todayStr);
+      if (days === null || days < 0) continue;
+      const th = thresholdFor(days);
+      if (th === null) continue;
+      if (!e.tracked) {
+        if (th !== 90) continue;
+        due({
+          triggerKey: "ce|license-hours|" + e.label + "|" + e.expiry +
+            "|untracked",
+          type: "ce",
+          title: e.label + " — CE not tracked yet",
+          body: e.label + " renews " + fmtDateLong(e.expiry) +
+            " and needs " + e.total + " CE hours, but no courses are " +
+            "counted toward it in the app yet — add them so we can " +
+            "watch the hours for you.",
+          url: "?go=credentials",
+        });
+        continue;
+      }
+      const shortSubs = (e.tracked.subs || [])
+        .filter((s) => Number(s.have || 0) < Number(s.need || 0));
+      const shortTotal = Number(e.tracked.total || 0) < Number(e.total || 0);
+      if (!shortTotal && !shortSubs.length) continue;
+      const parts = ["CE on file: " + Number(e.tracked.total || 0) +
+        " of " + e.total + " hrs"];
+      for (const s of shortSubs) {
+        parts.push(s.label + " " + Number(s.have || 0) + " of " + s.need);
+      }
+      due({
+        triggerKey: "ce|license-hours|" + e.label + "|" + e.expiry +
+          "|" + th,
+        type: "ce",
+        title: e.label + " CE behind",
+        body: e.label + " renews " + fmtDateLong(e.expiry) + ". " +
+          parts.join(" · ") + ".",
+        url: "?go=credentials",
+      });
+    }
   }
 
   return out;
