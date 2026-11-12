@@ -1558,6 +1558,12 @@ function monthHeadline(prefix){
   for(const x of (db.shifts||[])){
     if(!x||!String(x.date||'').startsWith(prefix))continue;
     if(scheduled&&covering.has(claims.get(x.id)))continue;
+    // v139 (sim-pass FB1): a W-2 salary day (Off / PTO) is
+    // excluded from EVERY income total — the month/year splits,
+    // paystub totals and facility YTD all skip it, and the
+    // banner must agree. It still counts in the split's
+    // w2Salary bucket, never in a money figure.
+    if(isW2SalaryShift(x))continue;
     worked+=effectiveShiftPay(x);workedShifts++;
   }
   paycheckTotal=Math.round(paycheckTotal*100)/100;
@@ -4812,12 +4818,36 @@ function describeParseLocal(text,fac,codes){
     // must not continue it ("5*" must not match inside "5**").
     let stmtLabel='',stmtHours=null;
     if(codeStr){
-      const idx=low.indexOf(' '+codeStr)>=0?low.indexOf(' '+codeStr)+1:(low.startsWith(codeStr)?0:-1);
+      let idx=low.indexOf(' '+codeStr)>=0?low.indexOf(' '+codeStr)+1:(low.startsWith(codeStr)?0:-1);
+      // A code whose only mention opens a line ("…$210/hr\nD6 =
+      // a 6-hour shift", v139, sim-pass FB2a): the space-boundary
+      // search above never sees it, so no statement segment was
+      // extracted for the code at all and its stated length had
+      // no path into the definition. Fallback only — a mention
+      // the existing search already finds keeps its segment.
+      if(idx<0){for(let i=low.indexOf(codeStr,1);i>=0;i=low.indexOf(codeStr,i+1)){if(/\s/.test(low.charAt(i-1))&&!/[a-z0-9*]/.test(low.charAt(i+codeStr.length))){idx=i;break}}}
       if(idx>=0&&!/[a-z0-9*]/.test(low.charAt(idx+codeStr.length))){
         const seg=t.slice(Math.max(0,idx-1),Math.max(0,idx-1)+140).split(/[.;\n]/)[0],segLow=seg.toLowerCase();
         const lm=seg.match(/(?:is|means|called)\s+(?:an?\s+|the\s+)?([A-Za-z][A-Za-z0-9 /-]{2,40})/);
         if(lm)stmtLabel=lm[1].trim().replace(/\s+/g,' ').replace(/[\s-]+$/,'').replace(/^(?:a|an|the)\s+/i,'');
+        // A "same as" statement names ANOTHER code, not this
+        // code's type (v139, sim-pass FB2b): the block layer
+        // has already resolved the reference into this code's
+        // phrase, and letting the raw words stand as the
+        // label erased that resolved type, dropping the code
+        // back to unanswered.
+        if(/^same as\b/i.test(stmtLabel))stmtLabel='';
         const hm=segLow.match(/(\d+(?:\.\d+)?)\s+hours?\b/);if(hm)stmtHours=Number(hm[1]);
+        // The hyphenated length in the code's own statement
+        // ("D6 = a 6-hour shift", v139, sim-pass FB2a): the
+        // space form above cannot see "6-hour", and for a
+        // length canonicalTypeOf does not map (anything but
+        // 8/10/12/24) no type label can supply the hours
+        // either — the user's stated length was lost outright
+        // and the code read back "still don't know" from its
+        // own sentence. Tried only when the space form found
+        // nothing, so every existing reading keeps its figure.
+        if(stmtHours==null){const hmH=segLow.match(/(\d+(?:\.\d+)?)\s*-\s*hours?\b/);if(hmH)stmtHours=Number(hmH[1])}
       }
     }
     // The user's own statement ABOUT this code (found by the
@@ -5733,6 +5763,23 @@ async function describeReadWithAI(text,ctx,local,status){
 async function submitDescribe(key){
   const st=describeState(key);if(!st||st.busy)return;
   const ctx=st.ctx||{};
+  // The submit must not depend on a render having populated
+  // st.ctx (v139, sim-pass FB2b): describeRulesHTML is the
+  // only writer of ctx, as a side effect of painting the
+  // panel — a state that reaches submit without that render
+  // (restored state, a surface that never painted the box)
+  // parsed with NO facility and NO code universe, so the
+  // per-code reader never ran and definitions the parser
+  // produces from the same words on a painted surface (a
+  // 24-hour call code, a "same as" code) silently fell into
+  // "still don't know" while the read-back showed no sign
+  // anything was missing. Resolve the facility and its code
+  // universe from the key itself, exactly as the panel's
+  // render would have supplied them.
+  if(!ctx.fac&&(key.indexOf('fac:')===0||key.indexOf('dash:')===0)){
+    const facForCtx=(db.facilities||[]).find(x=>key==='dash:'+x.id||key==='fac:'+x.id);
+    if(facForCtx){ctx.fac=facForCtx;if(!ctx.facName)ctx.facName=facForCtx.name;if(!ctx.codes||!ctx.codes.length)ctx.codes=facilityDescribeCodes(facForCtx)}
+  }
   const text=String(st.text||'').trim();
   if(!text){st.error='Type the pay rules first — nothing was sent.';render();return}
   st.busy=true;st.error='';render();
@@ -5756,7 +5803,14 @@ async function submitDescribe(key){
     // read, and the read-back says so on its face. The Nov
     // 11 CAMC failure shipped exactly this state with no
     // marker, indistinguishable from a full AI read.
-    else if(aiStatus)parsed.aiBasic=true;
+    // v139 (sim-pass FB2b): the same honesty is owed when
+    // the AI read never ran at all because there is no cloud
+    // session (signed out / expired) — the parse is still
+    // the basic read, and presenting it unmarked repeats
+    // the silent demotion in a second shape. A build with
+    // no Supabase configured has no AI reader to miss, so
+    // its only read needs no label.
+    else if(aiStatus||(typeof SUPABASE_CONFIGURED!=='undefined'&&SUPABASE_CONFIGURED))parsed.aiBasic=true;
     // FALLBACK ONLY (pre-v133 path, kept verbatim): the old
     // single-rule AI read merges over the deterministic parse.
     // Runs only when the AI-primary read above produced nothing

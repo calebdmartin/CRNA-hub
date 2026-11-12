@@ -258,6 +258,65 @@ function checkFixture(tag, merged) {
     h3.defs['HOLZ - PCDO'] && h3.defs['HOLZ - PCDO'].unpaid === true,
     J({ r: h3.rates, u: h3.unanswered, pcdo: h3.defs['HOLZ - PCDO'] }));
 
+  // ---------- (j) grid-context words, BASIC path (promoted FB2) ----------
+  // Promoted from test-sim-found-bugs.js (fixed in v139, found
+  // by sim persona P3). A grid import hands the words reader
+  // shift-only code entries ({code, ctype:'', hours:''}); with
+  // no AI read, Dana's words lost three codes three ways:
+  // (a) "D6 = a 6-hour shift" — a length canonicalTypeOf does
+  //     not map, stated hyphenated at a line start: invisible
+  //     to the hours matcher AND to the segment finder;
+  // (b) at submit, C24 (24-hour call) and E8X (same-as) —
+  //     submitDescribe trusted a render side effect for its
+  //     context and parsed with no facility / no code
+  //     universe, so the per-code reader never ran; the
+  //     result also carried no aiBasic marker;
+  // (c) the saved D6 definition died on its own prefill
+  //     round trip for the same parser reason as (a).
+  const GRID_CTX_J = ['D6', 'E8', 'E8X', 'C24', 'N12'].map(code => ({ code, ctype: '', hours: '', shiftOnly: true }));
+  const WORDS_J = [
+    'Day shifts pay $210/hr',
+    'D6 = a 6-hour shift',
+    'E8 is an 8-hour shift',
+    'N12 is a 12-hour night shift',
+    'C24 = 24-hour call. It pays $5,250 on weekdays and $4,725 on weekends',
+    'E8X is the same as E8',
+    'Weekends here are Friday, Saturday and Sunday',
+  ].join('\n');
+  const pj = run(`describeParseLocal(${J(WORDS_J)}, {}, ${J(GRID_CTX_J)})`);
+  t('J grid words (basic): a 6-hour code binds from its own sentence ("D6 = a 6-hour shift")',
+    !!(pj.defs && pj.defs['D6'] && String(pj.defs['D6'].hours) === '6'),
+    J({ defs: Object.keys(pj.defs || {}), unanswered: pj.unanswered }));
+  run(`
+    db = empty(); db.settings.scheduleName = 'Whitfield';
+    db.facilities = [{ id:'hw', name:'Harborview Medical Center', aliases:'Harborview Medical Center, HMC', hourlyRate:'' }];
+    db.shifts = ['D6','E8','E8X','C24','N12'].map((c, i) => ({ id:'s' + i, date:'2027-06-0' + (i + 1), facility:'Harborview Medical Center', code:c, type:c, pay:'', status:'confirmed', incomplete:true, source:'schedule-import-ai' }));
+    db.payStubs = []; persist();
+    cloudSession = null; describeStates = {}; describeOpenFac = 'hw';
+    { const st = describeState('fac:hw'); st.text = ${J(WORDS_J)}; }
+  `);
+  await run(`submitDescribe('fac:hw')`);
+  const subJ = run(`describeState('fac:hw').parsed`);
+  t('J grid words (basic submit): the definitions the local parser produced survive the submit (C24 + E8X)',
+    !!(subJ && subJ.defs && subJ.defs['C24'] && subJ.defs['E8X']),
+    J({ defs: Object.keys((subJ && subJ.defs) || {}), unanswered: subJ && subJ.unanswered }));
+  t('J grid words (basic submit): no AI answered, so the read is marked basic (aiBasic)',
+    !!(subJ && subJ.aiBasic === true), J(subJ && subJ.aiBasic));
+  run(`
+    db = empty();
+    db.facilities = [{ id:'hw', name:'Harborview Medical Center', aliases:'', hourlyRate:'210',
+      codeMap: { 'D6': { label:'a 6-hour shift', hours:'6', viaWords:true, rulesConfirmed:true } } }];
+    db.shifts = [{ id:'d1', date:'2027-06-01', facility:'Harborview Medical Center', code:'D6', type:'D6', pay:'1260', status:'confirmed', incomplete:false, source:'schedule-import-ai' }];
+    persist();
+  `);
+  const rtJ = run(`(function(){ const A = db.facilities[0]; const B = JSON.parse(JSON.stringify(A)); B.id = 'hw2'; B.codeMap = {}; db.facilities = [B];
+    const text = describePrefillText(A, facilityDescribeCodes(A));
+    const parsed = describeParseLocal(text, B, facilityDescribeCodes(B)); applyDescribedRules(B, parsed);
+    return { def: (facilityCodeDefs(B) || {})['D6'] || null, text }; })()`);
+  t('J grid words (round trip): the saved 6-hour definition re-reads from its own prefill sentence',
+    !!rtJ.def && String(rtJ.def.hours) === '6',
+    J(rtJ));
+
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   if (fail) { console.log('FAILURES: ' + fails.join(' | ')); process.exit(1); }
   console.log('ALL PASS');
