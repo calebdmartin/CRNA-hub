@@ -164,8 +164,14 @@ t('step 3 manual panel: collapsed, one friendly line inside',
 t('step 3 pay stub panel: one line, stub-never-stored kept, disclaimer out of the main flow',
   fac.includes('never stored') && !fac.includes('Two agencies paying the same day') &&
   !fac.includes('CRNA Hub is not liable for mistakes'));
+// Pin updated Nov 12, 2026 (v141): Caleb replaced the cert panel's one
+// line with his own description ("Upload a picture of your certification
+// card and we’ll save the issue date and expiration date and create a
+// reminder for renewal.") and removed the storage/README scaffolding
+// paragraph; the essay-absence assertions are unchanged.
 t('step 5 cert panel: one line instead of the how-it-works essay',
-  cred.includes('Upload a cert and we’ll read its expiration date') &&
+  cred.includes('Upload a picture of your certification card and we’ll save the issue date and expiration date and create a reminder for renewal.') &&
+  !cred.includes('Supabase Storage folder') && !cred.includes('migration 002') &&
   !cred.includes('Tesseract.js') && !cred.includes('taken as the last day of that month'));
 t('step 4 cards: essays + ALL scaffolding gone (final-design status, stand-in label); status kept',
   !cred.includes('What the check covers') && !cred.includes('will not load here') &&
