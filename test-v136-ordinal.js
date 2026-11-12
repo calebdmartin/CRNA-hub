@@ -144,6 +144,6 @@ t('bareOrdinalCallKind reads every ordinal spelling',
 t('non-ordinals bind nothing', run(`bareOrdinalCallKind('8')`) === null && run(`bareOrdinalCallKind('call')`) === null && run(`bareOrdinalCallKind('1st week')`) === null);
 t('binding resolves to the saved Call 1 definition',
   run(`(function(){ const b = ordinalCallBinding(facilityByNameOrAlias('HOLZ'), '1st'); return b && b.code === 'Holz-call 1' && b.type === '24-hour call'; })()`) === true);
-t('sw: cache bumped to v136', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v148'));
+t('sw: cache bumped to v136', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v149'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

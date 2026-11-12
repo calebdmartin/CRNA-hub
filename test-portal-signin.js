@@ -297,7 +297,14 @@ t('a thin page leaves unread fields blank (missing listed, never invented)',
     recordMonitorCheck('nbcrna','blocked','NBCRNA agent read could not run: the portal refused the read (captcha)','agent_read');
     globalThis.__blocked = (db.portalMonitoring.find(m => m.key === 'nbcrna') || {}).lastOutcome;
     globalThis.__blockedLabel = monitorOutcomeLabel('blocked');
+    // v149: due-ness now also reads the verified-read evidence (the
+    // cards' source) — a source with a fresh verified read is NOT due
+    // even when its legacy entry was never stamped. This pin is about
+    // a monitor with NO check evidence at all, so the verified stamp
+    // from §7's read is cleared to restore that premise.
+    const savedNbcrnaSync = cloudSyncTimes.nbcrna; cloudSyncTimes.nbcrna = '';
     globalThis.__dueNew = monitorIsDue({key:'nbcrna',source:'nbcrna',enabled:true,lastChecked:''}, localDate(new Date()));
+    cloudSyncTimes.nbcrna = savedNbcrnaSync;
     globalThis.__monHtml = portalMonitoringHTML();
   `);
   t('monitoring cadence: weekly far out, 3 days inside 90, 2 inside 30, daily inside 7 / expired',

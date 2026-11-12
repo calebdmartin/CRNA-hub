@@ -90,7 +90,11 @@ t('Connect is a real <a href target="_blank"> for every portal (browser-native n
   ['nbcrna', 'aana', 'licenses'].every((k) => A.__cred.includes('data-portal-connect="' + k + '"')) &&
   A.__cred.includes('href="https://portal.nbcrna.com/" target="_blank"') &&
   A.__cred.includes('data-portal-state="West Virginia"') &&
-  A.__cred.includes('href="https://wvrn.boardsofnursing.org/licenselookup" target="_blank"') &&
+  // v149: the WV Connect anchor now targets the audited SIGN-IN page
+  // (Caleb: the v147 table opened the public lookup, not the sign-in).
+  // The lookup URL still appears lower on the card, inside the
+  // explicitly-labelled PORTAL_LOOKUP_LINKS backup — not on Connect.
+  A.__cred.includes('href="https://wvrn.boardsofnursing.org/wvrn/" target="_blank"') &&
   A.__cred.includes('Connect NBCRNA — open portal'));
 t('no script-redirect Connect button remains',
   !A.__cred.includes('data-action="connect-portal"'));

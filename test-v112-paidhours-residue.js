@@ -231,5 +231,5 @@ const moneyPins = (label) => {
     J({ def: run(`db.facilities[0].codeMap['RGH - Ten']`), pay: run(`db.shifts.find(x=>x.id==='rgh1').pay`) }));
 }
 
-t('sw: cache bumped to v112', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v148'));
+t('sw: cache bumped to v112', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v149'));
 console.log(fails ? ('FAILURES: ' + fails) : 'ALL PASS');

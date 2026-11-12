@@ -2146,7 +2146,7 @@ function answerQuestion(raw){
   if(/this year|year.*(income|gross|earn|pay)|income.*year|annual (income|gross|pay)|how much.*year/.test(l)){const y=currentYear(),cur=shiftsForYear(y);if(!cur.length)return `No shifts are recorded for ${y} yet, so I can't project this year's income. Add shifts or import a CSV, and this answer will use them.`;const split=yearIncomeSplit(y);return `Income for ${y}, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(split.c.ytd)} year to date and ${currency(split.c.predicted)} predicted annual; P (proposed-inclusive — C plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date and ${currency(split.p.predicted)} predicted annual. None of these is paid income — they are estimates from scheduled shifts. Shifts from other years are not included.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in either total.`:''}${split.w2Salary?` ${split.w2Salary} W-2 salary day(s) are excluded — paid through W-2 salary, never double-counted.`:''}`}
   if(/income|projected|earn|gross|pay.*month|this month/.test(l)){const cur=assistantMonthShifts();if(!cur.length)return 'No shifts are recorded for this month, so I can\'t project income yet. Add shifts or import a CSV, and this answer will use them.';const prefix=localDate(new Date()).slice(0,7);const m=monthIncomeSplit(prefix);const head=monthHeadline(prefix);const by={};cur.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).forEach(x=>{by[x.facility||'Unknown']=(by[x.facility||'Unknown']||0)+num(x.pay)});const byFac=`By facility (confirmed only): ${Object.keys(by).length?Object.entries(by).map(([f,v])=>`${f} ${currency(v)}`).join('; '):'no confirmed shifts yet'}`;const unpricedNote=m.unpriced?` ${m.unpriced} shift(s) this month are unpriced and are not included in any total.`:'';if(head.scheduled)return `Expected gross this month: ${currency(head.gross)} — the Dashboard headline, on the paycheck basis: the paychecks landing this month${head.anyActual?', including the actual amount from your pay stub':''}${head.partial?`, plus ${currency(head.worked)} from shifts not on a pay schedule`:''}. The shifts themselves split C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}.${unpricedNote}`;return `Projected income this month, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}. None of these is paid income.${unpricedNote}`}
   if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: on the Credentials tab, tap Connect on the portal’s card, sign in on the portal’s own page, then come back and tap “I’m signed in — read it now” — we read it from your signed-in session, and nothing is saved until you approve it.';
-  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — one with a live session queues its read on its own; if a session has expired, its prompt on the Credentials tab is the one sign-in tap.`:''} Checks are agent reads: an assistant reads each portal in a real browser session you signed in to yourself — never a silent server pull — and prompts you, once per cycle, when a read needs your sign-in.`;}
+  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>{const disp=monitorDisplay(m);return `${m.label}: last checked ${disp.lastChecked?String(disp.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${disp.outcomeText}`}).join('; ')}.${due.length?` ${due.length} check(s) are due — one with a live session queues its read on its own; if a session has expired, its prompt on the Credentials tab is the one sign-in tap.`:''} Checks are agent reads: an assistant reads each portal in a real browser session you signed in to yourself — never a silent server pull — and prompts you, once per cycle, when a read needs your sign-in.`;}
   if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential or certification deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, state license, and certification dates are entered.';return `Credentials & certifications needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records read from a portal are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
   if(/mileage|miles|trip/.test(l)){if(!db.mileage.length)return 'No mileage trips are logged yet. Log one from the Mileage tab, or generate schedule-based drafts there and confirm each trip.';const total=verifiedMileageTotal(),verified=verifiedMileageTrips().length,draft=db.mileage.filter(x=>x.status==='draft').length;return `Mileage on this device: ${total.toFixed(1)} verified miles across ${verified} confirmed trip(s), including ${draft} draft(s) still needing confirmation (drafts are not counted until the weekly review confirms them). Mileage defaults to ${tripTypeLabel(mileageTripType())}, and each trip shows whether it is round trip or one way — a round-trip trip is counted once, never doubled. Drafts are not verified trips — confirm the trip occurred and the actual miles before using them.`}
   if(/facilit|hospital/.test(l)){if(!db.facilities.length)return 'No facilities are saved yet. Add one from the Facilities tab with its rates, and shifts can then use those rates.';return `You have ${db.facilities.length} facilit(ies) saved: ${db.facilities.map(f=>`${f.name} (8h ${currency(f.rate8)}, 24h ${currency(f.rate24)}, 2nd call ${currency(f.rateSecond)})`).join('; ')}. I don't quote facility notes here, since they may hold authorized facility codes.`}
@@ -2412,7 +2412,7 @@ const PORTAL_AGENT_PATHS={
   aana:{portal:'AANA',site:'aana.com',pages:[
     {key:'membership',name:'Membership status',direction:'Open the Member Dashboard, then My AANA Membership Information. “Dues paid through” is the membership expiration.',fields:['status','number','expiration']},
     {key:'transcript',name:'CE transcript',direction:'Open the CE transcript for the Class A / Class B totals.',fields:['classA','classB']}]},
-  wv:{portal:'West Virginia Board of Nursing',site:'wvrn.boardsofnursing.org/licenselookup',pages:[
+  wv:{portal:'West Virginia Board of Nursing',site:'wvrn.boardsofnursing.org/wvrn/',pages:[
     {key:'rn',name:'RN license record',direction:'Look the licensee up in the WV Board License Lookup and open the RN record.',fields:['status','number','type','issue','expiry'],licenseType:'RN'},
     {key:'aprn',name:'APRN-CRNA license record',direction:'Open the APRN-CRNA record from the same lookup (Nursys does not verify APRN licenses — the board lookup is the route).',fields:['status','number','type','issue','expiry'],licenseType:'APRN'}]},
   ohio:{portal:'Ohio eLicense',site:'elicense.ohio.gov',pages:[
@@ -2433,66 +2433,139 @@ function portalAgentPath(source,state){
 // it knows what state portal to redirect the user to" — and "make
 // sure it's all 50 states" (+ DC). There is no single state-board
 // portal: every state board runs its own. This table is DATA —
-// board name + the board's official site (for WV and Ohio, the
-// exact lookup routes already used for Caleb's own records:
-// wvrn.boardsofnursing.org for WV, Ohio eLicense for Ohio). The
+// board name + the board's licensee SIGN-IN page (v149 audit,
+// Nov 12, 2026: the v147 values were board homepages, plus public
+// lookup pages for WV + OH — Connect must land on the sign-in, so
+// every URL below is the audited sign-in route; WV is Caleb's own
+// correction, https://wvrn.boardsofnursing.org/wvrn/). The
 // State Licenses card renders one row per state the user holds (or
 // adds), and that state's Connect opens THIS url — never a generic
 // one. Portal connections key per state (portal_connections.state);
 // the filing door and monitor keys keep source 'licenses' + state.
 const STATE_BOARDS=[
-  {state:'Alabama',code:'AL',board:'Alabama Board of Nursing',url:'https://www.abn.alabama.gov/'},
-  {state:'Alaska',code:'AK',board:'Alaska Board of Nursing',url:'https://www.commerce.alaska.gov/web/portals/5/'},
-  {state:'Arizona',code:'AZ',board:'Arizona State Board of Nursing',url:'https://www.azbn.gov/'},
-  {state:'Arkansas',code:'AR',board:'Arkansas State Board of Nursing',url:'https://www.arsbn.org/'},
-  {state:'California',code:'CA',board:'California Board of Registered Nursing',url:'https://www.rn.ca.gov/'},
-  {state:'Colorado',code:'CO',board:'Colorado State Board of Nursing',url:'https://dpo.colorado.gov/Nursing'},
-  {state:'Connecticut',code:'CT',board:'Connecticut Board of Examiners for Nursing',url:'https://portal.ct.gov/dph'},
-  {state:'Delaware',code:'DE',board:'Delaware Board of Nursing',url:'https://dpr.delaware.gov/boards/nursing/'},
-  {state:'District of Columbia',code:'DC',board:'DC Board of Nursing',url:'https://dchealth.dc.gov/service/board-nursing'},
-  {state:'Florida',code:'FL',board:'Florida Board of Nursing',url:'https://floridasnursing.gov/'},
-  {state:'Georgia',code:'GA',board:'Georgia Board of Nursing',url:'https://sos.ga.gov/georgia-board-nursing'},
-  {state:'Hawaii',code:'HI',board:'Hawaii Board of Nursing',url:'https://cca.hawaii.gov/pvl/boards/nursing/'},
-  {state:'Idaho',code:'ID',board:'Idaho Board of Nursing',url:'https://dopl.idaho.gov/'},
-  {state:'Illinois',code:'IL',board:'Illinois Board of Nursing',url:'https://idfpr.illinois.gov/profs/nursing.html'},
-  {state:'Indiana',code:'IN',board:'Indiana State Board of Nursing',url:'https://www.in.gov/pla/professions/nursing-home/nursing-board/'},
-  {state:'Iowa',code:'IA',board:'Iowa Board of Nursing',url:'https://nursing.iowa.gov/'},
-  {state:'Kansas',code:'KS',board:'Kansas State Board of Nursing',url:'https://ksbn.kansas.gov/'},
-  {state:'Kentucky',code:'KY',board:'Kentucky Board of Nursing',url:'https://kbn.ky.gov/'},
-  {state:'Louisiana',code:'LA',board:'Louisiana State Board of Nursing',url:'https://www.lsbn.state.la.us/'},
-  {state:'Maine',code:'ME',board:'Maine State Board of Nursing',url:'https://www.maine.gov/boardofnursing/'},
-  {state:'Maryland',code:'MD',board:'Maryland Board of Nursing',url:'https://mbon.maryland.gov/'},
-  {state:'Massachusetts',code:'MA',board:'Massachusetts Board of Registration in Nursing',url:'https://www.mass.gov/orgs/board-of-registration-in-nursing'},
-  {state:'Michigan',code:'MI',board:'Michigan Board of Nursing',url:'https://www.michigan.gov/lara/bureau-list/bpl/health/hp-lic-health-prof/nursing'},
-  {state:'Minnesota',code:'MN',board:'Minnesota Board of Nursing',url:'https://mn.gov/boards/nursing/'},
-  {state:'Mississippi',code:'MS',board:'Mississippi Board of Nursing',url:'https://www.msbn.ms.gov/'},
-  {state:'Missouri',code:'MO',board:'Missouri State Board of Nursing',url:'https://www.pr.mo.gov/nursing.asp'},
-  {state:'Montana',code:'MT',board:'Montana Board of Nursing',url:'https://boards.bsd.dli.mt.gov/nursing'},
-  {state:'Nebraska',code:'NE',board:'Nebraska Nurse Licensing (DHHS)',url:'https://dhhs.ne.gov/licensure/Pages/Nursing.aspx'},
-  {state:'Nevada',code:'NV',board:'Nevada State Board of Nursing',url:'https://nevadanursingboard.org/'},
-  {state:'New Hampshire',code:'NH',board:'New Hampshire Board of Nursing',url:'https://www.oplc.nh.gov/board-nursing'},
-  {state:'New Jersey',code:'NJ',board:'New Jersey Board of Nursing',url:'https://www.njconsumeraffairs.gov/nur/'},
-  {state:'New Mexico',code:'NM',board:'New Mexico Board of Nursing',url:'https://www.bon.nm.gov/'},
-  {state:'New York',code:'NY',board:'New York State Board for Nursing',url:'https://www.op.nysed.gov/professions/registered-nurses'},
-  {state:'North Carolina',code:'NC',board:'North Carolina Board of Nursing',url:'https://www.ncbon.com/'},
-  {state:'North Dakota',code:'ND',board:'North Dakota Board of Nursing',url:'https://www.ndbon.org/'},
-  {state:'Ohio',code:'OH',board:'Ohio Board of Nursing',url:'https://elicense.ohio.gov/oh_verifylicense'},
-  {state:'Oklahoma',code:'OK',board:'Oklahoma Board of Nursing',url:'https://oklahoma.gov/nursing.html'},
-  {state:'Oregon',code:'OR',board:'Oregon State Board of Nursing',url:'https://www.oregon.gov/osbn/'},
-  {state:'Pennsylvania',code:'PA',board:'Pennsylvania State Board of Nursing',url:'https://www.dos.pa.gov/ProfessionalLicensing/BoardsCommissions/Nursing/Pages/default.aspx'},
-  {state:'Rhode Island',code:'RI',board:'Rhode Island Board of Nurse Registration and Nursing Education',url:'https://health.ri.gov/licenses/detail.php?id=202'},
-  {state:'South Carolina',code:'SC',board:'South Carolina Board of Nursing',url:'https://llr.sc.gov/nurse/'},
-  {state:'South Dakota',code:'SD',board:'South Dakota Board of Nursing',url:'https://doh.sd.gov/boards/nursing/'},
-  {state:'Tennessee',code:'TN',board:'Tennessee Board of Nursing',url:'https://www.tn.gov/health/health-program-areas/board-of-nursing.html'},
-  {state:'Texas',code:'TX',board:'Texas Board of Nursing',url:'https://www.bon.texas.gov/'},
-  {state:'Utah',code:'UT',board:'Utah Board of Nursing',url:'https://dopl.utah.gov/nursing/'},
-  {state:'Vermont',code:'VT',board:'Vermont Board of Nursing',url:'https://sos.vermont.gov/nursing/'},
-  {state:'Virginia',code:'VA',board:'Virginia Board of Nursing',url:'https://www.dhp.virginia.gov/Boards/Nursing/'},
-  {state:'Washington',code:'WA',board:'Washington State Board of Nursing',url:'https://nursing.wa.gov/'},
-  {state:'West Virginia',code:'WV',board:'West Virginia Board of Nursing',url:'https://wvrn.boardsofnursing.org/licenselookup'},
-  {state:'Wisconsin',code:'WI',board:'Wisconsin Board of Nursing',url:'https://dsps.wi.gov/pages/BoardsCouncils/Nursing/default.aspx'},
-  {state:'Wyoming',code:'WY',board:'Wyoming State Board of Nursing',url:'https://wsbn.wyo.gov/'}
+  {state:'Alabama',code:'AL',board:'Alabama Board of Nursing',url:'https://www.abn.alabama.gov/my-profile/'},
+  {state:'Alaska',code:'AK',board:'Alaska Board of Nursing',url:'https://professionallicense.alaska.gov/MYLICENSE'},
+  {state:'Arizona',code:'AZ',board:'Arizona State Board of Nursing',url:'https://azbn.boardsofnursing.org/azbn'},
+  {state:'Arkansas',code:'AR',board:'Arkansas State Board of Nursing',url:'https://arsbn.boardsofnursing.org/arsbn'},
+  {state:'California',code:'CA',board:'California Board of Registered Nursing',url:'https://www.breeze.ca.gov/'},
+  {state:'Colorado',code:'CO',board:'Colorado State Board of Nursing',url:'https://apps2.colorado.gov/dora/licensing'},
+  {state:'Connecticut',code:'CT',board:'Connecticut Board of Examiners for Nursing',url:'http://www.elicense.ct.gov/'},
+  {state:'Delaware',code:'DE',board:'Delaware Board of Nursing',url:'https://delpros.delaware.gov/OH_HomePage'},
+  {state:'District of Columbia',code:'DC',board:'DC Board of Nursing',url:'https://dohenterprise.my.site.com/dchealthrenewals/s/portal-page'},
+  {state:'Florida',code:'FL',board:'Florida Board of Nursing',url:'https://flhealthsource.gov/'},
+  {state:'Georgia',code:'GA',board:'Georgia Board of Nursing',url:'https://goals.sos.ga.gov/GASOSOneStop/s/login/'},
+  {state:'Hawaii',code:'HI',board:'Hawaii Board of Nursing',url:'https://mypvl.dcca.hawaii.gov/'},
+  {state:'Idaho',code:'ID',board:'Idaho Board of Nursing',url:'https://edopl.idaho.gov/OnlineServices/_/'},
+  {state:'Illinois',code:'IL',board:'Illinois Board of Nursing',url:'https://online-dfpr.micropact.com'},
+  {state:'Indiana',code:'IN',board:'Indiana State Board of Nursing',url:'https://mylicense.in.gov/eGov/ML1PLA.html'},
+  {state:'Iowa',code:'IA',board:'Iowa Board of Nursing',url:'https://amanda-portal.idph.state.ia.us/ibon/portal/#/dashboards/index'},
+  {state:'Kansas',code:'KS',board:'Kansas State Board of Nursing',url:'https://portal.egov.ksbn.ks.gov/egov/'},
+  {state:'Kentucky',code:'KY',board:'Kentucky Board of Nursing',url:'https://kybn.boardsofnursing.org/kybn'},
+  {state:'Louisiana',code:'LA',board:'Louisiana State Board of Nursing',url:'https://lsbn.boardsofnursing.org/'},
+  {state:'Maine',code:'ME',board:'Maine State Board of Nursing',url:'https://www.pfr.maine.gov/ALMSonline/Welcome.aspx'},
+  {state:'Maryland',code:'MD',board:'Maryland Board of Nursing',url:'https://mdchart.health.maryland.gov/CHART/s/login/?ec=302&startURL=/CHART/s/'},
+  {state:'Massachusetts',code:'MA',board:'Massachusetts Board of Registration in Nursing',url:'https://healthprofessionlicensing.mass.gov/'},
+  {state:'Michigan',code:'MI',board:'Michigan Board of Nursing',url:'https://www.michigan.gov/miplus'},
+  {state:'Minnesota',code:'MN',board:'Minnesota Board of Nursing',url:'https://mbn.hlb.state.mn.us/#/login'},
+  {state:'Mississippi',code:'MS',board:'Mississippi Board of Nursing',url:'https://gateway.licensure.msbn.ms.gov/'},
+  {state:'Missouri',code:'MO',board:'Missouri State Board of Nursing',url:'https://mopro.mo.gov/license/s/'},
+  {state:'Montana',code:'MT',board:'Montana Board of Nursing',url:'https://ebiz.mt.gov/POL/Default.aspx'},
+  {state:'Nebraska',code:'NE',board:'Nebraska Nurse Licensing (DHHS)',url:'https://nebraska.mylicense.com/'},
+  {state:'Nevada',code:'NV',board:'Nevada State Board of Nursing',url:'https://nvbn.boardsofnursing.org/nvbn'},
+  {state:'New Hampshire',code:'NH',board:'New Hampshire Board of Nursing',url:'https://forms.nh.gov/license/Login.aspx'},
+  {state:'New Jersey',code:'NJ',board:'New Jersey Board of Nursing',url:'https://newjersey.mylicense.com/eGov/Login.aspx'},
+  {state:'New Mexico',code:'NM',board:'New Mexico Board of Nursing',url:'https://nmbn.boardsofnursing.org/nmbn'},
+  {state:'New York',code:'NY',board:'New York State Board for Nursing',url:'http://op.nysed.gov/services/online-registration-renewal'},
+  {state:'North Carolina',code:'NC',board:'North Carolina Board of Nursing',url:'https://portal.ncbon.com/'},
+  {state:'North Dakota',code:'ND',board:'North Dakota Board of Nursing',url:'https://ndbon.boardsofnursing.org/ndbn/'},
+  {state:'Ohio',code:'OH',board:'Ohio Board of Nursing',url:'https://elicense.ohio.gov/OH_CommunitiesLogin'},
+  {state:'Oklahoma',code:'OK',board:'Oklahoma Board of Nursing',url:'https://okbn.boardsofnursing.org/okbn'},
+  {state:'Oregon',code:'OR',board:'Oregon State Board of Nursing',url:'https://osbn.boardsofnursing.org/orbn'},
+  {state:'Pennsylvania',code:'PA',board:'Pennsylvania State Board of Nursing',url:'https://www.pals.pa.gov'},
+  {state:'Rhode Island',code:'RI',board:'Rhode Island Board of Nurse Registration and Nursing Education',url:'https://healthri.mylicense.com'},
+  {state:'South Carolina',code:'SC',board:'South Carolina Board of Nursing',url:'https://eservice.llr.sc.gov/SSO/'},
+  {state:'South Dakota',code:'SD',board:'South Dakota Board of Nursing',url:'https://sdbon.boardsofnursing.org/sdbn'},
+  {state:'Tennessee',code:'TN',board:'Tennessee Board of Nursing',url:'https://lars.tn.gov/datamart/login.do'},
+  {state:'Texas',code:'TX',board:'Texas Board of Nursing',url:'https://txbn.boardsofnursing.org/txbn'},
+  {state:'Utah',code:'UT',board:'Utah Board of Nursing',url:'https://utahdoc.mylicenseone.com'},
+  {state:'Vermont',code:'VT',board:'Vermont Board of Nursing',url:'https://sos.vermont.gov/opr/online-services/'},
+  {state:'Virginia',code:'VA',board:'Virginia Board of Nursing',url:'https://www.license.dhp.virginia.gov/license/Login.aspx'},
+  {state:'Washington',code:'WA',board:'Washington State Board of Nursing',url:'https://secureaccess.wa.gov'},
+  {state:'West Virginia',code:'WV',board:'West Virginia Board of Nursing',url:'https://wvrn.boardsofnursing.org/wvrn/'},
+  {state:'Wisconsin',code:'WI',board:'Wisconsin Board of Nursing',url:'https://license.wi.gov/'},
+  {state:'Wyoming',code:'WY',board:'Wyoming State Board of Nursing',url:'https://wybn.boardsofnursing.org/wybn'}
 ];
+// v149 (Nov 12, 2026): the v147 table carried board homepages (and
+// public lookup pages for WV + OH) — Connect never reached a sign-in.
+// The URLs above are the AUDITED licensee sign-in pages (see
+// state-board-signin-urls.md: 51 rows, every one replaced). The old
+// values are kept ONLY so a license record saved under the old table
+// (its board_portal_url copied from it) can be healed to the audited
+// sign-in URL; a URL matching no old-table value is the user's own
+// entry and is never touched.
+const STATE_BOARD_URLS_PRE_V149=[
+  'https://www.commerce.alaska.gov/web/portals/5/',
+  'https://www.abn.alabama.gov/',
+  'https://www.arsbn.org/',
+  'https://www.azbn.gov/',
+  'https://www.rn.ca.gov/',
+  'https://dpo.colorado.gov/Nursing',
+  'https://portal.ct.gov/dph',
+  'https://dchealth.dc.gov/service/board-nursing',
+  'https://dpr.delaware.gov/boards/nursing/',
+  'https://floridasnursing.gov/',
+  'https://sos.ga.gov/georgia-board-nursing',
+  'https://cca.hawaii.gov/pvl/boards/nursing/',
+  'https://nursing.iowa.gov/',
+  'https://dopl.idaho.gov/',
+  'https://idfpr.illinois.gov/profs/nursing.html',
+  'https://www.in.gov/pla/professions/nursing-home/nursing-board/',
+  'https://ksbn.kansas.gov/',
+  'https://kbn.ky.gov/',
+  'https://www.lsbn.state.la.us/',
+  'https://www.mass.gov/orgs/board-of-registration-in-nursing',
+  'https://mbon.maryland.gov/',
+  'https://www.maine.gov/boardofnursing/',
+  'https://www.michigan.gov/lara/bureau-list/bpl/health/hp-lic-health-prof/nursing',
+  'https://mn.gov/boards/nursing/',
+  'https://www.pr.mo.gov/nursing.asp',
+  'https://www.msbn.ms.gov/',
+  'https://boards.bsd.dli.mt.gov/nursing',
+  'https://www.ncbon.com/',
+  'https://www.ndbon.org/',
+  'https://dhhs.ne.gov/licensure/Pages/Nursing.aspx',
+  'https://www.oplc.nh.gov/board-nursing',
+  'https://www.njconsumeraffairs.gov/nur/',
+  'https://www.bon.nm.gov/',
+  'https://nevadanursingboard.org/',
+  'https://www.op.nysed.gov/professions/registered-nurses',
+  'https://elicense.ohio.gov/oh_verifylicense',
+  'https://oklahoma.gov/nursing.html',
+  'https://www.oregon.gov/osbn/',
+  'https://www.dos.pa.gov/ProfessionalLicensing/BoardsCommissions/Nursing/Pages/default.aspx',
+  'https://health.ri.gov/licenses/detail.php?id=202',
+  'https://llr.sc.gov/nurse/',
+  'https://doh.sd.gov/boards/nursing/',
+  'https://www.tn.gov/health/health-program-areas/board-of-nursing.html',
+  'https://www.bon.texas.gov/',
+  'https://dopl.utah.gov/nursing/',
+  'https://www.dhp.virginia.gov/Boards/Nursing/',
+  'https://sos.vermont.gov/nursing/',
+  'https://nursing.wa.gov/',
+  'https://dsps.wi.gov/pages/BoardsCouncils/Nursing/default.aspx',
+  'https://wvrn.boardsofnursing.org/licenselookup',
+  'https://wsbn.wyo.gov/'
+];
+function healLicensePortalUrls(){
+  let fixed=0;
+  (db.licenses||[]).forEach(x=>{
+    const u=String(x.portal||'').trim();
+    if(!u||!STATE_BOARD_URLS_PRE_V149.includes(u))return;
+    const b=stateBoard(x.state);
+    if(b&&b.url!==u){x.portal=b.url;x.updatedAt=cloudNow();fixed++;}
+  });
+  return fixed;
+}
 // A state as the app names it: full name ('West Virginia') from a
 // full name in any case, or from a 2-letter code ('WV'). '' when the
 // value names no US state.
@@ -2625,6 +2698,48 @@ function monitorCadence(mon){
   return monitorBaseCadence(mon);
 }
 function addDaysStr(iso,n){const d=new Date(iso+'T12:00:00');d.setDate(d.getDate()+n);return localDate(d)}
+// v149: the newest VERIFIED agent read for a monitoring row, from
+// the same evidence the credential cards use (portalVerifiedRetrievedAt):
+// a portal-sourced record plus its retrieval stamp. Agent reads
+// filed into the profile tables / portal_connections (the reader
+// service's route — Jewel's own reads for Caleb) never touch
+// db.portalMonitoring, so the legacy entries alone kept saying
+// "never checked" while the cards said Verified (Caleb's
+// screenshot, Nov 12, 2026). Licenses rows are per state + type,
+// so their evidence is that type's verified record in that state.
+// '' when no verified read exists for the row.
+function monitorVerifiedAt(mon){
+  if(mon.source==='nbcrna')return portalVerifiedRetrievedAt('nbcrna');
+  if(mon.source==='aana')return portalVerifiedRetrievedAt('aana');
+  if(mon.source==='licenses'){
+    const st=stateNameOf(mon.state)||String(mon.state||'');
+    const recs=(db.licenses||[]).filter(x=>stateNameOf(x.state)===st&&x.source==='state_board_portal'&&(!mon.type||String(x.type||'').toUpperCase()===String(mon.type).toUpperCase()));
+    const whens=recs.map(x=>x.updatedAt||'').filter(Boolean).sort();
+    if(whens.length)return whens[whens.length-1];
+    if(recs.length)return cloudSyncTimes.licenses||'';
+    return '';
+  }
+  return '';
+}
+// v149: what a monitoring row DISPLAYS — derived from the newest
+// evidence across both stores, so the panel can never contradict
+// the credential cards. A verified read at least as new as the
+// legacy entry's newest stamp wins outright: the row reads as
+// checked at the read's time with the verified outcome, and the
+// legacy failure text (e.g. the retired public-check wording) is
+// dropped, not merely outvoted. With no newer verified read, the
+// legacy entry shows exactly as it always has — a source with only
+// a failed attempt still shows the failure honestly. The legacy
+// entries themselves are NOT rewritten: pause state and cadence
+// keep living on them, untouched.
+function monitorDisplay(mon){
+  const verifiedAt=monitorVerifiedAt(mon);
+  const legacyNewest=(mon.lastAttempt||'')>(mon.lastChecked||'')?(mon.lastAttempt||''):(mon.lastChecked||'');
+  if(verifiedAt&&verifiedAt>=legacyNewest){
+    return {lastChecked:verifiedAt,lastAttempt:mon.lastAttempt||'',outcomeText:'Verified — read from your signed-in session',summary:'',verified:true};
+  }
+  return {lastChecked:mon.lastChecked||'',lastAttempt:mon.lastAttempt||'',outcomeText:monitorOutcomeLabel(mon.lastOutcome),summary:mon.lastSummary||'',verified:false};
+}
 function monitorNextDue(mon,todayStr){
   const today=todayStr||localDate(new Date());
   let due;
@@ -2632,7 +2747,11 @@ function monitorNextDue(mon,todayStr){
   // the attempt — it stays "not checked", but it is not retried on every
   // app open either.
   const failedAttempt=mon.lastAttempt&&(!mon.lastChecked||mon.lastAttempt>mon.lastChecked)&&['blocked','failed','needs_signin','not_found'].includes(mon.lastOutcome);
-  const base=failedAttempt?mon.lastAttempt:mon.lastChecked;
+  // v149: a verified read newer than both legacy stamps is the base
+  // instead (see monitorVerifiedAt) — so a source read today is not
+  // "due now", and its next due is the read date + its cadence.
+  const verifiedAt=monitorVerifiedAt(mon);
+  const base=(verifiedAt&&verifiedAt>=(mon.lastChecked||'')&&verifiedAt>=(mon.lastAttempt||''))?verifiedAt:(failedAttempt?mon.lastAttempt:mon.lastChecked);
   if(!base)due=today;
   else due=addDaysStr(String(base).slice(0,10),monitorCadence(mon));
   if(mon.snoozeUntil&&mon.snoozeUntil>due)due=mon.snoozeUntil;
@@ -2717,9 +2836,9 @@ function portalMonitoringHTML(){
   const mons=ensurePortalMonitoring(),today=localDate(new Date());
   const log=(db.portalChecks||[]).slice(0,8);
   const monOpen=!!(mons.some(m=>monitorPromptVisible(m,today))||mons.some(m=>monitorIsDue(m,today))||mons.some(m=>m.changeFlag));
-  const monLastChecked=mons.map(m=>m.lastChecked||'').filter(Boolean).sort().pop()||'';
+  const monLastChecked=mons.map(m=>monitorDisplay(m).lastChecked).filter(Boolean).sort().pop()||'';
   const monTitle='Portal monitoring'+(monLastChecked?(' · checked '+fmt(String(monLastChecked).slice(0,10))):'');
-  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. Each check is an assistant read of the portal, in a browser session you signed in to yourself — never a silent server pull. If a read needs you, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${m.lastChecked?fmt(String(m.lastChecked).slice(0,10)):'never'}${m.lastAttempt&&m.lastAttempt!==m.lastChecked?` · Last attempt: ${fmt(String(m.lastAttempt).slice(0,10))}`:''} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(monitorOutcomeLabel(m.lastOutcome))}${m.lastSummary?` — ${escapeHTML(m.lastSummary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
+  return collapsePanelHTML('credentials-monitoring-panel',monTitle,`<p class="muted">Checks run on their own every 7 days — faster near renewal. Each check is an assistant read of the portal, in a browser session you signed in to yourself — never a silent server pull. If a read needs you, you get one prompt here. We never store a portal password.</p>${mons.map(m=>{const cad=monitorCadence(m),next=monitorNextDue(m,today),isDue=monitorIsDue(m,today),prompt=monitorPromptVisible(m,today),disp=monitorDisplay(m);return `<div class="item"><strong>${escapeHTML(m.label)}</strong> · ${m.enabled?'Monitoring on':'Paused'} · every ${cad} day${cad>1?'s':''}${cad!==monitorBaseCadence(m)?' (faster — renewal is near)':''}<div class="muted">Last checked: ${disp.lastChecked?fmt(String(disp.lastChecked).slice(0,10)):'never'}${disp.lastAttempt&&disp.lastAttempt>disp.lastChecked?` · Last attempt: ${fmt(String(disp.lastAttempt).slice(0,10))}`:''} · Next due: ${fmt(next)}${isDue?' · <strong>due now</strong>':''} · Outcome: ${escapeHTML(disp.outcomeText)}${disp.summary?` — ${escapeHTML(disp.summary)}`:''}</div>${prompt?monitorDuePromptHTML(m):''}<div class="toolbar">${isDue?`<button type="button" class="secondary" data-action="monitor-assistant" data-id="${escapeHTML(m.key)}">Check with assistant</button>`:''}<button type="button" class="secondary" data-action="monitor-toggle" data-id="${escapeHTML(m.key)}">${m.enabled?'Pause monitoring':'Resume monitoring'}</button>${m.changeFlag?`<button type="button" class="secondary" data-action="monitor-ack" data-id="${escapeHTML(m.key)}">Mark change reviewed</button>`:''}</div><details><summary class="muted">Cadence</summary><form data-kind="monitor-cadence"><input type="hidden" name="key" value="${escapeHTML(m.key)}"><div class="form-grid"><div class="field"><label>Base cadence</label><select name="cadenceDays">${[1,3,7,14].map(v=>`<option value="${v}" ${monitorBaseCadence(m)===v?'selected':''}>Every ${v} day${v>1?'s':''}${v===7?' (weekly)':''}</option>`).join('')}</select></div></div><div class="form-actions"><button type="submit">Save cadence</button></div></form></details></div>`}).join('')}${log.length?`<h3>Monitoring log</h3>${log.map(c=>`<div class="item"><strong>${escapeHTML((PORTAL_CHECK_SOURCES[c.source]||{}).short||c.source)}</strong> · ${c.retrievedAt?fmt(String(c.retrievedAt).slice(0,10)):''} · ${escapeHTML(monitorOutcomeLabel(c.status))}<div class="muted">${escapeHTML(c.summary||'')}</div></div>`).join('')}`:'<p class="muted">No checks logged yet — they will appear here as monitoring runs.</p>'}` ,monOpen);
 }
 // Dashboard portal-monitoring card removed (Nov 6, 2026): monitoring
 // lives on the Credentials tab; the Dashboard no longer repeats it.
@@ -11266,7 +11385,7 @@ function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasC
 // them straight off the rows in cloudPortals.
 function cloudApplyData(data) { cloudPortals = data.portals || []; // v147: a state_board connection row on any device puts that state on this device's Licenses card too (union into the added-states list; settings sync carries the list itself).
   { const boardStates = (data.portals || []).filter(r => r && r.portal === 'state_board' && r.state).map(r => stateNameOf(r.state)).filter(Boolean); if (boardStates.length) { db.settings = (db.settings && typeof db.settings === 'object') ? db.settings : {}; const cur = Array.isArray(db.settings.licStates) ? db.settings.licStates.slice() : []; let grew = false; boardStates.forEach(s => { if (!cur.includes(s)) { cur.push(s); grew = true; } }); if (grew) db.settings.licStates = cur; } }
-  if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', classA: r.ce_class_a === null || r.ce_class_a === undefined ? '' : String(r.ce_class_a), classB: r.ce_class_b === null || r.ce_class_b === undefined ? '' : String(r.ce_class_b), source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
+  if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', classA: r.ce_class_a === null || r.ce_class_a === undefined ? '' : String(r.ce_class_a), classB: r.ce_class_b === null || r.ce_class_b === undefined ? '' : String(r.ce_class_b), source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); try { healLicensePortalUrls(); } catch (e) {} if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }, (shellId, twin) => { cloudRecordTombstone('facilities', shellId); if (twin && twin.id) { try { cloudSaveKind('facilities', twin.id); } catch (e) {} } }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
@@ -11959,6 +12078,7 @@ async function cloudInit() { if (!SUPABASE_CONFIGURED || !cloudSession) return; 
 // panel with a reload button, never a silent blank page (the boot watchdog
 // in index.html is the second net, for failures before this file runs).
 function bootRender(){try{render()}catch(e){try{console.error(e)}catch(_){ } const navEl=$('nav');if(navEl&&!navEl.innerHTML){navEl.innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(t)}</button>`).join('');try{navEl.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)))}catch(_){ }} const appEl=$('app');if(appEl)appEl.innerHTML=`<section class="panel"><h2>Something went wrong starting CRNA Hub</h2><p class="muted">${escapeHTML(String((e&&e.message)||e))}</p><p class="muted">Your saved data on this device is not affected. Tap a tab above to try that page, or reload.</p><p><button type="button" onclick="location.reload()">Reload</button></p></section>`}}
+try{if(healLicensePortalUrls())persist()}catch(e){}
 portalCheckRestore();pushDeepLinkApply();portalReturnSurface();bootRender();cloudInit();if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').then(reg=>{const promptReload=()=>{if(confirm('A newer version of CRNA Hub is available. Reload now to use it?'))window.location.reload()};if(reg.waiting)promptReload();reg.addEventListener('updatefound',()=>{const sw=reg.installing;if(!sw)return;sw.addEventListener('statechange',()=>{if(sw.state==='installed'&&navigator.serviceWorker.controller)promptReload()})});try{document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){try{const p2=reg.update();if(p2&&p2.catch)p2.catch(()=>{})}catch(e){}}})}catch(e){}try{const p=reg.update();if(p&&p.catch)p.catch(()=>{})}catch(e){}}).catch(()=>{});
 
 // Notification taps carry ?go=<screen> so a tap lands on the exact

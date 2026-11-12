@@ -5,8 +5,10 @@
 //
 // Pins:
 //   1. STATE_BOARDS covers exactly the 51 US_STATES entries, each
-//      with a board name and an https URL; WV and OH carry the exact
-//      lookup routes already used for Caleb's own records.
+//      with a board name and a portal URL; WV and OH carry the
+//      audited SIGN-IN routes (v149 — Caleb: the v147 values opened
+//      the public lookup pages, not the sign-ins; every URL in the
+//      table was replaced by the audited sign-in table).
 //   2. The picker offers exactly 51 entries minus the states shown.
 //   3. Each shown state's Connect targets THAT state's table URL
 //      (WV, OH + Texas/California/Florida spot checks).
@@ -92,13 +94,15 @@ const RESET = `
     run(`STATE_BOARDS.length`) === 51 &&
     run(`US_STATES.length`) === 51 &&
     run(`US_STATES.every(s => !!stateBoard(s))`));
-  t('every entry carries a board name and an https URL',
-    run(`STATE_BOARDS.every(b => b.board && b.url.indexOf('https://') === 0)`));
-  t('WV targets the WV board lookup already used for Caleb\u2019s records',
-    board('West Virginia').url === 'https://wvrn.boardsofnursing.org/licenselookup',
+  t('every entry carries a board name and an http(s) URL',
+    run(`STATE_BOARDS.every(b => b.board && (b.url.indexOf('https://') === 0 || b.url.indexOf('http://') === 0))`));
+  // v149: WV/OH expectations updated to the audited sign-in URLs —
+  // Caleb reported the v147 lookup routes never reach a sign-in.
+  t('WV targets the WV board SIGN-IN (Caleb\u2019s correction)',
+    board('West Virginia').url === 'https://wvrn.boardsofnursing.org/wvrn/',
     J(board('West Virginia')));
-  t('OH targets Ohio eLicense, the route already used for Caleb\u2019s records',
-    board('Ohio').url === 'https://elicense.ohio.gov/oh_verifylicense',
+  t('OH targets the Ohio eLicense LOGIN (audited)',
+    board('Ohio').url === 'https://elicense.ohio.gov/OH_CommunitiesLogin',
     J(board('Ohio')));
   t('state names resolve from full name or 2-letter code',
     run(`stateNameOf('west virginia')`) === 'West Virginia' &&

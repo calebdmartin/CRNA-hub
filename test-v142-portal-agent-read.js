@@ -244,6 +244,11 @@ t('no rendered string claims a silent server pull',
 run(`
   const aa = db.portalMonitoring.find(m => m.key === 'aana');
   aa.lastChecked = ''; aa.lastOutcome = ''; aa.snoozeUntil = ''; aa.promptDismissedCycle = '';
+  // v149: zeroing the legacy entry no longer makes a source due when
+  // a verified read exists (that was Caleb's panel-vs-cards bug).
+  // Age the verified stamp from the read filed above so the source
+  // is genuinely past due, as this pin intends.
+  cloudSyncTimes.aana = new Date(Date.now() - 30 * 864e5).toISOString();
   globalThis.__panel = portalMonitoringHTML();
 `);
 t('monitoring panel: one due prompt per source, "Check with assistant" available for a due source',

@@ -209,6 +209,12 @@ const tick = () => new Promise(r => setTimeout(r, 5));
     db.portalMonitoring = []; ensurePortalMonitoring();
     const m = db.portalMonitoring.find(x => x.key === 'nbcrna');
     m.lastChecked = ''; m.lastOutcome = ''; m.snoozeUntil = ''; m.promptDismissedCycle = '';
+    // v149: due-ness derives from the newest evidence across both
+    // stores — the fresh verified read filed earlier in this file
+    // would otherwise keep the source not-due and the sweep would
+    // (correctly) do nothing. Age the verified stamp so the source
+    // is past due on every store, as this section intends.
+    cloudSyncTimes.nbcrna = new Date(Date.now() - 30 * 864e5).toISOString();
     cloudPortals = [{ id: 'row-nb', portal: 'nbcrna', state: null, status: 'connected', last_synced_at: '2026-11-12T12:00:00Z', session_state: 'live', read_requested_at: null, last_read_outcome: 'read' }];
     globalThis.__sb = [];
   `);
