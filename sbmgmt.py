@@ -117,6 +117,15 @@ if __name__ == "__main__":
         status, text = deploy_function("qgenda-feed", files)
         print("STATUS:", status)
         print(text[:3000])
+    elif cmd == "deploy-ics-feed":
+        files = [
+            ("index.ts", open(ROOT + "ics-feed/index.ts", "rb").read()),
+            ("./parse.ts", open(ROOT + "ics-feed/parse.ts", "rb").read()),
+            ("../_shared/calendar.ts", open(ROOT + "_shared/calendar.ts", "rb").read()),
+        ]
+        status, text = deploy_function("ics-feed", files)
+        print("STATUS:", status)
+        print(text[:3000])
     elif cmd == "deploy-extract-contract":
         files = [
             ("index.ts", open(ROOT + "extract-contract/index.ts", "rb").read()),

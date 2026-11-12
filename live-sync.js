@@ -261,6 +261,27 @@ function liveSyncSourceSummary(provider) {
 function liveSyncLabel(provider) {
   return provider === 'google' ? 'Google Calendar' : provider === 'outlook' ? 'Outlook' : 'Apple Calendar';
 }
+// Platform order for the connect cards (Nov 12, 2026, v148 — Caleb:
+// "I'm an Apple guy. I have no idea what android users use for
+// calendars"): on Android the default calendar is Google, so Google
+// leads there; on iOS, Apple leads; everywhere else the order is
+// the one the panel has always used. Detection is conservative
+// (user agent only) and changes ORDER ONLY — no platform gets a
+// lesser path.
+function liveSyncPlatform() {
+  try {
+    const ua = (typeof navigator !== 'undefined' && navigator && navigator.userAgent) || '';
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && typeof document !== 'undefined' && 'ontouchend' in document)) return 'ios';
+  } catch (e) {}
+  return 'other';
+}
+function liveSyncProviderOrder() {
+  const p = liveSyncPlatform();
+  if (p === 'android') return ['google', 'outlook', 'apple'];
+  if (p === 'ios') return ['apple', 'google', 'outlook'];
+  return ['google', 'outlook', 'apple'];
+}
 // Per-shift calendar state, from the server's shiftSync array in the
 // last sync response (the pairing, not a guess — see the header note).
 // Stored per shift per provider, so a shift synced to one provider
@@ -1245,7 +1266,7 @@ function liveSyncCardsHTML() {
   const chosen = liveSyncChosenProviders();
   const hideOthers = liveSyncConfig.state === 'ready' && chosen.length > 0 && !liveSyncShowOthers;
   let html = '';
-  ['google', 'outlook', 'apple'].forEach((p) => {
+  liveSyncProviderOrder().forEach((p) => {
     if (hideOthers && !chosen.includes(p)) return;
     html += liveSyncProviderCard(p);
   });
@@ -1269,6 +1290,7 @@ function liveSyncPanelHTML() {
     html += '<p class="muted">The .ics import/export below works without sign-in.</p>';
   } else {
     html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in.</p>';
+    html += '<p class="muted">On Android? Your calendar is most likely Google — tap Google Calendar.</p>';
     if (liveSyncError) html += '<p class="hint">Last sync problem: ' + escapeHTML(liveSyncError) + '</p>';
     if (typeof facilitySuggestionsHTML === 'function') html += facilitySuggestionsHTML();
     html += liveSyncCardsHTML();

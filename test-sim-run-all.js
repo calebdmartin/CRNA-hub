@@ -28,7 +28,7 @@ const SELF = 'test-sim-run-all.js';
 // on pristine trees since long before the sim pass; recorded in
 // the checklist). File -> expected FAIL-line count.
 const KNOWN = { 'test-ai-assistant-final.js': 1, 'test-calendar-editing.js': 3, 'test-dashboard-dayview-cleanup.js': 6, 'test-paystub.js': 1 };
-const DENO_FILES = ['supabase/functions/_shared/calendar.test.ts', 'supabase/functions/qgenda-feed/parse.test.ts', 'supabase/functions/extract-contract/normalize.test.ts'];
+const DENO_FILES = ['supabase/functions/_shared/calendar.test.ts', 'supabase/functions/qgenda-feed/parse.test.ts', 'supabase/functions/extract-contract/normalize.test.ts', 'supabase/functions/ics-feed/parse.test.ts'];
 
 function runNode(file, timeoutMs) {
   const r = spawnSync(process.execPath, [path.join(R, file)], { cwd: R, encoding: 'utf8', timeout: timeoutMs || 240000, maxBuffer: 64 * 1024 * 1024 });
