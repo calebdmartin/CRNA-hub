@@ -235,7 +235,7 @@ const NEW_SHIFTS = [
     appSrc.includes(`code:String(sh.code||'').trim()`) &&
     appSrc.includes(`hours:(typeof sh.hours==='number'&&isFinite(sh.hours))?sh.hours:null`));
   t('pin: service worker cache bumped to v96',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v142'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v143'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

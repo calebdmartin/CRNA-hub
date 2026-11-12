@@ -2127,8 +2127,8 @@ function answerQuestion(raw){
   if(/shift.*(coming|upcoming|next)|upcoming shift/.test(l)){const up=assistantUpcoming();if(!up.length)return 'You have no upcoming shifts recorded on this device. Add one from the Dashboard, or import a schedule CSV.';const top=up.slice(0,5),total=up.filter(isBillableShift).reduce((s,x)=>s+num(x.pay),0),conf=up.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).reduce((s,x)=>s+num(x.pay),0);return `You have ${up.length} upcoming shift(s) recorded, worth ${currency(total)} in expected gross (proposed-inclusive; ${currency(conf)} of that is confirmed). Next up: ${top.map(x=>`${fmt(x.date)} at ${x.facility} (${x.type}, ${x.pay===''||x.incomplete?'pay not yet priced':currency(x.pay)}, ${shiftStatusLabel(x.status)})`).join('; ')}${up.length>5?` — plus ${up.length-5} more.`:''}`}
   if(/this year|year.*(income|gross|earn|pay)|income.*year|annual (income|gross|pay)|how much.*year/.test(l)){const y=currentYear(),cur=shiftsForYear(y);if(!cur.length)return `No shifts are recorded for ${y} yet, so I can't project this year's income. Add shifts or import a CSV, and this answer will use them.`;const split=yearIncomeSplit(y);return `Income for ${y}, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(split.c.ytd)} year to date and ${currency(split.c.predicted)} predicted annual; P (proposed-inclusive — C plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date and ${currency(split.p.predicted)} predicted annual. None of these is paid income — they are estimates from scheduled shifts. Shifts from other years are not included.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in either total.`:''}${split.w2Salary?` ${split.w2Salary} W-2 salary day(s) are excluded — paid through W-2 salary, never double-counted.`:''}`}
   if(/income|projected|earn|gross|pay.*month|this month/.test(l)){const cur=assistantMonthShifts();if(!cur.length)return 'No shifts are recorded for this month, so I can\'t project income yet. Add shifts or import a CSV, and this answer will use them.';const prefix=localDate(new Date()).slice(0,7);const m=monthIncomeSplit(prefix);const head=monthHeadline(prefix);const by={};cur.filter(x=>isBillableShift(x)&&['confirmed','completed'].includes(normalizeShiftStatus(x.status))).forEach(x=>{by[x.facility||'Unknown']=(by[x.facility||'Unknown']||0)+num(x.pay)});const byFac=`By facility (confirmed only): ${Object.keys(by).length?Object.entries(by).map(([f,v])=>`${f} ${currency(v)}`).join('; '):'no confirmed shifts yet'}`;const unpricedNote=m.unpriced?` ${m.unpriced} shift(s) this month are unpriced and are not included in any total.`:'';if(head.scheduled)return `Expected gross this month: ${currency(head.gross)} — the Dashboard headline, on the paycheck basis: the paychecks landing this month${head.anyActual?', including the actual amount from your pay stub':''}${head.partial?`, plus ${currency(head.worked)} from shifts not on a pay schedule`:''}. The shifts themselves split C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}.${unpricedNote}`;return `Projected income this month, from recorded shifts only — two totals, same split as the Dashboard: C (confirmed only) ${currency(m.c)}; P (proposed-inclusive) ${currency(m.p)}, across ${cur.length} shift(s). ${byFac}. None of these is paid income.${unpricedNote}`}
-  if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: tap “I signed in — check it” on the portal’s Connect card (or a Check button below), then show me the page that lists your record — I read it and show you the report, and nothing is saved until you approve it.';
-  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — sign in from the prompt on the Credentials tab and the guided check runs.`:''} Checks are agent reads: an assistant reads each portal in a real browser session you signed in to yourself — never a silent server pull — and prompts you, once per cycle, when a read needs your sign-in.`;}
+  if(/check (my )?(portal|nbcrna|aana|license)|portal check|ask.*assistant.*(nbcrna|aana|license|portal)/.test(l))return 'One tap: on the Credentials tab, tap Connect on the portal’s card, sign in on the portal’s own page, then come back and tap “I’m signed in — read it now” — we read it from your signed-in session, and nothing is saved until you approve it.';
+  if(/monitor|watch.*portal|what.*(monitoring|watching)|active.*check|check.*(weekly|regular|automatic|automatically)/.test(l)){const mons=ensurePortalMonitoring(),today=localDate(new Date()),due=mons.filter(m=>monitorIsDue(m,today));return `Portal monitoring — the assistant watches NBCRNA, AANA, and your state licenses on a schedule, not just when you ask. ${mons.map(m=>`${m.label}: last checked ${m.lastChecked?String(m.lastChecked).slice(0,10):'never'}, next due ${monitorNextDue(m,today)}, ${m.enabled?(monitorIsDue(m,today)?'due now':'on schedule'):'paused'}, last outcome ${m.lastOutcome||'not checked yet'}`).join('; ')}.${due.length?` ${due.length} check(s) are due — one with a live session queues its read on its own; if a session has expired, its prompt on the Credentials tab is the one sign-in tap.`:''} Checks are agent reads: an assistant reads each portal in a real browser session you signed in to yourself — never a silent server pull — and prompts you, once per cycle, when a read needs your sign-in.`;}
   if(/credential|license|nbcrna|aana|expir/.test(l)){const d=credentialDeadlines();if(!d.length)return 'No credential or certification deadlines are inside their reminder windows right now, based on the records on this device. Check the Credentials tab to confirm your NBCRNA, AANA, state license, and certification dates are entered.';return `Credentials & certifications needing attention: ${d.slice(0,8).map(x=>`${x.label} — ${fmt(x.date)} (${x.days<0?('expired '+Math.abs(x.days)+' days ago'):x.days===0?'due today':('due in '+x.days+' days')})`).join('; ')}. Records read from a portal are labelled with their source; the rest are user-entered and not verified by NBCRNA, AANA, or a state board.`}
   if(/mileage|miles|trip/.test(l)){if(!db.mileage.length)return 'No mileage trips are logged yet. Log one from the Mileage tab, or generate schedule-based drafts there and confirm each trip.';const total=verifiedMileageTotal(),verified=verifiedMileageTrips().length,draft=db.mileage.filter(x=>x.status==='draft').length;return `Mileage on this device: ${total.toFixed(1)} verified miles across ${verified} confirmed trip(s), including ${draft} draft(s) still needing confirmation (drafts are not counted until the weekly review confirms them). Mileage defaults to ${tripTypeLabel(mileageTripType())}, and each trip shows whether it is round trip or one way — a round-trip trip is counted once, never doubled. Drafts are not verified trips — confirm the trip occurred and the actual miles before using them.`}
   if(/facilit|hospital/.test(l)){if(!db.facilities.length)return 'No facilities are saved yet. Add one from the Facilities tab with its rates, and shifts can then use those rates.';return `You have ${db.facilities.length} facilit(ies) saved: ${db.facilities.map(f=>`${f.name} (8h ${currency(f.rate8)}, 24h ${currency(f.rate24)}, 2nd call ${currency(f.rateSecond)})`).join('; ')}. I don't quote facility notes here, since they may hold authorized facility codes.`}
@@ -2303,6 +2303,17 @@ async function askAssistantLive(raw){
 //      verify endpoints are retired and uncalled (datacenter pulls are
 //      blocked by the portals themselves). Nothing in the app may
 //      claim or imply a silent server pull.
+//   7. (v143) The SESSION + REQUEST side: the loop needs ONE user
+//      action — signing in when a session has expired. Connection
+//      rows carry session_state + read_requested_at +
+//      last_read_outcome (migration 015). The card's primary path is
+//      Connect (sign in on the portal's own page) → "I'm signed in —
+//      read it now" (queues the read). A due check on a live-session
+//      source queues its own read in the sweep — no prompt at all; a
+//      due source whose session needs the user surfaces ONLY the
+//      sign-in prompt. The guided screenshot check is a BACKUP, inside
+//      the card's collapsed "Or add it another way" area — it is not
+//      on the primary path, and no primary-path string mentions it.
 const PORTAL_AGENT_SPEC={
   model:'agent_read',
   session:'The user signs in to the portal themselves in a real browser; the agent navigates and reads the portal’s defined pages like a person. The app never sees or stores a portal password.',
@@ -2310,6 +2321,8 @@ const PORTAL_AGENT_SPEC={
   outcomes:['read','needs-sign-in','blocked','not-found'],
   onlyReadVerifies:true,
   resultHandler:'applyPortalAgentRead',
+  requestQueue:'portal_connections.read_requested_at (migration 015) — set by the user’s “I’m signed in — read it now” tap, or quietly by the sweep when a check comes due on a source whose session is live; filing a result clears it',
+  sessionState:'portal_connections.session_state — live after a read, needs_signin after a needs-sign-in result; drives the card session line (“Session live” / “Needs your sign-in”) and the due prompt (live session: the read queues itself, no prompt; needs sign-in: the sign-in prompt only, never a failure alarm)',
   paths:'PORTAL_AGENT_PATHS',
   monitoring:{baseCadenceDays:7,escalation:{inside90:3,inside30:2,inside7:1,expired:1},dueAction:'agent read runs; needs-sign-in / blocked raises ONE needs-you prompt per cycle',reads:'agent session — never a silent server pull'},
   sources:{
@@ -2477,9 +2490,10 @@ const PORTAL_VERIFIED_SOURCES=['public_verification','nbcrna_portal','aana_porta
 //     blocked, or not-found is recorded honestly with its reason —
 //     never faked, and it never stamps the source as checked.
 //   * There is no "run check now": the cadence is the only trigger.
-//     A due check surfaces ONE prompt per due cycle (which can launch
-//     the guided check as the in-app fallback). Dismissing snoozes the
-//     prompt to the next cycle.
+//     (v143) A due check on a live-session source queues its own read
+//     in the sweep; a due check whose session needs the user surfaces
+//     ONE sign-in prompt per due cycle. Dismissing snoozes the prompt
+//     to the next cycle.
 // Monitoring state lives on this device (db.portalMonitoring, included in
 // JSON backups); the check log reuses db.portalChecks (last 20).
 const MONITOR_SOURCES={
@@ -2520,13 +2534,19 @@ function monitorNextDue(mon,todayStr){
 }
 function monitorMethod(mon){return (MONITOR_SOURCES[mon.source]||{}).method||'agent_read'}
 // One prompt per due cycle: visible while the check is due and this
-// cycle has not been dismissed. Every check is an agent read in the
-// user's own signed-in session, so every due check can need the user —
-// there is no silent server route that skips the prompt. Dismissing
-// snoozes to the next cadence (a new due date = a new cycle).
+// cycle has not been dismissed. Dismissing snoozes to the next
+// cadence (a new due date = a new cycle).
+// v143: the prompt is the SESSION-EXPIRY prompt — it exists for the
+// one thing a read can need from the user: a fresh sign-in. A due
+// source whose session is LIVE needs nothing: the sweep quietly
+// queues its read (read_requested_at) and no prompt shows. A due
+// source whose session is 'needs_signin' (a read proved it expired)
+// or still 'unknown' (never signed in / never read) prompts — with
+// the sign-in wording, never a "check failed" alarm.
 function monitorPromptVisible(mon,todayStr){
   if(!monitorIsDue(mon,todayStr))return false;
-  return mon.promptDismissedCycle!==monitorNextDue(mon,todayStr);
+  if(mon.promptDismissedCycle===monitorNextDue(mon,todayStr))return false;
+  return monitorSessionState(mon).sessionState!=='live';
 }
 function monitorIsDue(mon,todayStr){if(mon.enabled===false)return false;return monitorNextDue(mon,todayStr)<=(todayStr||localDate(new Date()))}
 function ensurePortalMonitoring(){
@@ -2573,7 +2593,11 @@ function recordMonitorCheck(key,outcome,summary,method){
 }
 function monitorOutcomeLabel(o){return {'no_change':'Checked — no change','changed':'Changed','needs_signin':'Needs your sign-in','blocked':'Couldn’t read','not_found':'No record found','failed':'Check failed','not_checked':'Not checked yet'}[o]||o||'Not checked yet'}
 function monitorDuePromptHTML(mon){
-  return `<div class="item"><strong>${escapeHTML(mon.label)} check due — sign in to run it.</strong><div class="toolbar"><button type="button" data-action="monitor-assistant" data-id="${escapeHTML(mon.key)}">Run my check</button><button type="button" class="secondary" data-action="monitor-prompt-dismiss" data-id="${escapeHTML(mon.key)}">Not now</button></div></div>`;
+  // v143: the due prompt IS the session-expiry prompt — one tap routes
+  // into the source card's sign-in action (monitor-signin), and the
+  // read follows from the signed-in session. No screenshot step, no
+  // portal navigation asked of the user, no failure alarm.
+  return `<div class="item"><strong>${escapeHTML(mon.label)} check due — it needs a fresh sign-in.</strong><div class="toolbar"><button type="button" data-action="monitor-signin" data-id="${escapeHTML(mon.key)}">Sign in</button><button type="button" class="secondary" data-action="monitor-prompt-dismiss" data-id="${escapeHTML(mon.key)}">Not now</button></div></div>`;
 }
 // The reminder surface: due-check prompts at the top of the Credentials
 // tab — one per due cycle, next to the credential deadline notices.
@@ -2601,16 +2625,25 @@ function portalMonitoringHTML(){
 // portals block datacenter automation), and pretending a background
 // pull exists was retired with it. Checks are agent reads: they run
 // in a real browser session the user signed in to, and their results
-// come back through applyPortalAgentRead. The sweep's only job now is
-// to keep the watchdog mirror current, so a check that comes due
-// surfaces its ONE prompt per cycle (panel + Credentials reminder
-// surface + the portal sign-in push trigger) until the read lands.
+// come back through applyPortalAgentRead.
+// v143: the sweep also works the request queue. Due logic is
+// unchanged (weekly / inside-90-days faster), but what a due source
+// gets now depends on its session: LIVE session + no pending request
+// → the sweep quietly queues the read itself (read_requested_at) and
+// the reader service picks it up — no prompt, nothing asked of the
+// user. Session needs the user → ONLY the sign-in prompt surfaces
+// (monitorPromptVisible + the watchdog mirror), never an alarm.
 let monitorSweepRunning=false;
 async function monitorBackgroundSweep(){
   if(!featureOn('featureCredentials'))return;
   if(monitorSweepRunning)return;monitorSweepRunning=true;
   try{
-    ensurePortalMonitoring();
+    const today=localDate(new Date());
+    ensurePortalMonitoring().forEach(m=>{
+      if(!monitorIsDue(m,today))return;
+      const st=monitorSessionState(m);
+      if(st.sessionState==='live'&&!st.readRequestedAt)portalRequestRead(m.source==='licenses'?'licenses':m.source,{state:m.state||'',quiet:true});
+    });
     pushWatchRefreshPortal();
   }catch(e){}finally{monitorSweepRunning=false;}
 }
@@ -2945,18 +2978,25 @@ function applyPortalAgentRead(source,result){
   const type=String(fields.type||'APRN');
   const key=monitorKey(source,state,type);
   if(!PORTAL_READ_OUTCOMES.includes(outcome)){
+    portalReadFileResult(source,state,'failed');
     recordMonitorCheck(key,'failed',reason||'Agent read reported an unknown outcome','agent_read');
     return {ok:false,outcome:outcome||'unknown'};
   }
   if(outcome==='needs-sign-in'){
+    // v143: the session is proven expired — file it before the monitor
+    // records the attempt, so the due prompt + card read the fresh
+    // session state ("Needs your sign-in", sign-in prompt only).
+    portalReadFileResult(source,state,outcome);
     recordMonitorCheck(key,'needs_signin',reason||'The portal session needs your sign-in','agent_read');
     return {ok:false,outcome};
   }
   if(outcome==='blocked'){
+    portalReadFileResult(source,state,outcome);
     recordMonitorCheck(key,'blocked',reason||'The portal would not let the read through','agent_read');
     return {ok:false,outcome};
   }
   if(outcome==='not-found'){
+    portalReadFileResult(source,state,outcome);
     recordMonitorCheck(key,'not_found',reason||'No record found on the portal','agent_read');
     return {ok:false,outcome};
   }
@@ -2964,6 +3004,7 @@ function applyPortalAgentRead(source,result){
   // a response with no record data certifies nothing and stamps nothing).
   const hasData=Object.keys(fields).some(k=>String(fields[k]??'').trim()!=='');
   if(!hasData){
+    portalReadFileResult(source,state,'failed');
     recordMonitorCheck(key,'failed','Agent read came back with no record data','agent_read');
     return {ok:false,outcome:'failed'};
   }
@@ -2973,6 +3014,10 @@ function applyPortalAgentRead(source,result){
   if(source==='licenses')cloudSyncTimes.licenses=when;
   delete portalAttemptFailed[source];
   const changed=monitorSnapshotChanged(beforeSnap,monitorSnapshot(source,state,type));
+  // v143: a read proves the session live and clears any queued
+  // request — filed before the monitor records the check, so the
+  // watchdog mirror refreshed inside recordMonitorCheck sees it.
+  portalReadFileResult(source,state,'read');
   recordMonitorCheck(key,changed?'changed':'no_change',(changed?'Changed on agent read — ':'Agent read, no change — ')+summary,'agent_read');
   persist();
   return {ok:true,outcome:'read',changed,summary};
@@ -6940,7 +6985,14 @@ function credentialsPage(){
   // Connect card: the FINAL model leads — system sign-in sheet, Face ID,
   // no passwords in the app. The new-tab sign-in below it is a
   // clearly-labelled preview stand-in (class "standin"), not the design.
-  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey,summary,forceOpen)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];const duePrompt=ensurePortalMonitoring().some(m=>m.source===portalKey&&monitorPromptVisible(m,localDate(new Date())));const checkActive=!!(portalCheck&&portalCheck.source===portalKey);const panelOpen=!!(forceOpen||opened||portalLeaveSheet===portalKey||duePrompt||checkActive);return collapsePanelHTML('credentials-'+portalKey+'-panel',summary?title+' · '+summary:title,`<p><strong>Status: ${escapeHTML(st.label)}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p><p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>Signed in over there?</strong> One tap brings you back and starts your check.</p>`:''}<div class="toolbar"><a class="button" href="${siteUrl}" target="_blank" rel="noopener" data-portal-connect="${portalKey}">Connect ${title} — open portal</a>${opened?`<button type="button" data-action="portal-return" data-id="${portalKey}">I’m back — run my check</button>`:''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div>${portalLeaveSheet===portalKey?`<div class="item"><p><strong>One sec — the portal opens outside CRNA Hub.</strong></p><p class="muted">Over there: sign in, then screenshot the page that shows your record.</p><p class="muted">CRNA Hub stays right here — come back to this tab and your check picks up where you left off.</p><div class="toolbar"><button type="button" data-action="portal-leave-go" data-id="${portalKey}">Take me to ${title}</button><button type="button" class="secondary" data-action="portal-leave-cancel">Not now</button></div></div>`:''}`,panelOpen)};
+  // v143 card flow: the PRIMARY path is two steps — Connect (sign in
+  // on the portal's own page) → "I'm signed in — read it now" (queues
+  // an agent read of that signed-in session). The guided screenshot
+  // check and the manual routes live ONLY in the collapsed "Or add it
+  // another way" backup at the bottom of the card — no primary-path
+  // string mentions them. The status line carries the session state
+  // in plain words next to the read status, and a queued read says so.
+  const connCard=(title,desc,pulls,manualNote,siteLabel,siteUrl,portalKey,summary,forceOpen)=>{const st=cloudPortalState(portalKey);const meta=PORTAL_CHECK_SOURCES[portalKey]||{};const opened=portalOpened[portalKey];const duePrompt=ensurePortalMonitoring().some(m=>m.source===portalKey&&monitorPromptVisible(m,localDate(new Date())));const checkActive=!!(portalCheck&&portalCheck.source===portalKey);const panelOpen=!!(forceOpen||opened||portalLeaveSheet===portalKey||duePrompt||checkActive);const sess=portalReadState(portalKey);const sessLine=sess.sessionState==='live'?' · Session live':sess.sessionState==='needs_signin'?' · Needs your sign-in':'';const connectLabel=sess.sessionState==='needs_signin'?('Sign in to refresh — '+title):('Connect '+title+' — open portal');return collapsePanelHTML('credentials-'+portalKey+'-panel',summary?title+' · '+summary:title,`<p><strong>Status: ${escapeHTML(st.label)}${sessLine}</strong>${st.detail?` — ${escapeHTML(st.detail)}`:''}</p>${sess.readRequestedAt?`<p class="hint">Read requested — we’ll read it from your signed-in session shortly.</p>`:''}<p class="muted">${desc}</p><p class="muted">${manualNote}</p><p class="muted">Sign in on the portal's own page: <a href="${siteUrl}" target="_blank" rel="noopener">${siteLabel}</a>. We never ask for your portal password.</p>${opened?`<p><strong>Signed in over there?</strong> Tap “I’m signed in — read it now” and we’ll read it from your signed-in session.</p>`:''}<div class="toolbar"><a class="button" href="${siteUrl}" target="_blank" rel="noopener" data-portal-connect="${portalKey}">${escapeHTML(connectLabel)}</a><button type="button" data-action="portal-read-request" data-id="${portalKey}">I’m signed in — read it now</button><a class="button secondary" href="${siteUrl}" target="_blank" rel="noopener">Open in Safari</a></div>${portalLeaveSheet===portalKey?`<div class="item"><p><strong>One sec — the portal opens outside CRNA Hub.</strong></p><p class="muted">Over there: sign in on the portal’s own page, then come back here and tap “I’m signed in — read it now”.</p><p class="muted">CRNA Hub stays right here — come back to this tab and your check picks up where you left off.</p><div class="toolbar"><button type="button" data-action="portal-leave-go" data-id="${portalKey}">Take me to ${title}</button><button type="button" class="secondary" data-action="portal-leave-cancel">Not now</button></div></div>`:''}<details><summary class="muted">Or add it another way</summary><p class="muted">The backups, for when a read can’t run: a guided check — you show the assistant the record page and approve a preview before anything saves — the official manual lookup, or typing it in yourself. Manual entry is at the bottom of this page; records saved there are user-entered, not verified.</p><div class="toolbar">${opened?`<button type="button" data-action="portal-return" data-id="${portalKey}">I’m back — run my check</button>`:''}<button type="button" class="secondary" data-action="assistant-portal-check" data-id="${title}">I signed in — check it</button></div>${portalKey==='licenses'?PORTAL_LOOKUP_LINKS:''}</details>`,panelOpen)};
   const nbcrnaManual=(n.status||n.number||n.renewalDeadline||n.periodEnd)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const aanaManual=(a.status||a.number||a.expiration)?'Record on file — entered by hand, not verified.':'No record on file yet.';
   const licManual=db.licenses.length?db.licenses.length+' license record(s) on file — entered by hand, not verified.':'No license records on file yet.';
@@ -9112,6 +9164,8 @@ if(action==='monitor-prompt-dismiss'){const m=(db.portalMonitoring||[]).find(x=>
 if(action==='monitor-toggle'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.enabled=!m.enabled;persist();}return render();}
 if(action==='monitor-ack'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m){m.changeFlag=false;persist();}return render();}
 if(action==='monitor-assistant'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);if(m)return monitorAssistantCheck(m);return;}
+if(action==='monitor-signin'){const m=(db.portalMonitoring||[]).find(x=>x.key===entry);const key=m?(m.source==='licenses'?'licenses':m.source):entry;tab='Credentials';render();portalConnectClick(key);return;}
+if(action==='portal-read-request'){portalRequestRead(entry);return render();}
 if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses'})[entry]||entry;return startPortalCheck(src);}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry);}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
 if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
@@ -10719,7 +10773,12 @@ async function cloudUpsertPortals() { const states = []; (db.licenses || []).for
 // NEVER overwrite an existing row's status: a portal that a live read
 // marked 'connected' (or a failed attempt marked 'failed') must not be
 // reset to 'connected' by a manual upload, or vice versa.
-const missing = desired.filter(d => !(existing || []).some(e => e.portal === d.portal && (e.state || null) === (d.state || null))); if (missing.length) { const rows = missing.map(d => ({ id: id(), user_id: cloudUid(), portal: d.portal, state: d.state, status: 'not_connected', last_synced_at: null, last_error: null })); await sbReq('/rest/v1/portal_connections', 'POST', rows); } }
+// v143: new rows also carry the agent-read session fields (migration
+// 015). On a database where 015 has not run yet the POST with the new
+// columns is rejected, so creation retries with the pre-015 columns
+// only — the session loop lights up once the migration lands, and
+// nothing about the older behavior changes meanwhile.
+const missing = desired.filter(d => !(existing || []).some(e => e.portal === d.portal && (e.state || null) === (d.state || null))); if (missing.length) { const rows = missing.map(d => ({ id: id(), user_id: cloudUid(), portal: d.portal, state: d.state, status: 'not_connected', last_synced_at: null, last_error: null, session_state: 'unknown', read_requested_at: null, last_read_outcome: null })); try { await sbReq('/rest/v1/portal_connections', 'POST', rows); } catch (e) { const legacy = rows.map(r => { const c = Object.assign({}, r); delete c.session_state; delete c.read_requested_at; delete c.last_read_outcome; return c; }); await sbReq('/rest/v1/portal_connections', 'POST', legacy); } } }
 async function cloudUploadLocal(opts) { const silent = !!(opts && opts.silent); if (!cloudSession) return false; try { const rows = []; if (cloudLocalHasNbcrna()) rows.push(sbReq('/rest/v1/nbcrna_profiles', 'POST', cloudNbcrnaRow())); if (cloudLocalHasAana()) rows.push(sbReq('/rest/v1/aana_memberships', 'POST', cloudAanaRow())); if ((db.licenses || []).length) rows.push(sbReq('/rest/v1/licenses', 'POST', (db.licenses || []).map(cloudLicenseRow))); const ceRows = (db.nbcrnaCE || []).map(x => cloudCeRow(x, 'nbcrna')).concat((db.aanaCE || []).map(x => cloudCeRow(x, 'aana'))); if ((db.documents || []).length) rows.push(sbReq('/rest/v1/documents', 'POST', (db.documents || []).map(cloudDocumentRow))); if (ceRows.length) rows.push(sbReq('/rest/v1/ce_records', 'POST', ceRows)); await Promise.all(rows); await cloudUpsertPortals(); await cloudUploadSynced(); cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); render(); if (!silent) alert('On-device records uploaded to your cloud account.'); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); if (!silent) alert('Upload failed: ' + e.message); return false; } }
 // --- Full cloud sync: shifts, facilities, mileage, pay stubs, settings
 // (Nov 6, 2026) -------------------------------------------------------
@@ -10789,6 +10848,10 @@ function cloudMergeList(localArr, cloudArr) { const out = (Array.isArray(localAr
 // conflict resolves by the same newest-edit rule, and an exact tie
 // keeps the local value — it is the copy in hand, pushed back up next.
 function cloudMergeSingleton(localObj, cloudObj, hasLocal, hasCloud) { if (!hasCloud) return localObj; if (!hasLocal) return cloudObj; const lt = cloudRecTs(localObj), ct = cloudRecTs(cloudObj); const cloudNewer = (!!lt && !!ct && ct > lt) || (!lt && !!ct); const merged = Object.assign({}, localObj); for (const k of Object.keys(cloudObj)) { if (k === 'updatedAt' || k === 'docNote' || k === 'ceNote' || k === 'reminders') continue; const lv = localObj[k], cv = cloudObj[k]; const lEmpty = lv === '' || lv === null || lv === undefined, cEmpty = cv === '' || cv === null || cv === undefined; if (cEmpty) continue; if (lEmpty || (cloudNewer && String(lv) !== String(cv))) merged[k] = cv; } merged.docNote = localObj.docNote || cloudObj.docNote || ''; merged.ceNote = localObj.ceNote || cloudObj.ceNote || ''; merged.reminders = localObj.reminders || cloudObj.reminders || '90,60,30,7'; merged.updatedAt = cloudNewer ? ct : (lt || ct || ''); return merged; }
+// Portal rows ride down whole (select=*), so the v143 session fields
+// (session_state / read_requested_at / last_read_outcome, migration
+// 015) round-trip with no per-field mapping — portalReadState() reads
+// them straight off the rows in cloudPortals.
 function cloudApplyData(data) { cloudPortals = data.portals || []; if (data.nbcrna) { const r = data.nbcrna; const cm = { status: r.certification_status || '', number: r.certification_number || '', periodStart: r.period_start || '', periodEnd: r.period_end || '', renewalDeadline: r.renewal_deadline || r.period_end || '', source: r.source || 'user_entered', classA: r.class_a_credits === null || r.class_a_credits === undefined ? '' : String(r.class_a_credits), classB: r.class_b_credits === null || r.class_b_credits === undefined ? '' : String(r.class_b_credits), macEd: r.mac_ed_credits === null || r.mac_ed_credits === undefined ? '' : String(r.mac_ed_credits), macDev: r.mac_dev_credits === null || r.mac_dev_credits === undefined ? '' : String(r.mac_dev_credits), macEdRequired: r.mac_ed_required || 60, macDevRequired: r.mac_dev_required || 40, checkStatus: r.cpc_check_in_status || '', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.nbcrna = cloudMergeSingleton(db.nbcrna || {}, cm, cloudLocalHasNbcrna(), true); cloudSyncTimes.nbcrna = r.last_synced_at || ''; } if (data.aana) { const r = data.aana; const cm = { status: r.membership_status || '', number: r.membership_number || '', expiration: r.expiration || '', source: r.source || 'user_entered', docNote: '', ceNote: '', reminders: '90,60,30,7', updatedAt: r.last_synced_at || '' }; db.aana = cloudMergeSingleton(db.aana || {}, cm, cloudLocalHasAana(), true); cloudSyncTimes.aana = r.last_synced_at || ''; } const licRem = {}; (db.licenses || []).forEach(x => { licRem[x.id] = x.reminders; }); const cloudLic = (data.licenses || []).map(r => ({ id: r.id, state: r.state, type: r.license_type, status: r.status || '', number: r.license_number || '', issue: r.issue_date || '', expiry: r.expiration_date || '', portal: r.board_portal_url || '', note: r.notes || '', source: r.source || 'user_entered', reminders: licRem[r.id] || '90,60,30,7', updatedAt: r.last_synced_at || '' })); db.licenses = cloudMergeList(db.licenses || [], cloudLic); if (cloudLic.length) cloudSyncTimes.licenses = cloudLic.map(x => x.updatedAt || '').sort().pop(); db.nbcrnaCE = cloudMergeList(db.nbcrnaCE || [], (data.ce || []).filter(r => r.source === 'nbcrna').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), class: r.credit_class || 'Class A', updatedAt: r.last_synced_at || '' }))); db.aanaCE = cloudMergeList(db.aanaCE || [], (data.ce || []).filter(r => r.source === 'aana').map(r => ({ id: r.id, title: r.title || '', date: r.completed_date || '', credits: r.credits === null || r.credits === undefined ? '' : String(r.credits), note: '', updatedAt: r.last_synced_at || '' }))); if (Array.isArray(data.documents)) { db.documents = cloudMergeList(db.documents || [], data.documents.map(r => ({ id: r.id, certType: r.cert_type || '', issue: r.issue_date || '', expiry: r.expiration_date || '', expirySource: r.expiry_source || 'user_entered', fileName: r.file_name || '', storagePath: r.storage_path || '', storageStatus: r.storage_path ? 'cloud' : 'local_details_only', uploadedAt: r.uploaded_at || '', updatedAt: r.uploaded_at || '' }))); }
 if (Array.isArray(data.shifts)) db.shifts = cloudMergeSyncedList(db.shifts || [], data.shifts, 'shifts'); if (Array.isArray(data.facilities)) db.facilities = cloudMergeSyncedList(db.facilities || [], data.facilities, 'facilities'); if (Array.isArray(data.mileage)) db.mileage = cloudMergeSyncedList(db.mileage || [], data.mileage, 'mileage'); if (Array.isArray(data.payStubs)) db.payStubs = cloudMergeSyncedList(db.payStubs || [], data.payStubs, 'payStubs'); if (Array.isArray(data.vehicles)) db.vehicles = cloudMergeSyncedList(db.vehicles || [], data.vehicles, 'vehicles'); if (data.settings && typeof data.settings === 'object') { db.settings = cloudMergeSettings(db.settings || {}, data.settings); cloudSettingsSnapshot = cloudSettingsContent(db.settings); try { localStorage.setItem('crna-hub-settings-snapshot', cloudSettingsSnapshot); } catch (e) {} }
 cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
@@ -11081,6 +11144,84 @@ function portalNoteFailed(key, error) {
     }
   }
 }
+// --- Agent-read session + request state (v143, Nov 12, 2026) ---
+// The streamlined loop Caleb asked for: no screenshots, no making the
+// user navigate the portal — their only involvement is signing in when
+// a session has expired. The state lives on the portal_connections
+// row (migration 015) and rides the normal cloud sync:
+//   * session_state — 'live' | 'needs_signin' | 'unknown'. A filed
+//     'read' proves the session live; a filed 'needs-sign-in' proves
+//     it expired. Cards show it in plain words next to the read
+//     status ("Session live" / "Needs your sign-in").
+//   * read_requested_at — the read queue. The user's "I'm signed in —
+//     read it now" tap sets it; the sweep sets it quietly when a check
+//     comes due on a live-session source. The reader service picks up
+//     pending requests; filing a result clears it.
+//   * last_read_outcome — the last agent read's outcome, verbatim.
+// Until migration 015 runs, rows simply lack the fields: reads of
+// them yield 'unknown' / no request, writes are best-effort PATCHes
+// that fail soft (the same pattern as portalNoteFailed) — the loop
+// stays dark, never faked.
+let portalReadRequests = {}; // card key -> ISO stamp of this session's read request (covers the no-row-yet case)
+function portalRowFor(source, state) {
+  const rows = cloudPortals || [];
+  if (source === 'nbcrna') return rows.find(r => r.portal === 'nbcrna') || null;
+  if (source === 'aana') return rows.find(r => r.portal === 'aana') || null;
+  const boards = rows.filter(r => r.portal === 'state_board');
+  if (!boards.length) return null;
+  if (state) { const hit = boards.find(r => String(r.state || '').toLowerCase() === String(state).toLowerCase()); if (hit) return hit; }
+  return boards.slice().sort((a, b) => String(b.last_synced_at || '').localeCompare(String(a.last_synced_at || '')))[0];
+}
+function portalReadState(key, state) {
+  const row = portalRowFor(key, state);
+  return {
+    row,
+    sessionState: (row && row.session_state) || 'unknown',
+    readRequestedAt: (row && row.read_requested_at) || portalReadRequests[key] || '',
+    lastReadOutcome: (row && row.last_read_outcome) || '',
+  };
+}
+function portalPatchRow(row, fields) {
+  if (!row || !row.id) return;
+  if (!(typeof cloudSyncEnabled === 'function' && cloudSyncEnabled())) return;
+  (async () => { try { await sbReq('/rest/v1/portal_connections?id=eq.' + encodeURIComponent(row.id), 'PATCH', fields); } catch (e) {} })();
+}
+// Queue a read for a source: stamp the row (the reader service's
+// queue) and remember it on this device so the card updates at once.
+// With no row yet (first run), the portals upsert creates it first
+// and the stamp lands on the fresh row.
+function portalRequestRead(key, opts) {
+  const state = (opts && opts.state) || '';
+  const stamp = cloudNow();
+  portalReadRequests[key] = stamp;
+  const row = portalRowFor(key, state);
+  if (row) { row.read_requested_at = stamp; portalPatchRow(row, { read_requested_at: stamp }); return stamp; }
+  if (typeof cloudSyncEnabled === 'function' && cloudSyncEnabled()) {
+    (async () => { try { await cloudUpsertPortals(); const r2 = portalRowFor(key, state); if (r2) { r2.read_requested_at = portalReadRequests[key] || stamp; portalPatchRow(r2, { read_requested_at: r2.read_requested_at }); } } catch (e) {} })();
+  }
+  return stamp;
+}
+// File an agent read's session outcome onto the connection row: the
+// request is always cleared (the read happened); the outcome is
+// recorded verbatim; session_state moves only on proof — 'live' on a
+// read, 'needs_signin' on a needs-sign-in. Blocked / not-found prove
+// nothing about the session and leave it alone; a 'failed' filing
+// (unknown outcome / empty read) clears the request and writes
+// nothing else.
+function portalReadFileResult(source, state, outcome) {
+  const row = portalRowFor(source, state);
+  delete portalReadRequests[source];
+  if (!row) return;
+  const patch = { read_requested_at: null };
+  row.read_requested_at = null;
+  if (PORTAL_READ_OUTCOMES.includes(outcome)) {
+    patch.last_read_outcome = outcome; row.last_read_outcome = outcome;
+    if (outcome === 'read') { patch.session_state = 'live'; row.session_state = 'live'; }
+    if (outcome === 'needs-sign-in') { patch.session_state = 'needs_signin'; row.session_state = 'needs_signin'; }
+  }
+  portalPatchRow(row, patch);
+}
+function monitorSessionState(mon) { return portalReadState(mon.source === 'licenses' ? 'licenses' : mon.source, mon.state || ''); }
 function cloudPortalState(key) { if (!SUPABASE_CONFIGURED) return { label: 'Not connected', detail: 'Sign-in isn’t available yet' }; if (!cloudSession) return { label: 'Not connected', detail: 'Sign in on the Account tab to sync records to your account' }; if (!cloudActive) return { label: 'Not connected', detail: 'Signed in — records are merging with your account automatically' }; if (cloudOffline) return { label: 'Signed in (offline)', detail: 'Showing the on-device copy; the last sync attempt failed' + (cloudError ? ' (' + cloudError + ')' : '') };
   // A read that failed in this session outranks any stored row: the
   // refresh after a failure may itself fail to land, and the label must
@@ -11145,10 +11286,11 @@ function portalSourceLabel(source, when) { const labels = { 'public_verification
 // submit 404s, AANA's SSO is bot-gated for automation, WV/OH board
 // lookups block datacenter automation. Monitoring checks are agent
 // reads in the user's own signed-in browser session, reported back
-// through applyPortalAgentRead. This Connect flow + the guided check
-// are the in-app fallback: the check reads the record page the user
-// brings back (screenshot or pasted text) and previews it before
-// saving.
+// through applyPortalAgentRead. v143: this Connect flow now feeds
+// the read-request queue — Connect signs the user in, "I'm signed
+// in — read it now" queues the read (portalRequestRead), and the
+// guided check survives only as the collapsed backup inside each
+// card ("Or add it another way").
 let portalOpened = {}; // portalKey -> true once Connect opened the portal
 let portalLeaveSheet = ''; // portalKey whose pre-leaving sheet is showing ('' = none)
 const portalFlows = {}; // portalKey -> connect flow object

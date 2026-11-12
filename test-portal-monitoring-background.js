@@ -12,9 +12,12 @@
 //     reported back through applyPortalAgentRead; the sweep makes NO
 //     portal calls at all — it only keeps the monitors + watchdog
 //     mirror current so the due prompt fires.
-//   * A due source surfaces ONE prompt per due cycle ("NBCRNA check
-//     due — sign in to run it") in the panel and on the Credentials
-//     reminder surface; the prompt launches the guided check.
+//   * A due source surfaces ONE prompt per due cycle in the panel and
+//     on the Credentials reminder surface. (v143: the prompt is the
+//     session-expiry prompt — "NBCRNA check due — it needs a fresh
+//     sign-in" — routing into the card's sign-in action; a due source
+//     with a LIVE session gets no prompt at all, its read is queued
+//     by the sweep instead. See test-v143-agent-read-loop.js.)
 //     Dismissing snoozes it to the next cadence.
 //   * Honest labels: a due date passing alone never marks a source
 //     checked — lastChecked only moves when a read actually ran.
@@ -118,17 +121,23 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   t('signed-in source is never auto-checked: a due date passing leaves lastChecked/lastOutcome empty',
     sandbox.__calls >= 0 && run(`db.portalMonitoring.find(x => x.key === 'aana').lastChecked`) === '' &&
     run(`db.portalMonitoring.find(x => x.key === 'aana').lastOutcome`) === '');
+  // (v143 rewrite — the due prompt is now the session-expiry prompt:
+  // "it needs a fresh sign-in", with ONE tap (monitor-signin) into the
+  // source card's sign-in action. The old "sign in to run it / Run my
+  // check" wording launched the guided check; that flow is the backup
+  // now, not the prompt.)
   t('exactly one due prompt for the source in the panel',
-    (sandbox.__panel2.match(/check due — sign in to run it/g) || []).length === 1 &&
-    sandbox.__panel2.includes('data-action="monitor-prompt-dismiss" data-id="aana"'));
+    (sandbox.__panel2.match(/check due — it needs a fresh sign-in/g) || []).length === 1 &&
+    sandbox.__panel2.includes('data-action="monitor-prompt-dismiss" data-id="aana"') &&
+    sandbox.__panel2.includes('data-action="monitor-signin" data-id="aana"'));
   t('the same prompt is on the Credentials reminder surface (Checks due strip)',
-    sandbox.__strip.includes('Checks due') && sandbox.__strip.includes('AANA check due — sign in to run it'));
+    sandbox.__strip.includes('Checks due') && sandbox.__strip.includes('AANA check due — it needs a fresh sign-in'));
   t('the panel keeps "Check with assistant" for the due signed-in source',
     sandbox.__panel2.includes('data-action="monitor-assistant" data-id="aana"'));
 
   // --- 5. The prompt launches the guided check flow.
   run(`actions('monitor-assistant', 'aana'); globalThis.__pc = portalCheck && { source: portalCheck.source, step: portalCheck.step }; globalThis.__tab = tab;`);
-  t('Run my check / Check with assistant launches the guided flow for that source',
+  t('Check with assistant (the monitoring panel’s backup action) still launches the guided flow for that source',
     sandbox.__pc && sandbox.__pc.source === 'aana' && sandbox.__tab === 'Assistant');
   run(`portalCheck = null;`);
 

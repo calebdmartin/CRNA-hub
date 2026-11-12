@@ -165,10 +165,15 @@ t('Assistant portal-check intro is one clean line + Check buttons, no scaffoldin
   !sandbox.__portalIntro.includes('system sign-in sheet') &&
   !sandbox.__portalIntro.includes(STANDIN) && !sandbox.__portalIntro.includes('standin'));
 run(`globalThis.__answer = answerQuestion('check my NBCRNA portal');`);
-t('assistant answer is ONE short line pointing at the check step (canned essay gone — Nov 6)',
+// (v143 rewrite — the answer now points at the primary path: Connect
+// → sign in on the portal's own page → "I'm signed in — read it now".
+// The old wording pointed at "I signed in — check it", the guided
+// screenshot check, which is the collapsed backup now.)
+t('assistant answer is ONE short line pointing at the read-it-now step (canned essay gone — Nov 6)',
   !sandbox.__answer.includes('system sign-in sheet') &&
   !sandbox.__answer.includes(STANDIN) &&
-  sandbox.__answer.includes('I signed in — check it') &&
+  sandbox.__answer.includes('read it now') &&
+  sandbox.__answer.includes('signed-in session') &&
   sandbox.__answer.includes('nothing is saved until you approve') &&
   sandbox.__answer.length < 300);
 

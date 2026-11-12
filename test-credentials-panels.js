@@ -137,8 +137,12 @@ const SETTLED = `
     panelTag(due, 'credentials-monitoring-panel').includes(' open') &&
     !panelTag(due, 'credentials-nbcrna-panel').includes(' open') &&
     !panelTag(due, 'cert-documents').includes(' open'));
+  // (v143 rewrite — the due prompt is now the session-expiry prompt:
+  // "it needs a fresh sign-in", one tap into the card's sign-in
+  // action. The old "sign in to run it / Run my check" wording
+  // belonged to the retired guided-check-first flow.)
   t('the Checks due strip still renders at the top, ahead of the panels',
-    due.includes('<h2>Checks due</h2>') && due.includes('AANA check due — sign in to run it') &&
+    due.includes('<h2>Checks due</h2>') && due.includes('AANA check due — it needs a fresh sign-in') &&
     due.indexOf('Checks due') < due.indexOf('id="credentials-nbcrna-panel"'));
 
   // ================= Portal opened / guided check in flight ============
@@ -179,7 +183,7 @@ const SETTLED = `
     appSrc.includes("collapsePanelHTML('cert-documents'") &&
     appSrc.includes("'credentials-'+portalKey+'-panel'"));
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v142'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v143'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();

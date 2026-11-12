@@ -155,8 +155,10 @@ t('the chat line is one short pointer at the panel',
 
 // --- 6. The canned assistant answer no longer recites the essay.
 run(`globalThis.__answer = answerQuestion('check my NBCRNA portal');`);
-t('canned portal answer is one short line pointing at the check step',
-  sandbox.__answer.includes('I signed in — check it') &&
+// (v143 rewrite — same reason as test-portal-signin §4: the answer
+// points at the read-request primary path now, not the guided check.)
+t('canned portal answer is one short line pointing at the read-it-now step',
+  sandbox.__answer.includes('read it now') &&
   sandbox.__answer.includes('nothing is saved until you approve') &&
   !sandbox.__answer.includes('works like this') &&
   sandbox.__answer.length < 300);
@@ -268,7 +270,7 @@ t('canned portal answer is one short line pointing at the check step',
 
   // --- 12. Cache bumped for the shell change.
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v142'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v143'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

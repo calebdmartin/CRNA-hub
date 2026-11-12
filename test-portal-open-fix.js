@@ -107,10 +107,17 @@ runA(`
 `);
 t('blocked popup: open reports blocked and the app tab does NOT navigate',
   A.__blockedResult === 'blocked' && A.__blockedState.assign.length === 0 && A.__blockedState.href === 'https://crna-hub.example/' && A.__blockedState.openedFlag === false);
-t('pre-leaving sheet shows: leaving the app, the two things to do, the app stays here',
+// (v143 rewrite — the pre-leaving sheet is on the primary path, and
+// the primary path has no screenshot step anymore: sign in over
+// there, come back, tap "I'm signed in — read it now". The guided
+// screenshot check still exists as the backup; its own panel on the
+// Assistant tab keeps its instructions — §5 below still pins them.)
+t('pre-leaving sheet shows: leaving the app, sign in + read-it-now over there, the app stays here',
   A.__blockedState.sheet === 'aana' &&
   A.__sheetHtml.includes('One sec — the portal opens outside CRNA Hub') &&
-  A.__sheetHtml.includes('sign in, then screenshot the page that shows your record') &&
+  A.__sheetHtml.includes('sign in on the portal’s own page, then come back here and tap') &&
+  A.__sheetHtml.includes('read it now') &&
+  !/screenshot/i.test(A.__sheetHtml) &&
   A.__sheetHtml.includes('CRNA Hub stays right here') &&
   A.__sheetHtml.includes('picks up where you left off') &&
   A.__sheetHtml.includes('data-action="portal-leave-go" data-id="aana"'));
