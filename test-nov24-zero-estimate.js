@@ -169,7 +169,7 @@ t('chip: a bracket holding digits is real code text and stays', run(`shiftChipLa
 t('chip: pricing lookups were never affected — the def resolves with or without the bracket', !!run(`codeDefFor(db.facilities[0],'HOLZ - G Main (8) [Martin]')`) === !!run(`codeDefFor(db.facilities[0],'HOLZ - G Main (8)')`));
 
 // ---------- 8: version pin ----------
-t('sw: cache bumped to v106', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v151'));
+t('sw: cache bumped to v106', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v152'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');
 process.exit(fails ? 1 : 0);
