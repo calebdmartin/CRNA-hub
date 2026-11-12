@@ -126,9 +126,12 @@ const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   // source card's sign-in action. The old "sign in to run it / Run my
   // check" wording launched the guided check; that flow is the backup
   // now, not the prompt.)
+  // v151 rewrite: the panel legitimately carries a SECOND due
+  // prompt now — CE Broker joined the monitored family and has
+  // never been read in this fixture. The pin's intent stands:
+  // exactly one prompt FOR THIS SOURCE (aana), counted by its id.
   t('exactly one due prompt for the source in the panel',
-    (sandbox.__panel2.match(/check due — it needs a fresh sign-in/g) || []).length === 1 &&
-    sandbox.__panel2.includes('data-action="monitor-prompt-dismiss" data-id="aana"') &&
+    (sandbox.__panel2.match(/data-action="monitor-prompt-dismiss" data-id="aana"/g) || []).length === 1 &&
     sandbox.__panel2.includes('data-action="monitor-signin" data-id="aana"'));
   t('the same prompt is on the Credentials reminder surface (Checks due strip)',
     sandbox.__strip.includes('Checks due') && sandbox.__strip.includes('AANA check due — it needs a fresh sign-in'));

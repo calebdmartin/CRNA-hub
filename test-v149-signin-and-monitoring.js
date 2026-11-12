@@ -214,9 +214,20 @@ const AUDITED = {
     globalThis.__dispAa = monitorDisplay(globalThis.__aa);
   `);
   const d12 = run(`fmt('2026-11-12')`), d19 = run(`fmt('2026-11-19')`);
+  // v151: the panel gained a fifth row (CE Broker — never checked
+  // in this fixture, legitimately "never" / "due now" / "Not
+  // checked yet"), so the panel-wide negative assertions below
+  // are scoped to the NBCRNA / AANA rows they were written about.
+  const rowOf = (html, label, nextLabel) => {
+    const a = html.indexOf('<strong>' + label + '</strong>');
+    const b = nextLabel ? html.indexOf('<strong>' + nextLabel + '</strong>') : html.length;
+    return a < 0 ? '' : html.slice(a, b < 0 ? html.length : b);
+  };
+  const rowNb = rowOf(sandbox.__html, 'NBCRNA', 'AANA');
+  const rowAa = rowOf(sandbox.__html, 'AANA', 'CE Broker');
   t('NBCRNA row: Last checked is the filed read (Nov 12, 2026), never "never"',
     sandbox.__dispNb.lastChecked === '2026-11-12T14:42:00.000Z' &&
-    sandbox.__html.includes('Last checked: ' + d12) && !sandbox.__html.includes('Last checked: never'),
+    rowNb.includes('Last checked: ' + d12) && !rowNb.includes('Last checked: never'),
     sandbox.__html.slice(0, 400));
   t('NBCRNA row: Outcome is the verified read; the stale public-check text is gone',
     sandbox.__dispNb.outcomeText === 'Verified — read from your signed-in session' &&
@@ -225,11 +236,11 @@ const AUDITED = {
   t('NBCRNA row: Next due = read date + cadence (Nov 19, 2026), not due now',
     run(`monitorNextDue(db.portalMonitoring.find(m => m.key === 'nbcrna'), '2026-11-12')`) === '2026-11-19' &&
     run(`monitorIsDue(db.portalMonitoring.find(m => m.key === 'nbcrna'), '2026-11-12')`) === false &&
-    sandbox.__html.includes('Next due: ' + d19) && !sandbox.__html.includes('due now'));
+    rowNb.includes('Next due: ' + d19) && !rowNb.includes('due now'));
   t('AANA row: a read filed today clears "Not checked yet / due now" the same way',
     sandbox.__dispAa.verified === true && sandbox.__dispAa.lastChecked === '2026-11-12T15:10:00.000Z' &&
     run(`monitorNextDue(db.portalMonitoring.find(m => m.key === 'aana'), '2026-11-12')`) === '2026-11-19' &&
-    !sandbox.__html.includes('Not checked yet'));
+    !rowAa.includes('Not checked yet'));
   t('the legacy entries themselves are NOT rewritten (pause/cadence data intact)',
     sandbox.__nb.lastOutcome === 'blocked' && sandbox.__nb.lastChecked === '' && sandbox.__nb.enabled === true);
 

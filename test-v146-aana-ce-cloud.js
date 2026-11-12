@@ -78,8 +78,16 @@ const F = (d) => run(`fmt('${d}')`);
     run(`db.aana.status`) === 'Active' && run(`db.aana.number`) === '126402' &&
     run(`db.aana.expiration`) === '2027-08-31' && run(`db.aana.source`) === 'aana_portal');
   const page = run(`credentialsPage()`);
-  const aanaStrip = 'Member 126402 · Dues through ' + F('2027-08-31') + ' · CE 105 · 103 Class A + 2 Class B · Reminders at 90, 60, 30, 7 days';
-  t('AANA strip renders its CE segment from the cloud-fed record', stripsOf(page).includes(aanaStrip), J(stripsOf(page)));
+  // v151 rewrite (Nov 12, 2026): the CE totals no longer render
+  // inside the strip — Caleb asked for them big, under the AANA
+  // card title. This pin now checks the cloud-fed record drives
+  // the headline line, and the strip stays member + dues +
+  // reminders. The headline itself is pinned in
+  // test-v151-ce-section.js.
+  const aanaStrip = 'Member 126402 · Dues through ' + F('2027-08-31') + ' · Reminders at 90, 60, 30, 7 days';
+  t('AANA CE totals from the cloud-fed record render as the big headline (v151)',
+    page.includes('<p class="cred-ce-headline">CE 105 · 103 Class A + 2 Class B</p>') &&
+    stripsOf(page).includes(aanaStrip), J(stripsOf(page)));
 
   // ---- 2. Cloud payload with NULL CE columns ----
   run(`db = empty(); db.settings.scheduleName = 'Caleb Martin'; manualType = 'NBCRNA'; persist();

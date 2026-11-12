@@ -5,6 +5,10 @@
 // panel, same pattern as the Account sync-area split:
 //   NBCRNA connect · AANA connect · Portal monitoring · State Licenses
 //   connect · Certification documents · Manual entry.
+// v151 (Nov 12, 2026): two sibling panels join the list — the CE
+// Broker connect card and the Continuing education section (the
+// add-CE form moved out of Manual entry) — both between State
+// Licenses and Certification documents.
 // The "Checks due" strip stays a plain reminder section at the top.
 // Default states: a section that needs action starts open (no record
 // yet, a check due / prompt waiting, a portal opened awaiting return, a
@@ -62,7 +66,8 @@ const t = (name, cond) => {
 };
 const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 
-const PANELS = ['credentials-nbcrna-panel', 'credentials-aana-panel', 'credentials-monitoring-panel', 'credentials-licenses-panel', 'cert-documents', 'credentials-manual-panel'];
+// v151: + credentials-cebroker-panel + credentials-ce-panel.
+const PANELS = ['credentials-nbcrna-panel', 'credentials-aana-panel', 'credentials-monitoring-panel', 'credentials-licenses-panel', 'credentials-cebroker-panel', 'credentials-ce-panel', 'cert-documents', 'credentials-manual-panel'];
 const panelTag = (html, id) => {
   const m = html.match(new RegExp('<details class="panel collapse-panel" id="' + id + '"( open)?>'));
   return m ? m[0] : null;
@@ -80,6 +85,11 @@ const SETTLED = `
   db.nbcrna = { status: 'Certified', number: '126402', periodStart: '2023-05-01', periodEnd: '2027-04-30', renewalDeadline: '2027-04-30', reminders: '90,60,30,7', source: 'user_entered' };
   db.aana = { status: 'Active', number: '126402', expiration: '2027-12-31', reminders: '90,60,30,7', source: 'user_entered' };
   db.licenses = [{ id: 'l1', state: 'West Virginia', type: 'APRN', number: '103459', issue: '2013-07-02', expiry: '2027-06-30', reminders: '90,60,30,7' }];
+  // v151: a settled user also has CE on file — one hand-entered
+  // course and one filed by a CE Broker read — so the Continuing
+  // education section and the CE Broker card rest collapsed too.
+  db.nbcrnaCE = [{ id: 'ce1', title: 'Settled course', date: '2026-01-01', credits: '3', class: 'Class A' }];
+  db.aanaCE = [{ id: 'cb1', title: 'Broker course', date: '2026-02-01', credits: '2', source: 'cebroker' }];
   db.documents = [{ id: 'd1', certType: 'ACLS', issue: '2026-01-01', expiry: '2028-01-01', expirySource: 'user-entered' }];
   ensurePortalMonitoring();
   db.portalMonitoring.forEach(m => { m.lastChecked = cloudNow(); m.lastOutcome = 'no_change'; m.changeFlag = false; m.promptDismissedCycle = ''; });
@@ -90,17 +100,19 @@ const SETTLED = `
   // ================= Settled user: structure + everything collapsed ====
   run(SETTLED);
   const settled = sandbox.__page;
-  t('all six Credentials sections are sibling collapse panels, in order',
+  t('all Credentials sections are sibling collapse panels, in order (eight since v151)',
     PANELS.every(id => panelTag(settled, id)) &&
     PANELS.slice(1).every((id, i) => settled.indexOf('id="' + id + '"') > settled.indexOf('id="' + PANELS[i] + '"')));
-  t('no panel is nested inside another (exactly six top-level details panels before the manual panel closes the page)',
-    (settled.match(/<details class="panel collapse-panel"/g) || []).length === 6);
+  t('no panel is nested inside another (exactly eight top-level details panels before the manual panel closes the page)',
+    (settled.match(/<details class="panel collapse-panel"/g) || []).length === 8);
   t('settled sections all rest collapsed (no open attribute on any panel)',
     PANELS.every(id => panelTag(settled, id) && !panelTag(settled, id).includes(' open')));
   t('headers carry one-line summaries from existing data',
     settled.includes('NBCRNA · Certified · ends Apr 30, 2027') &&
     settled.includes('AANA · Active · expires Dec 31, 2027') &&
     settled.includes('State Licenses · 1 on file · next expiry Jun 30, 2027') &&
+    settled.includes('CE Broker · 1 course read') &&
+    settled.includes('Continuing education · 2 courses on file') &&
     settled.includes('Certification documents · 1 on file · next expires Jan 1, 2028') &&
     /Portal monitoring · checked /.test(settled));
   // (v147 rewrite — the State Licenses card is per-state now: the
@@ -126,6 +138,9 @@ const SETTLED = `
     panelTag(fresh, 'credentials-aana-panel').includes(' open') &&
     panelTag(fresh, 'credentials-licenses-panel').includes(' open') &&
     panelTag(fresh, 'cert-documents').includes(' open'));
+  t('fresh user: CE Broker card and Continuing education start open too (v151 — nothing on file yet)',
+    panelTag(fresh, 'credentials-cebroker-panel').includes(' open') &&
+    panelTag(fresh, 'credentials-ce-panel').includes(' open'));
   t('fresh user: monitoring starts open (checks due, never checked)',
     panelTag(fresh, 'credentials-monitoring-panel').includes(' open'));
   t('fresh user: manual entry still rests collapsed',
@@ -189,7 +204,7 @@ const SETTLED = `
     appSrc.includes("collapsePanelHTML('cert-documents'") &&
     appSrc.includes("'credentials-'+portalKey+'-panel'"));
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v150'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v151'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();

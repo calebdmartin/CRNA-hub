@@ -120,8 +120,13 @@ t('conflict state (Alaska RN) asserts no number',
 t('PA CRNA practices on the RN license',
   licText({ state: 'Pennsylvania', type: 'APRN-CRNA', expiry: '2027-10-31' }).startsWith('Practices on the RN license — CE 30 hrs'),
   licText({ state: 'Pennsylvania', type: 'APRN-CRNA', expiry: '2027-10-31' }));
-t('strip facts carry the CE line (v145 component)',
-  run(`licenseStripFacts({state:'WV', type:'APRN-CRNA', number:'103459', status:'Active', expiry:'2027-06-30', reminders:'90,60,30,7'}).join(' · ')`).includes('CE 24 hrs / 2 yrs'));
+// v151 rewrite (Nov 12, 2026): the CE line no longer rides the
+// strip facts — Caleb asked for it big, under the license's own
+// line. licenseCeText (above) is unchanged; its rendering surface
+// is now licenseCeHeadlineHTML, pinned in test-v151-ce-section.js.
+t('headline carries the CE line (v151 component; strip facts no longer do)',
+  run(`licenseCeHeadlineHTML({state:'WV', type:'APRN-CRNA', number:'103459', status:'Active', expiry:'2027-06-30', reminders:'90,60,30,7'})`).includes('CE 24 hrs / 2 yrs') &&
+  !run(`licenseStripFacts({state:'WV', type:'APRN-CRNA', number:'103459', status:'Active', expiry:'2027-06-30', reminders:'90,60,30,7'}).join(' · ')`).includes('CE 24 hrs'));
 
 // ---------- 3. Progress math ----------
 run(`

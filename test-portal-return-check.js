@@ -78,7 +78,8 @@ const t = (name, cond) => {
   console.log((cond ? 'PASS ' : 'FAIL ') + name);
   if (!cond) { failures++; process.exitCode = 1; }
 };
-const KEYS = ['nbcrna', 'aana', 'licenses'];
+// v151: CE Broker joined the portal family as the fourth source.
+const KEYS = ['nbcrna', 'aana', 'licenses', 'cebroker'];
 
 // --- 1. One connect flow object per portal; final-product structure.
 run(`globalThis.__flows = Object.fromEntries(Object.keys(PORTAL_CHECK_SOURCES).map(k => [k, !!portalConnectFlow(k) && typeof portalConnectFlow(k).open === 'function' && typeof portalConnectFlow(k).returnToApp === 'function' ? 'full' : 'partial']));`);
@@ -270,7 +271,7 @@ t('canned portal answer is one short line pointing at the read-it-now step',
 
   // --- 12. Cache bumped for the shell change.
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v150'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v151'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();
