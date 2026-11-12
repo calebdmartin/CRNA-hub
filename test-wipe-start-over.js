@@ -178,6 +178,13 @@ function seedDevice() {
     db.licenses = [{ id: 'lic-1', state: 'WV', type: 'APRN', number: '103459', issue: '', expiry: '2027-06-30', portal: '', note: '', source: 'user_entered', reminders: '90,60,30,7' }];
     db.documents = [{ id: 'doc-1', certType: 'ACLS', issue: '', expiry: '2027-05-31', fileName: 'acls.pdf', storagePath: 'user-a/a.pdf', storageStatus: 'cloud' }];
     db.settings.scheduleName = 'Martin'; db.settings.homeAddress = '611 Olympia Fields Dr';
+    // v155 SUPERSEDED FIXTURE, with reason: the Testing tools panel is
+    // now gated on the Account → Features toggle, which defaults ON
+    // only when normalize runs over an account that already has
+    // records. This fixture seeds its records AFTER load, so it sets
+    // the flag explicitly — exactly the state a real existing account
+    // (records first, toggle derived at load) ends up in.
+    db.settings.featureTestingTools = true;
     persist();
     cloudTombstones = [{ kind: 'shifts', id: 'ghost-1' }]; cloudTombstonesPersist();
     localStorage.setItem('crna-hub-live-sync', JSON.stringify({ pending: [{ shiftId: 'sh-1' }] }));
@@ -187,7 +194,7 @@ function seedDevice() {
 }
 
 (async () => {
-  t('precondition: Supabase configured, cache v89', run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v154'));
+  t('precondition: Supabase configured, cache v89', run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v155'));
   t('source: single mount + dispatcher wiring + no-backup erase path',
     appSrc.includes('testingToolsMountHTML()') && appSrc.includes("action==='wipe-open'") &&
     appSrc.includes("action==='wipe-erase'") && appSrc.includes('wipeEraseRun') &&

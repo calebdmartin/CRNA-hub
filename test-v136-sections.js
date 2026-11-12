@@ -155,6 +155,6 @@ t('panels are native <details> with a tappable <summary> (one tap reopens)',
   stack.includes('<details class="panel collapse-panel" id="live-sync-panel"') &&
   stack.includes('<summary class="collapse-head">') &&
   cardStub.includes('<summary class="collapse-head">'));
-t('sw: cache bumped to v136', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v154'));
+t('sw: cache bumped to v136', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v155'));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : '\nALL PASS');

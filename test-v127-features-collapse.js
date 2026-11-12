@@ -10,7 +10,8 @@
 //    with the standard summary/chevron head, NOT a plain section + h2.
 //  2 fresh state is collapsed (no `open` attribute), matching the
 //    neighbours' rendered default.
-//  3 the body is the old body verbatim: the intro line plus all five
+//  3 the body is the old body verbatim: the intro line plus all
+//    toggles (five at v127; a sixth, Testing tools, arrived in v155)
 //    feature toggles with their labels, blurbs and On/Off buttons.
 //  4 on the Account page the Features card sits alongside the
 //    Notifications card, both collapse panels, Features first (its
@@ -101,13 +102,22 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     t('3 intro line lives inside the expanded body',
       html.includes('<p class="muted">Use what you need — turn the rest off and they just tuck away. Nothing is ever deleted.</p>'));
     const defs = w.run(`FEATURE_DEFS.map(f => f.key + '|' + f.label)`);
-    t('3 all five toggles present with their toggle buttons',
-      defs.length === 5 && defs.every(d => {
+    // v155 SUPERSEDED PIN, rewritten with reason: FEATURE_DEFS gained a
+    // sixth toggle, featureTestingTools ("Testing tools (advanced)"),
+    // so "all five" is now "all six". Its fresh-account state also
+    // differs by design (next pin).
+    t('3 all six toggles present with their toggle buttons',
+      defs.length === 6 && defs.every(d => {
         const [key, label] = d.split('|');
         return html.includes(label.replace(/&/g, '&amp;')) && html.includes(`data-action="feature-toggle" data-id="${key}"`);
       }), JSON.stringify(defs));
-    t('3 fresh account: every row reads On — tap to turn off',
-      (html.match(/On — tap to turn off/g) || []).length === 5 && !html.includes('Off — tap to turn on'));
+    // v155 SUPERSEDED PIN, rewritten with reason: on a fresh (empty)
+    // account the five original rows read On, but the new Testing
+    // tools row deliberately starts Off — beta users never meet the
+    // ERASE panel unless they turn it on. Accounts with records get
+    // it On (test-v155-polish.js).
+    t('3 fresh account: the original five rows read On; Testing tools starts Off',
+      (html.match(/On — tap to turn off/g) || []).length === 5 && html.includes('Off — tap to turn on'));
   }
 
   // ---------- 4: Account page placement / neighbour parity ----------
@@ -129,8 +139,13 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     w.run(`actions('feature-toggle', 'featureMileage')`);
     t('5 toggle flips the stored flag off', w.run(`db.settings.featureMileage === false && featureOn('featureMileage') === false`));
     const off = w.run(`featuresSectionHTML()`);
+    // v155 SUPERSEDED PIN, rewritten with reason: the panel now has a
+    // sixth row (Testing tools) that starts Off on a fresh account, so
+    // flipping Mileage yields TWO Off rows (Mileage + Testing tools)
+    // and FOUR On rows, not one/four. The flipped row is still the
+    // first Off row and still follows its own label.
     t('5 the flipped row now reads Off — tap to turn on, the rest still On',
-      (off.match(/Off — tap to turn on/g) || []).length === 1 &&
+      (off.match(/Off — tap to turn on/g) || []).length === 2 &&
       (off.match(/On — tap to turn off/g) || []).length === 4 &&
       off.indexOf('Off — tap to turn on') > off.indexOf('Mileage tracking'));
     t('5 the feature itself collapses elsewhere exactly as before (mileage off line)',
@@ -164,7 +179,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   }
 
   // ---------- 7: service worker ----------
-  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v154'));
+  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v155'));
 
   console.log(`\nv127 features collapse: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

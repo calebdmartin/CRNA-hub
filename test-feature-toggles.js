@@ -66,11 +66,17 @@ const t = (name, cond) => {
   const today = run(`localDate(new Date())`);
   const prefix = today.slice(0, 7);
 
-  // ---------- Fresh account: everything defaults ON ----------
-  t('fresh settings default all four features on',
-    run(`FEATURE_DEFS.every(f => db.settings[f.key] === true)`));
-  t('featureOn true for all on a fresh account',
-    run(`FEATURE_DEFS.every(f => featureOn(f.key))`));
+  // ---------- Fresh account: features default ON ----------
+  // v155 SUPERSEDED PIN, rewritten with reason: FEATURE_DEFS gained
+  // featureTestingTools, whose default is deliberately OFF for a
+  // brand-new, still-empty account (beta users must not meet the
+  // ERASE panel unless they turn it on). The original features still
+  // default on; an account WITH records gets Testing tools on —
+  // pinned in test-v155-polish.js.
+  t('fresh settings default the original features on; testing tools off while the account is empty',
+    run(`FEATURE_DEFS.filter(f => f.key !== 'featureTestingTools').every(f => db.settings[f.key] === true) && db.settings.featureTestingTools === false`));
+  t('featureOn true for the original features on a fresh account; testing tools off',
+    run(`FEATURE_DEFS.filter(f => f.key !== 'featureTestingTools').every(f => featureOn(f.key)) && featureOn('featureTestingTools') === false`));
 
   // ---------- Legacy settings (no flags) load as all-on ----------
   run(`db.settings = { monthlyIncomeGoal: 40000, mileageTripType: 'round-trip' }; normalizeFeatureFlags(db);`);
