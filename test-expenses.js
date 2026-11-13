@@ -140,8 +140,10 @@ const t = (name, cond) => {
 
   // ---------- CSV export ----------
   const csv = run(`expenseCsvText('${prefix}', '${prefix}')`);
+  // v159: the CSV gained paid_from + type columns (Caleb's
+  // QuickBooks-surface round) — the header pin moves with it.
   t('expenses CSV: header + exactly this month\u2019s rows, amounts plain',
-    csv.startsWith('date,vendor,category,facility,amount,note') && csv.split('\r\n').length === 3 && csv.includes('Riverbend Medical Supply') && csv.includes('86.4') && !csv.includes('MedEd'));
+    csv.startsWith('date,vendor,category,facility,amount,paid_from,type,note') && csv.split('\r\n').length === 3 && csv.includes('Riverbend Medical Supply') && csv.includes('86.4') && !csv.includes('MedEd'));
   const csvYear = run(`expenseCsvText('${year}-01', '${year}-12')`);
   t('expenses CSV: full-year range carries all three rows', csvYear.split('\r\n').length === 4);
 
@@ -219,6 +221,151 @@ const t = (name, cond) => {
     pack.includes('TOTAL EXPENSES') && pack.includes('536.4') && run(`expenseYearTotal('${year}')`) === 536.4);
   t('CPA pack: year picker includes the current year and defaults sensibly',
     run(`cpaPackYears().includes('${year}')`));
+
+  // ================= v159: accounts, tags, recurring, tab rename ====
+  // State in: two business expenses this month (86.40 photo + 450 AANA
+  // after the v158 edit/delete flow) = 536.40 business month + YTD.
+  const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
+
+  // ---------- Tab rename: internal keys stable, label is Deductions ----------
+  t('tab keys and order unchanged (internal ids stable)',
+    JSON.stringify(run(`tabs`)) === JSON.stringify(['Dashboard', 'Facilities', 'Credentials', 'Mileage', 'Assistant']));
+  t('visible tab labels: the Mileage tab now reads Deductions, order unchanged',
+    run(`tabs.map(tabLabel).join('|')`) === 'Dashboard|Facilities|Credentials|Deductions|Assistant');
+  run(`render()`);
+  t('rendered tab bar: Deductions label on the unchanged data-tab="Mileage" key, no Mileage-labelled button',
+    run(`document.getElementById('nav').innerHTML`).includes('data-tab="Mileage"') &&
+    run(`document.getElementById('nav').innerHTML`).includes('>Deductions</button>') &&
+    !run(`document.getElementById('nav').innerHTML`).includes('>Mileage</button>'));
+  t('user-visible copy swept: review button + assistant fallback say Deductions tab; no Mileage-tab references remain',
+    appSrc.includes('Open Deductions tab') && appSrc.includes('from the Deductions tab') &&
+    !appSrc.includes('Open Mileage tab') && !appSrc.includes('from the Mileage tab'));
+  t('in-view headings unchanged: the view still heads its sections Mileage and Expenses',
+    run(`mileagePage()`).includes('<h2>Mileage summary</h2>') && run(`mileagePage()`).includes('<h2>Expenses</h2>'));
+
+  // ---------- Payment accounts ----------
+  t('payment accounts seed EMPTY — no account names baked in', run(`expenseAccounts().length`) === 0);
+  t('expense form carries the Paid from picker plus the add-an-account hint while the list is empty',
+    run(`expensesSectionHTML()`).includes('Paid from') && run(`expensesSectionHTML()`).includes('No payment accounts yet'));
+  run(`document.getElementById('expenseNewAccount').value = 'Business Checking';`);
+  run(`addExpenseAccountFromInput()`);
+  t('first account added and auto-marked default',
+    run(`expenseAccounts().length === 1 && expenseAccounts()[0].name === 'Business Checking' && expenseAccounts()[0].isDefault === true`));
+  run(`document.getElementById('expenseNewAccount').value = 'Travel Card';`);
+  run(`addExpenseAccountFromInput()`);
+  const acct1 = run(`expenseAccounts()[0].id`), acct2 = run(`expenseAccounts()[1].id`);
+  t('second account added, not default; accounts persist in settings (ride settings sync)',
+    run(`expenseAccounts().length === 2 && expenseAccounts()[1].isDefault === false`) &&
+    JSON.parse(store.get('crna-hub-v2')).settings.expenseAccounts.some(a => a.name === 'Travel Card'));
+  t('form preselects the marked default account',
+    run(`expensesSectionHTML()`).includes(`<option value="${acct1}" selected>Business Checking</option>`));
+
+  // Pay with the non-default account -> stamps id + name, last-used set.
+  await run(`submitExpense({ preventDefault() {}, currentTarget: { dataset: { kind: 'expenses' }, _entries: [
+    ['date', '${d2}'], ['vendor', 'Office Depot'], ['amount', '60'], ['category', 'Equipment & supplies'], ['facility', ''], ['note', ''],
+    ['account', '${acct2}'], ['tag', 'business'], ['repeat', '']
+  ], querySelector: () => null } })`);
+  t('expense stamps the chosen account id + name text',
+    run(`(() => { const x = db.expenses.find(e => e.vendor === 'Office Depot'); return x && x.accountId === '${acct2}' && x.account === 'Travel Card'; })()`));
+  t('last-used account recorded; business month total now 536.40 + 60 = 596.40',
+    run(`db.settings.expenseLastAccountId`) === acct2 && run(`expenseMonthTotal('${prefix}')`) === 596.4);
+  t('marked default still wins the picker over last-used',
+    run(`expensesSectionHTML()`).includes(`<option value="${acct1}" selected>Business Checking</option>`));
+  run(`db.settings.expenseAccounts = expenseAccounts().map(a => ({ ...a, isDefault: false })); persist();`);
+  t('with no marked default, the picker falls back to last-used',
+    run(`expensesSectionHTML()`).includes(`<option value="${acct2}" selected>Travel Card</option>`));
+  run(`setDefaultExpenseAccount('${acct1}')`);
+  t('Make default re-marks the chosen account', run(`expenseAccounts().find(a => a.id === '${acct1}').isDefault === true`));
+
+  // Rename resolves through the id (and refreshes the stamp); delete
+  // keeps the expense with its stamped name as text.
+  run(`startExpenseAccountRename('${acct2}')`);
+  run(`document.getElementById('expenseAccountRename').value = 'Travel Card (Visa)';`);
+  run(`saveExpenseAccountRename()`);
+  t('rename shows through on expenses that used the account',
+    run(`expenseAccountLabel(db.expenses.find(e => e.vendor === 'Office Depot'))`) === 'Travel Card (Visa)');
+  run(`actions('expense-acct-delete', '${acct2}')`);
+  t('deleting a referenced account keeps the expense and its stamped account name',
+    run(`db.expenses.some(e => e.vendor === 'Office Depot')`) &&
+    run(`expenseAccountLabel(db.expenses.find(e => e.vendor === 'Office Depot'))`) === 'Travel Card (Visa)');
+  t('expense row shows the paid-from account in small text',
+    run(`expensesSectionHTML()`).includes('Travel Card (Visa)'));
+
+  // ---------- Business / personal split ----------
+  await run(`submitExpense({ preventDefault() {}, currentTarget: { dataset: { kind: 'expenses' }, _entries: [
+    ['date', '${d2}'], ['vendor', 'Family Grocery'], ['amount', '100'], ['category', 'Meals'], ['facility', ''], ['note', ''],
+    ['account', ''], ['tag', 'personal'], ['repeat', '']
+  ], querySelector: () => null } })`);
+  t('personal expense leaves the business month + YTD totals untouched',
+    run(`expenseMonthTotal('${prefix}')`) === 596.4 && run(`expenseYearTotal('${year}')`) === 596.4);
+  t('personal totals tracked separately, month and year',
+    run(`expenseMonthTotal('${prefix}', 'personal')`) === 100 && run(`expenseYearTotal('${year}', 'personal')`) === 100);
+  t('section shows the smaller personal line under the business totals',
+    run(`expensesSectionHTML()`).includes('Personal:') && run(`expensesSectionHTML()`).includes('stay out of the business totals'));
+
+  // ---------- CSV + CPA pack with the new columns and split ----------
+  const csv2 = run(`expenseCsvText('${prefix}', '${prefix}')`);
+  t('expenses CSV: paid_from + type columns carry the stamped account and Business/Personal',
+    csv2.startsWith('date,vendor,category,facility,amount,paid_from,type,note') &&
+    csv2.includes('Travel Card (Visa)') && csv2.includes('Personal') && csv2.includes('Business'));
+  const pack2 = run(`cpaPackCsv('${year}')`);
+  t('CPA pack: business log excludes the personal expense; totals stay business-only',
+    pack2.split('PERSONAL EXPENSES')[0].includes('Office Depot') &&
+    !pack2.split('PERSONAL EXPENSES')[0].includes('Family Grocery') &&
+    pack2.includes('Business expense total') && pack2.includes('596.4'));
+  t('CPA pack: personal expenses ride in their own labeled section with their own total',
+    pack2.includes('PERSONAL EXPENSES - NOT BUSINESS') &&
+    pack2.split('PERSONAL EXPENSES - NOT BUSINESS')[1].includes('Family Grocery') &&
+    pack2.includes('TOTAL PERSONAL EXPENSES'));
+
+  // ---------- Recurring: monthly drafts, confirm-first ----------
+  const srcDate = run(`(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 2); return localDate(d); })()`);
+  await run(`submitExpense({ preventDefault() {}, currentTarget: { dataset: { kind: 'expenses' }, _entries: [
+    ['date', '${srcDate}'], ['vendor', 'Cloud Storage Co'], ['amount', '12'], ['category', 'Other'], ['facility', ''], ['note', ''],
+    ['account', ''], ['tag', 'business'], ['repeat', 'monthly']
+  ], querySelector: () => null } })`);
+  t('repeating expense saved with its rule', run(`db.expenses.find(e => e.vendor === 'Cloud Storage Co').repeat`) === 'monthly');
+  run(`expensesSectionHTML()`);
+  t('two due monthly drafts generated (last month + this month) — and drafts never count in totals',
+    run(`db.expenses.filter(e => e.draft).length`) === 2 && run(`expenseMonthTotal('${prefix}')`) === 596.4);
+  t('drafts surface in the confirm-first block at the top of the section',
+    run(`expensesSectionHTML()`).includes('Recurring expenses \u2014 confirm these'));
+  run(`expensesSectionHTML()`);
+  t('re-render does not duplicate drafts', run(`db.expenses.filter(e => e.draft).length`) === 2);
+  const draftThis = run(`db.expenses.find(e => e.draft && e.duePeriod === '${prefix}').id`);
+  run(`actions('expense-draft-confirm', '${draftThis}')`);
+  t('confirm posts the draft as a real expense — month total moves 596.40 -> 608.40, one draft left',
+    run(`expenseMonthTotal('${prefix}')`) === 608.4 && run(`db.expenses.filter(e => e.draft).length`) === 1);
+  run(`expensesSectionHTML()`);
+  t('a confirmed period never regenerates', run(`db.expenses.filter(e => e.draft).length`) === 1);
+  const draftLast = run(`db.expenses.find(e => e.draft).id`);
+  run(`actions('expense-draft-dismiss', '${draftLast}')`);
+  run(`expensesSectionHTML()`);
+  t('dismiss removes the draft and the dismissed period stays gone',
+    run(`db.expenses.filter(e => e.draft).length`) === 0);
+  const srcId = run(`db.expenses.find(e => e.vendor === 'Cloud Storage Co').id`);
+  run(`actions('expense-repeat-stop', '${srcId}')`);
+  t('Stop repeating clears the rule on the source expense',
+    run(`db.expenses.find(e => e.vendor === 'Cloud Storage Co').repeat`) === '');
+
+  // ---------- Recurring: yearly ----------
+  await run(`submitExpense({ preventDefault() {}, currentTarget: { dataset: { kind: 'expenses' }, _entries: [
+    ['date', '${Number(year) - 1}-01-01'], ['vendor', 'Board Review Annual'], ['amount', '300'], ['category', 'CE & education'], ['facility', ''], ['note', ''],
+    ['account', ''], ['tag', 'business'], ['repeat', 'yearly']
+  ], querySelector: () => null } })`);
+  run(`expensesSectionHTML()`);
+  t('yearly repeat generates exactly one draft, dated this year',
+    run(`db.expenses.filter(e => e.draft).length`) === 1 && run(`db.expenses.find(e => e.draft).date`) === `${year}-01-01`);
+  const yDraft = run(`db.expenses.find(e => e.draft).id`);
+  run(`actions('expense-draft-dismiss', '${yDraft}')`);
+  t('yearly draft dismissed cleanly', run(`db.expenses.filter(e => e.draft).length`) === 0);
+
+  // ---------- Cloud round trip carries the new fields ----------
+  run(`window.__r159 = cloudExpenseRow(db.expenses.find(e => e.vendor === 'Office Depot'));`);
+  t('cloud payload carries account id + stamped name + tag',
+    run(`!!window.__r159 && window.__r159.data.accountId === '${acct2}' && window.__r159.data.account === 'Travel Card (Visa)' && window.__r159.data.tag === 'business'`));
+  t('fresh-device merge restores the record with its account label intact',
+    run(`(() => { const rec = cloudRowToRecord(window.__r159); const m = cloudMergeSyncedList([], [rec], 'expenses'); return m.length === 1 && expenseAccountLabel(m[0]) === 'Travel Card (Visa)'; })()`));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL EXPENSE TESTS PASS');
 })();
