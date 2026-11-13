@@ -76,6 +76,13 @@ details.collapse-sub>summary.collapse-head{list-style:none;cursor:pointer;displa
 details.collapse-sub>summary.collapse-head::-webkit-details-marker{display:none}
 details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(180deg)}
 @media(max-width:650px){details.collapse-panel>summary.collapse-head{padding:var(--panel-pad-sm)}details.collapse-panel>.collapse-body{padding:0 var(--panel-pad-sm) 14px}}
+details.connect-steps{margin:10px 0 4px;border:1px solid #e7edf3;border-radius:8px;padding:8px 12px;background:#fbfcfe}
+details.connect-steps>summary{cursor:pointer;font-weight:600;color:#121e53;list-style:none}
+details.connect-steps>summary::-webkit-details-marker{display:none}
+details.connect-steps>summary::after{content:'▾';float:right;color:#667d8e}
+details.connect-steps[open ]>summary::after{transform:rotate(180deg)}
+details.connect-steps ol{margin:8px 0 8px 20px;padding:0}
+details.connect-steps li{margin:5px 0}
 .month-banner{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;justify-content:space-between;background:#121e53;color:#fff;border-radius:11px;padding:12px 16px;margin-bottom:12px;font-size:14px;font-weight:650}
 .month-banner strong{font-size:21px;color:#fff;margin-left:4px}
 .month-banner .mb-qual{color:#8fe3da;font-size:12px;font-weight:650}

@@ -1192,6 +1192,31 @@ function liveSyncAction(action, entry) {
   if (action === 'live-keep-all') return liveSyncKeepAllPending();
 }
 
+// "How to connect" dropdowns (Nov 13, 2026, v161) — the same
+// shared component as the Apple link's "How to find your link"
+// (connectStepsHTML in app.js), written from the REAL flow: tap
+// Connect -> the provider's sign-in page opens -> approve -> land
+// back connected -> the required pick-your-work-calendar step ->
+// "Save & sync now". No invented screens.
+function liveSyncHowToHTML(provider) {
+  if (typeof connectStepsHTML !== 'function') return '';
+  if (provider === 'google') {
+    return connectStepsHTML('How to connect',
+      '<ol><li>Tap “Connect Google Calendar” below — a Google sign-in page opens.</li>' +
+      '<li>Choose the Google account that holds your work calendar, and approve the calendar access it asks for.</li>' +
+      '<li>Back here, tick the calendar your shifts live in — more than one if they are spread out — and tap “Save &amp; sync now”.</li></ol>' +
+      '<p class="muted">Don’t see the calendar? It has to be on that account’s calendar list — if a facility shares it with you, accept the share in Google Calendar first, then come back and tap “Load my calendars”.</p>');
+  }
+  if (provider === 'outlook') {
+    return connectStepsHTML('How to connect',
+      '<ol><li>Tap “Connect Outlook” below — a Microsoft sign-in page opens.</li>' +
+      '<li>Sign in with the Microsoft account that holds your work calendar, and approve the access it asks for.</li>' +
+      '<li>Back here, tick the calendar your shifts live in and tap “Save &amp; sync now”.</li></ol>' +
+      '<p class="muted">On a work or hospital Microsoft account? Some employers make IT approve apps like this one before sign-in works — if yours stops you, a personal Microsoft account works too, or use the Calendar link panel below instead.</p>');
+  }
+  return '';
+}
+
 function liveSyncProviderCard(provider) {
   const label = liveSyncLabel(provider);
   const conn = liveSyncConnections[provider];
@@ -1246,7 +1271,7 @@ function liveSyncProviderCard(provider) {
     // password instead. It is never presented as the designed path.
     return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div><div class="item-actions"><a class="button" href="https://appleid.apple.com/account/manage/section/security" target="_blank" rel="noopener">Create it at Apple →</a></div><ol class="muted"><li>Tap the button and sign in at Apple.</li><li>Generate an app-specific password named “CRNA Hub”.</li><li>Paste it here.</li></ol><p class="muted">Beta note: this password step is only for the web version — in the final app you’ll just tap Allow when your iPhone asks.</p><div class="form-grid"><div class="field"><label for="f_liveAppleId">Apple ID</label><input id="f_liveAppleId" type="email" autocomplete="username" placeholder="you@icloud.com"></div><div class="field"><label for="f_liveApplePw">App-specific password (one-time)</label><input id="f_liveApplePw" type="password" autocomplete="off" placeholder="xxxx-xxxx-xxxx-xxxx"></div></div><p class="muted">Stored encrypted and never shown again. Never enter your normal Apple password here.</p><div class="item-actions"><button type="button" class="tiny" data-action="live-apple-connect">Connect Apple Calendar</button></div></div></div>';
   }
-  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div></div>';
+  return '<div class="item"><div class="item-title">' + label + ' — <span class="pill warn">Not connected</span></div><div class="item-actions"><button type="button" class="tiny" data-action="live-connect" data-id="' + provider + '">Connect ' + label + '</button></div>' + liveSyncHowToHTML(provider) + '</div>';
 }
 
 // Providers the user has chosen: connected now, or connected before
@@ -1269,6 +1294,10 @@ function liveSyncCardsHTML() {
   liveSyncProviderOrder().forEach((p) => {
     if (hideOthers && !chosen.includes(p)) return;
     html += liveSyncProviderCard(p);
+    // The Apple card carries its second door with it (v161): the
+    // public-link option renders as its own item directly under the
+    // Apple card, wherever the card itself is shown.
+    if (p === 'apple' && typeof appleLinkHTML === 'function') html += appleLinkHTML();
   });
   if (liveSyncConfig.state === 'ready' && chosen.length > 0) {
     html += '<p class="muted"><button type="button" class="tiny secondary" data-action="live-toggle-other-calendars">' + (liveSyncShowOthers ? 'Hide other calendar services' : 'Use a different calendar service') + '</button></p>';

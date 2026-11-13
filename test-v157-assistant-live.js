@@ -175,7 +175,7 @@ t('5a cloudAfterSignIn lands via setTab(\'Dashboard\') (source pin)',
   t('5b after sign-in completes, the active view is Dashboard', run(`tab`) === 'Dashboard', 'tab=' + run(`tab`));
 
   // ---------- 6: SW ----------
-  t('6 SW cache is v157', swSrc.includes('crna-hub-shell-v160'));
+  t('6 SW cache is v157', swSrc.includes('crna-hub-shell-v161'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
