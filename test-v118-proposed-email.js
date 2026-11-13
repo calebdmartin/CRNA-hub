@@ -137,7 +137,12 @@ function shiftsFixture() {
   t('compose: subject', composed.subject === 'Proposed shifts — Caleb Martin — HOLZ', composed.subject);
   const bodyLines = composed.body.split('\n').filter((l) => l.startsWith('• '));
   t('compose: exactly 2 shift lines', bodyLines.length === 2, composed.body);
-  t('compose: lines carry date + type (+ price when priced)', bodyLines.some((l) => l.includes('8hr day shift') && l.includes('$2,125')) && bodyLines.some((l) => l.includes('2nd call')), J(bodyLines));
+  // v163 (Nov 13, 2026, Caleb) SUPERSEDES the old pin here, which
+  // asserted the priced line carried '$2,125' in the body: the email
+  // to the scheduler now carries NO money at all — dates and shift
+  // types only, no per-shift figures and no total. Prices remain in
+  // the in-app picker only (pinned above and in test-v163).
+  t('compose: lines carry date + type and NO money anywhere', bodyLines.some((l) => l.includes('8hr day shift')) && bodyLines.some((l) => l.includes('2nd call')) && !/\$[\d,]/.test(composed.body) && !/\$[\d,]/.test(composed.subject), J(bodyLines));
   t('compose: friendly intro + sign-off with the user name', composed.body.startsWith('Hello,') && composed.body.includes('Thanks,\nCaleb Martin'));
 
   // Send flow: contact asked once, remembered after; mailto addressed right

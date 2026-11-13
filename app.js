@@ -1168,6 +1168,27 @@ function effectiveShiftPay(x){
   }
   return num(x.pay);
 }
+// The price of ONE shift for a single-shift display (Nov 13, 2026,
+// v163): the SAME result the totals read, never a private recompute.
+// A priced shift contributes effectiveShiftPay — so an amount the
+// user typed on the shift itself (the correction layer) stands
+// exactly as stored, and a saved code definition still wins over a
+// derived stamp. A shift with no usable stamp is priced live from
+// its facility's rules, exactly as paystubPeriodTotals treats it in
+// a paycheck. Returns null when nothing can price the shift — the
+// display shows no price at all (blank means unpriced, never $0).
+// Bug: the proposed-shifts email priced its rows straight from the
+// rate card (resolveShiftPrice), so a shift whose typed expected
+// gross differed from the card showed the CARD's figure in the
+// picker while the calendar total honoured the typed amount.
+function shiftDisplayPrice(x){
+  if(!x)return null;
+  if(isPricedShift(x))return effectiveShiftPay(x);
+  const fac=x.facility?facilityByNameOrAlias(x.facility):null;
+  if(!fac)return null;
+  const res=resolveShiftPrice(fac,x);
+  return res?num(res.pay):null;
+}
 // Was this shift's stored pay CALCULATED from the facility's rules
 // (a formula result that must follow when the rules are corrected),
 // rather than typed by the user as a fact? Amounts the user typed as
@@ -7636,10 +7657,14 @@ function myFacilitiesHTML(){return `<section class="panel" id="my-facilities-pan
 // statuses stay confirmed/proposed only.)
 let propEmailOpen=false,propEmailFacId='';
 function upcomingProposedShifts(fac){if(!fac)return[];const today=localDate(new Date());return (db.shifts||[]).filter(x=>{if(normalizeShiftStatus(x.status)!=='proposed')return false;if(!x.date||x.date<today)return false;const f=facilityForRecord(x);return f&&f.id===fac.id}).sort((a,b)=>a.date.localeCompare(b.date)||String(a.type||'').localeCompare(String(b.type||'')))}
-function propEmailPrice(fac,x){try{const r=resolveShiftPrice(fac,x);if(!r)return'';const n=Number(r.pay);return isFinite(n)?currency(n):''}catch(e){return''}}
+function propEmailPrice(fac,x){try{const n=shiftDisplayPrice(x);return n==null?'':currency(n)}catch(e){return''}}
 function facilitiesWithProposedShifts(){return (db.facilities||[]).filter(f=>upcomingProposedShifts(f).length)}
 function proposedEmailFacility(){const list=facilitiesWithProposedShifts();if(!list.length)return null;return list.find(f=>f.id===propEmailFacId)||list[0]}
-function composeProposedEmail(fac,shifts,name){const lines=shifts.map(x=>{const p=propEmailPrice(fac,x);return '• '+fmt(x.date)+' — '+(x.type||'Shift')+(p?' · '+p:'')});const subject='Proposed shifts — '+name+' — '+fac.name;const body='Hello,\n\nI\'d like to propose the following shifts at '+fac.name+':\n\n'+lines.join('\n')+'\n\nPlease let me know if these work, or if anything needs to change.\n\nThanks,\n'+name;return{subject,body}}
+// The email itself carries NO money (Nov 13, 2026, Caleb): schedulers
+// get dates and shift types only — no per-shift figures, no total.
+// Prices live in the picker above, for the user's own review, and
+// nowhere else in this feature.
+function composeProposedEmail(fac,shifts,name){const lines=shifts.map(x=>'• '+fmt(x.date)+' — '+(x.type||'Shift'));const subject='Proposed shifts — '+name+' — '+fac.name;const body='Hello,\n\nI\'d like to propose the following shifts at '+fac.name+':\n\n'+lines.join('\n')+'\n\nPlease let me know if these work, or if anything needs to change.\n\nThanks,\n'+name;return{subject,body}}
 function proposedEmailSheetHTML(){if(!propEmailOpen)return'';const list=facilitiesWithProposedShifts();if(!list.length)return `<div class="sheet-backdrop"><section class="sheet"><div class="row"><h3>Email proposed shifts</h3><button class="ghost" data-action="proposed-email-close" aria-label="Close">✕</button></div><p class="small">No proposed shifts to email right now — shifts you mark as proposed will show up here.</p><button class="secondary" data-action="proposed-email-close">Close</button></section></div>`;const fac=proposedEmailFacility();const shifts=upcomingProposedShifts(fac);const opts=list.map(f=>`<option value="${f.id}" ${f.id===fac.id?'selected':''}>${escapeHTML(f.name)} (${upcomingProposedShifts(f).length} proposed)</option>`).join('');const rows=shifts.map(x=>{const p=propEmailPrice(fac,x);return `<label class="row checkline"><input type="checkbox" class="propEmailInclude" value="${x.id}" checked> <span>${escapeHTML(fmt(x.date))} · ${escapeHTML(x.type||'Shift')}${p?' · '+escapeHTML(p):''}</span></label>`}).join('');return `<div class="sheet-backdrop"><section class="sheet"><div class="row"><h3>Email proposed shifts</h3><button class="ghost" data-action="proposed-email-close" aria-label="Close">✕</button></div><label class="fld">Facility<select id="f_propEmailFacility">${opts}</select></label><label class="fld">Scheduling contact email<input id="f_propEmailContact" type="email" value="${escapeHTML(fac.contactEmail||'')}" placeholder="scheduling@hospital.org"></label><p class="small">These proposed shifts will be listed in the email:</p><div class="prop-email-list">${rows}</div><p class="small muted">Opens in your own mail app, ready to review and send — CRNA Hub never sends email for you.</p><div class="toolbar"><button class="primary" data-action="proposed-email-send">Open in my mail app</button><button class="secondary" data-action="proposed-email-close">Cancel</button></div></section></div>`}
 function openProposedEmailSheet(facId){propEmailOpen=true;const list=facilitiesWithProposedShifts();propEmailFacId=facId||(list.length?list[0].id:'');render()}
 function sendProposedEmail(){const fac=proposedEmailFacility();if(!fac)return;const sel=$('f_propEmailFacility');const facNow=(db.facilities||[]).find(f=>f.id===(sel?sel.value:fac.id))||fac;const contact=($('f_propEmailContact')||{}).value||'';const to=String(contact).trim();if(!to){alert('Add the scheduling contact email first — we will remember it for '+facNow.name+'.');return}const checked=Array.from(document.querySelectorAll('.propEmailInclude:checked')).map(el=>el.value);const shifts=upcomingProposedShifts(facNow).filter(x=>checked.includes(String(x.id)));if(!shifts.length){alert('Tick at least one shift to include.');return}if(String(facNow.contactEmail||'')!==to){facNow.contactEmail=to;facNow.updatedAt=cloudNow();persist();cloudSaveKind('facilities',facNow.id)}const name=profileName()||'CRNA';const c=composeProposedEmail(facNow,shifts,name);propEmailOpen=false;render();window.location.href='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(c.subject)+'&body='+encodeURIComponent(c.body)}
