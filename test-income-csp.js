@@ -252,10 +252,18 @@ t('assistant year answer quotes C and P (not one combined total)',
   sandbox.__ansYear.includes('C (confirmed only)') &&
   !sandbox.__ansYear.includes('submitted') &&
   sandbox.__ansYear.includes('P (proposed-inclusive'));
-t('assistant month answer quotes C and P',
-  sandbox.__ansMonth.includes('C (confirmed only)') &&
-  !sandbox.__ansMonth.includes('submitted') &&
-  sandbox.__ansMonth.includes('P (proposed-inclusive)'));
+// v164 (Caleb, Nov 13, 2026) SUPERSEDES the old pin here, which
+// asserted the month answer quoted the C/P split: on his real
+// account that answer printed two differently-based totals
+// ($39,832.50 paycheck headline + $39,825.00 worked-basis C/P)
+// unlabeled, reading as a contradiction. The month answer now
+// presents ONE headline — the Dashboard's paycheck-basis figure —
+// and the C/P split lives in the year answer and the dedicated
+// C/P question (both pinned above/below, unchanged).
+t('assistant month answer (v164): ONE headline total, no C/P split in the same answer',
+  sandbox.__ansMonth.includes('Projected income this month:') &&
+  !sandbox.__ansMonth.includes('C (confirmed only)') &&
+  !sandbox.__ansMonth.includes('submitted'));
 t('assistant C/P question answers with live totals, not "planned feature"',
   sandbox.__ansCSP.includes('C (confirmed only)') &&
   !sandbox.__ansCSP.includes('planned feature'));

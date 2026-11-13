@@ -160,7 +160,7 @@ const WORDS = 'Day shifts pay $250/hr and I\'m paid for 8 hours. RG8 is an 8-hou
   run(`confirmDescribe('fac:' + db.facilities[0].id)`);
   t('S4: an unedited re-save on the contract-built card is a byte-identical no-op',
     run(`facSnap(db.facilities[0].id)`) === s4Snap);
-  t('sw: cache bumped', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v163'));
+  t('sw: cache bumped', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v164'));
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILS:', fails.join(' | '));
   process.exit(fail ? 1 : 0);

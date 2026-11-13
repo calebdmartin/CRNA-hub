@@ -194,7 +194,7 @@ function seedDevice() {
 }
 
 (async () => {
-  t('precondition: Supabase configured, cache v89', run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v163'));
+  t('precondition: Supabase configured, cache v89', run(`SUPABASE_CONFIGURED`) === true && swSrc.includes('crna-hub-shell-v164'));
   t('source: single mount + dispatcher wiring + no-backup erase path',
     appSrc.includes('testingToolsMountHTML()') && appSrc.includes("action==='wipe-open'") &&
     appSrc.includes("action==='wipe-erase'") && appSrc.includes('wipeEraseRun') &&

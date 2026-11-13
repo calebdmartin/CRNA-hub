@@ -247,6 +247,6 @@ function checkCase(c) {
     t('U3: rate union — local Call 2 rates AND AI Call 1 rates both survive', !!p3 && Number(p3.rates.rateSecond) === 3000 && Number(p3.rates.weekendRateSecond) === 2000 && Number(p3.rates.rate24) === 4800 && Number(p3.rates.weekendRate24) === 4200, J(p3 && p3.rates));
   }
 
-  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v163'));
+  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v164'));
   console.log(fails ? ('\n' + fails + ' FAILURES') : '\nALL PASS');
 })().catch(e => { console.log('ERROR', e && e.stack || e); process.exitCode = 1; });

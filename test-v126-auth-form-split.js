@@ -195,7 +195,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     afterWipe.indexOf('Start over (testing) is done') < afterWipe.indexOf('id="cloudAuthForm"'));
 
   // ---------- 7. SW ----------
-  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v163'));
+  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v164'));
 
   console.log(`\nv126 auth-form split: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

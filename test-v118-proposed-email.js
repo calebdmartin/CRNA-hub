@@ -116,7 +116,11 @@ function shiftsFixture() {
   w.run(`openProposedEmailSheet('fh');`);
   let sheet = w.run(`proposedEmailSheetHTML()`);
   t('sheet: lists both proposed shifts as ticked checkboxes', (sheet.match(/propEmailInclude/g) || []).length === 2 && (sheet.match(/checked/g) || []).length >= 2, sheet.slice(0, 300));
-  t('sheet: shows dates + types + price where priced', sheet.includes('8hr day shift') && sheet.includes('2nd call') && sheet.includes('$2,125'));
+  // v164 (Caleb, Nov 13, 2026) SUPERSEDES the old pin here, which
+  // asserted the sheet showed '$2,125' on the priced row: the
+  // picker is now money-free too — rows are date + shift type only,
+  // exactly what the scheduler receives.
+  t('sheet (v164): shows dates + types and NO price anywhere', sheet.includes('8hr day shift') && sheet.includes('2nd call') && !/\$/.test(sheet), sheet.slice(0, 400));
   t('sheet: contact field present and empty for HOLZ', sheet.includes('f_propEmailContact') && sheet.includes('placeholder="scheduling@hospital.org"'));
   t('sheet: says the mail app sends it, not the app', sheet.includes('never sends email for you'));
   const facPage = w.run(`facilitiesPage()`);
@@ -140,8 +144,9 @@ function shiftsFixture() {
   // v163 (Nov 13, 2026, Caleb) SUPERSEDES the old pin here, which
   // asserted the priced line carried '$2,125' in the body: the email
   // to the scheduler now carries NO money at all — dates and shift
-  // types only, no per-shift figures and no total. Prices remain in
-  // the in-app picker only (pinned above and in test-v163).
+  // types only, no per-shift figures and no total. v164 extends the
+  // same money-free rule to the picker sheet (pinned above and in
+  // test-v163).
   t('compose: lines carry date + type and NO money anywhere', bodyLines.some((l) => l.includes('8hr day shift')) && bodyLines.some((l) => l.includes('2nd call')) && !/\$[\d,]/.test(composed.body) && !/\$[\d,]/.test(composed.subject), J(bodyLines));
   t('compose: friendly intro + sign-off with the user name', composed.body.startsWith('Hello,') && composed.body.includes('Thanks,\nCaleb Martin'));
 

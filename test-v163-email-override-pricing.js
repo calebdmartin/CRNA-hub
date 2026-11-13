@@ -18,9 +18,20 @@
 //
 // REQUIREMENT CHANGE (Caleb, Nov 13, 2026): the email TO THE
 // SCHEDULER carries no money at all — no per-shift figures, no
-// total. Dates and shift types only. Prices stay in the in-app
-// picker, for the user's own review. (v118's body-price pin was
+// total. Dates and shift types only. (v118's body-price pin was
 // updated with this reason recorded.)
+//
+// PIN UPDATE (v164, Caleb, Nov 13, 2026): the picker SHEET is
+// money-free too. Caleb re-screenshotted the sheet — its heading
+// says "These proposed shifts will be listed in the email:" — and
+// ruled: no income anywhere on that flow. The rows now show date +
+// shift type only, exactly what the scheduler receives, so the
+// sheet is literally what gets sent. The v163 picker-price pins
+// below (override row $2,000.00, card rows $2,125.00) are therefore
+// SUPERSEDED and rewritten to pin NO money on the sheet. The shared
+// shiftDisplayPrice() engine pins stand: calendar, day sheet,
+// paychecks and the assistant still price consistently — only this
+// email flow displays no prices.
 //
 // Fixture is generic (no user's facilities or figures): a facility
 // whose card prices an 8-hour day at $2,125 (hourly 250 x 8.5 paid
@@ -107,11 +118,11 @@ const SH_BLANK = { id: 's-blank', date: D_BLANK, facility: 'General Hospital', c
 (async () => {
   const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
   const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-  t('sw: cache bumped to v163', swSrc.includes('crna-hub-shell-v163'));
+  t('sw: cache bumped to v163', swSrc.includes('crna-hub-shell-v164'));
   const fnBody = (name) => { const i = appSrc.indexOf('function ' + name + '('); if (i < 0) return ''; let depth = 0, j = appSrc.indexOf('{', i); const start = j; for (; j < appSrc.length; j++) { if (appSrc[j] === '{') depth++; else if (appSrc[j] === '}') { depth--; if (!depth) return appSrc.slice(start, j + 1); } } return ''; };
-  t('source: picker price routes through the shared shiftDisplayPrice', fnBody('propEmailPrice').includes('shiftDisplayPrice'));
+  t('source (v164): no picker-price helper remains — the sheet never prices a row', !appSrc.includes('function propEmailPrice') && !fnBody('proposedEmailSheetHTML').includes('propEmailPrice'));
   t('source: the shared display price reads effectiveShiftPay for priced shifts', fnBody('shiftDisplayPrice').includes('effectiveShiftPay'));
-  t('source: compose (the scheduler email) never touches prices', !fnBody('composeProposedEmail').includes('propEmailPrice') && !fnBody('composeProposedEmail').includes('$'));
+  t('source: compose (the scheduler email) never touches prices', !fnBody('composeProposedEmail').includes('shiftDisplayPrice') && !fnBody('composeProposedEmail').includes('$'));
   t('card sanity: the facility card prices an 8-hour day at 2125', (() => { const w = makeWorld(); w.run(`db = empty(); db.facilities = ${J([GEN_FAC])}; db.shifts = []; persist();`); return w.run(`facilityPayFor(db.facilities[0], '8-hour day', ${J(D_OVR)})`) === 2125; })());
 
   // --- Totals: the calendar honours the typed override exactly ---
@@ -131,7 +142,7 @@ const SH_BLANK = { id: 's-blank', date: D_BLANK, facility: 'General Hospital', c
   t('display price: unstamped shift live-prices from the card = 2125', w.run(`shiftDisplayPrice(db.shifts.find(x => x.id === 's-blank'))`) === 2125);
   t('display price: nothing can price it = null (never $0)', w.run(`shiftDisplayPrice({ date: ${J(D_OVR)}, facility: 'Nowhere Clinic', type: '8-hour day', pay: '', incomplete: true })`) === null);
 
-  // --- Picker: prices shown, override honoured ---
+  // --- Picker (v164): date + shift type ONLY — the sheet is the email ---
   w.run(`openProposedEmailSheet('fg');`);
   const sheet = w.run(`proposedEmailSheetHTML()`);
   const rows = sheet.split('<label class="row checkline">').slice(1);
@@ -140,9 +151,12 @@ const SH_BLANK = { id: 's-blank', date: D_BLANK, facility: 'General Hospital', c
   const rowCard = rows.find((s) => s.includes(fmtOf(D_CARD)));
   const rowBlank = rows.find((s) => s.includes(fmtOf(D_BLANK)));
   t('picker: all 3 proposed shifts listed', rows.length === 3, String(rows.length));
-  t('picker: override row shows $2,000.00 — and NOT the card $2,125', !!rowOv && rowOv.includes('$2,000.00') && !rowOv.includes('$2,125'), rowOv || 'row missing');
-  t('picker: no-override row still shows the card $2,125.00', !!rowCard && rowCard.includes('$2,125.00'), rowCard || 'row missing');
-  t('picker: unstamped row shows the live card $2,125.00', !!rowBlank && rowBlank.includes('$2,125.00'), rowBlank || 'row missing');
+  t('picker (v164): every row shows date + shift type, exactly what the scheduler receives',
+    [rowOv, rowCard, rowBlank].every((r) => !!r && r.includes('8-hour day')), rows.join(' | '));
+  t('picker (v164): NO dollar figure anywhere on the sheet (no $, no 2,000 / 2,125 in any form)',
+    !/\$/.test(sheet) && !/2,?000|2,?125/.test(sheet), sheet.slice(0, 800));
+  t('picker (v164): the override row carries no price to diverge — date + type only',
+    !!rowOv && !/\$|2,?000/.test(rowOv), rowOv || 'row missing');
 
   // --- The email itself: NO money, dates + types only ---
   const fac = `db.facilities.find(f => f.id === 'fg')`;
