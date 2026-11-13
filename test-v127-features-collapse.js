@@ -106,8 +106,12 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     // sixth toggle, featureTestingTools ("Testing tools (advanced)"),
     // so "all five" is now "all six". Its fresh-account state also
     // differs by design (next pin).
-    t('3 all six toggles present with their toggle buttons',
-      defs.length === 6 && defs.every(d => {
+    // v158 SUPERSEDED PIN, rewritten with reason: FEATURE_DEFS gained a
+    // seventh toggle, featureExpenses ("Expense tracking"), which
+    // defaults On like the original five — so "all six" is now "all
+    // seven", and the fresh-account On count below rises by one.
+    t('3 all seven toggles present with their toggle buttons',
+      defs.length === 7 && defs.every(d => {
         const [key, label] = d.split('|');
         return html.includes(label.replace(/&/g, '&amp;')) && html.includes(`data-action="feature-toggle" data-id="${key}"`);
       }), JSON.stringify(defs));
@@ -116,8 +120,8 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     // tools row deliberately starts Off — beta users never meet the
     // ERASE panel unless they turn it on. Accounts with records get
     // it On (test-v155-polish.js).
-    t('3 fresh account: the original five rows read On; Testing tools starts Off',
-      (html.match(/On — tap to turn off/g) || []).length === 5 && html.includes('Off — tap to turn on'));
+    t('3 fresh account: the original five rows + Expenses read On; Testing tools starts Off',
+      (html.match(/On — tap to turn off/g) || []).length === 6 && html.includes('Off — tap to turn on'));
   }
 
   // ---------- 4: Account page placement / neighbour parity ----------
@@ -144,9 +148,11 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
     // flipping Mileage yields TWO Off rows (Mileage + Testing tools)
     // and FOUR On rows, not one/four. The flipped row is still the
     // first Off row and still follows its own label.
+    // v158 count note: flipping Mileage now yields TWO Off rows
+    // (Mileage + Testing tools) and FIVE On rows (Expenses added).
     t('5 the flipped row now reads Off — tap to turn on, the rest still On',
       (off.match(/Off — tap to turn on/g) || []).length === 2 &&
-      (off.match(/On — tap to turn off/g) || []).length === 4 &&
+      (off.match(/On — tap to turn off/g) || []).length === 5 &&
       off.indexOf('Off — tap to turn on') > off.indexOf('Mileage tracking'));
     t('5 the feature itself collapses elsewhere exactly as before (mileage off line)',
       w.run(`mileagePage()`).includes('Mileage tracking is off') &&
@@ -179,7 +185,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   }
 
   // ---------- 7: service worker ----------
-  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v157'));
+  t('7 sw cache bumped to v127', swSrc.includes('crna-hub-shell-v158'));
 
   console.log(`\nv127 features collapse: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;

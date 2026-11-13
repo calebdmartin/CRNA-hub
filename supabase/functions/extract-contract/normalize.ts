@@ -253,6 +253,33 @@ export function normalizeAiPaystub(raw: unknown): AiPaystub {
   return out;
 }
 
+// --- Receipt mode (Nov 12, 2026, v158) ---
+// Photos of a business-expense RECEIPT. The model returns ONLY the
+// total amount actually paid, the date of the purchase, and the
+// vendor's name — the client puts them into an editable confirm
+// form and saves NOTHING until the user approves. Category/facility
+// are the user's own choices and are never read from the receipt.
+// Same null rules as every other mode: a field the receipt does not
+// state is null, never invented, never 0. `amount` is the receipt
+// TOTAL (after tax/tip as printed), never a subtotal or a line item.
+export interface AiReceipt {
+  vendor: string | null;
+  date: string | null;
+  amount: number | null;
+  raw_text: string | null;
+}
+
+export function normalizeAiReceipt(raw: unknown): AiReceipt {
+  const out: AiReceipt = { vendor: null, date: null, amount: null, raw_text: null };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const obj = raw as Record<string, unknown>;
+  out.vendor = coerceAiText(obj["vendor"] ?? obj["merchant"] ?? obj["store"]);
+  out.date = coercePaystubDate(obj["date"]);
+  out.amount = coerceAiNumber(obj["amount"] ?? obj["total"]);
+  out.raw_text = coerceAiText(obj["raw_text"]);
+  return out;
+}
+
 // --- Portal-check mode (Nov 6, 2026) ---
 // Photos of a credentialing portal page the user signed into
 // themselves (NBCRNA / AANA / a state board lookup). The model returns

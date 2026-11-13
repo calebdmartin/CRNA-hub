@@ -2,7 +2,7 @@
 // Run: deno test --allow-read supabase/functions/extract-contract/normalize.test.ts
 
 import { assertEquals } from "jsr:@std/assert";
-import { normalizeAiSchedule } from "./normalize.ts";
+import { normalizeAiSchedule, normalizeAiReceipt } from "./normalize.ts";
 
 Deno.test("normalizeAiSchedule: keeps dated rows for the named person, drops the rest", () => {
   const out = normalizeAiSchedule({
@@ -259,4 +259,18 @@ Deno.test("normalizeAiRulesRead: junk and partial reads degrade to nulls, never 
   assertEquals(out.codes[0].weekday_pay, null);
   assertEquals(out.codes[0].hours, null);
   assertEquals(out.unknown, []);
+});
+
+Deno.test("normalizeAiReceipt: vendor/date/total coerce, nulls stay null (v158)", () => {
+  assertEquals(normalizeAiReceipt({
+    vendor: "  Riverbend Supply Co. ",
+    date: "11/04/2026",
+    amount: "$1,234.56",
+    raw_text: "receipt text",
+  }), { vendor: "Riverbend Supply Co.", date: "2026-11-04", amount: 1234.56, raw_text: "receipt text" });
+  assertEquals(normalizeAiReceipt({ vendor: "", date: "not a date", amount: 0 }),
+    { vendor: null, date: null, amount: null, raw_text: null });
+  assertEquals(normalizeAiReceipt(null), { vendor: null, date: null, amount: null, raw_text: null });
+  assertEquals(normalizeAiReceipt({ merchant: "Hotel", total: 210.5, date: "2026-11-04" }),
+    { vendor: "Hotel", date: "2026-11-04", amount: 210.5, raw_text: null });
 });

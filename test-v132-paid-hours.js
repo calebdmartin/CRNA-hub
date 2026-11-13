@@ -256,7 +256,7 @@ const CODES_HOLZ = `[{code:'HOLZ - G Main (8)',ctype:'8-hour day',hours:8},{code
   t('F Nov 24 paycheck $27,075 and November headline $39,832.50 — pins hold',
     occ.find(o => o.date === '2026-11-24').total === 27075 && run(`monthHeadline('2026-11').gross`) === 39832.5, J(occ));
 
-  t('sw: cache bumped to v132', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v157'));
+  t('sw: cache bumped to v132', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v158'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

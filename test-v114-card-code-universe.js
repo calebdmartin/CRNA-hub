@@ -275,6 +275,6 @@ const REC_B = { id: 'ps-b', agency: 'Premier Anesthesia Group, PC', facility: 'H
     t('G2: G Main (8) still $250/hr × 8.5 = $2,125 in the summary', s.includes('“HOLZ - G Main (8)” (8-hour day): $250/hr × 8.5 paid hours = $2,125'), s);
     t('G3: PCDO still no pay', s.includes('“HOLZ - PCDO”: no pay'), s);
   }
-  t('sw: cache bumped to v114', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v157'));
+  t('sw: cache bumped to v114', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v158'));
   console.log(fails ? ('\n' + fails + ' FAILURES') : '\nALL PASS');
 })().catch(e => { console.log('ERROR', e && e.stack || e); process.exitCode = 1; });

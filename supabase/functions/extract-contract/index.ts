@@ -61,6 +61,7 @@ import {
 import {
   normalizeAiContract,
   normalizeAiPaystub,
+  normalizeAiReceipt,
   normalizeAiPortalCheck,
   normalizeAiScheduleRead,
   normalizeAiGridLocate,
@@ -219,6 +220,26 @@ function paystubPrompt(): string {
   );
 }
 
+// Receipt mode (Nov 12, 2026, mode: "receipt"): photos of a
+// business-expense receipt return { ok: true, mode: "receipt",
+// receipt, raw_text, model } where receipt is the normalised
+// AiReceipt shape (vendor, date, total amount — null where the
+// receipt does not state a value). The client shows the read in an
+// editable confirm form and saves nothing until the user approves;
+// the receipt photo itself is stored by the client in the user's
+// own private storage, never by this function.
+function receiptPrompt(): string {
+  return (
+    "Read these photos of a business expense receipt. " +
+    "Return ONLY a JSON object with these keys, using null where a value is not stated: " +
+    "vendor, date, amount, raw_text. " +
+    "vendor is the business / store name printed at the top of the receipt. " +
+    "date is the date of the purchase (YYYY-MM-DD). " +
+    "amount is the TOTAL amount paid on the receipt — the final total including tax and tip as printed, not a subtotal and not a single line item. " +
+    "Amounts are numbers without $ or commas. Do not invent any value."
+  );
+}
+
 // Plain-language rule mode (Nov 6, 2026, mode: "rule"): NO photos.
 // The user describes a pay rule in their own words in the contract
 // chat box; the model returns a STRUCTURED rule (see normalizeAiRule)
@@ -345,7 +366,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       unknown
     > | null;
     if (!body || typeof body !== "object") return err("bad_request", 400);
-    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "rules" ? "rules" : body.mode === "rule" ? "rule" : body.mode === "portal" ? "portal" : "contract";
+    const mode = body.mode === "schedule" ? "schedule" : body.mode === "paystub" ? "paystub" : body.mode === "receipt" ? "receipt" : body.mode === "rules" ? "rules" : body.mode === "rule" ? "rule" : body.mode === "portal" ? "portal" : "contract";
     const portalSource = typeof body.portalSource === "string" &&
       ["nbcrna", "aana", "licenses"].includes(body.portalSource)
       ? body.portalSource
@@ -416,7 +437,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const content: Record<string, unknown>[] = [
       {
         type: "text",
-        text: mode === "schedule" ? (body.locate === true ? gridLocatePrompt() : body.band === true ? gridBandPrompt(scheduleName) : schedulePrompt(scheduleName)) : mode === "paystub" ? paystubPrompt() : mode === "rules" ? rulesPrompt(rulesCodesText, rulesCardText) + "\n\nThe user's description: " + ruleText : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
+        text: mode === "schedule" ? (body.locate === true ? gridLocatePrompt() : body.band === true ? gridBandPrompt(scheduleName) : schedulePrompt(scheduleName)) : mode === "paystub" ? paystubPrompt() : mode === "receipt" ? receiptPrompt() : mode === "rules" ? rulesPrompt(rulesCodesText, rulesCardText) + "\n\nThe user's description: " + ruleText : mode === "rule" ? rulePrompt() + ruleConversation : mode === "portal" ? portalPrompt(portalSource) : PROMPT,
       },
       ...parsed.images.map((url) => ({
         type: "image_url",
@@ -488,7 +509,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           error: "openai_bad_response",
           message:
             "OpenAI answered without readable " +
-            (mode === "schedule" ? "schedule" : mode === "paystub" ? "pay stub" : mode === "portal" ? "portal page" : "contract") +
+            (mode === "schedule" ? "schedule" : mode === "paystub" ? "pay stub" : mode === "receipt" ? "receipt" : mode === "portal" ? "portal page" : "contract") +
             " data — try again, or use on-device OCR.",
         },
         502,
@@ -532,6 +553,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
         header_dates: read.headerDates,
         raw_text: typeof rawText === "string" ? rawText : "",
         model: SCHEDULE_MODEL,
+      });
+    }
+    if (mode === "receipt") {
+      const receipt = normalizeAiReceipt(raw);
+      const rawText = (raw as Record<string, unknown>)["raw_text"];
+      return json({
+        ok: true,
+        mode: "receipt",
+        receipt,
+        raw_text: typeof rawText === "string" ? rawText : "",
+        model: MODEL,
       });
     }
     if (mode === "paystub") {
