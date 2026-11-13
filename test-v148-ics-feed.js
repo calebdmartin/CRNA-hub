@@ -266,7 +266,7 @@ const NORM_LINK = 'https://calendar.google.com/calendar/ical/abc/private-deadbee
   t('pin: live-sync keeps Google/Outlook/Apple behaviour — order helper only',
     liveSrc.includes('liveSyncProviderOrder') && liveSrc.includes("if (p === 'ios') return ['apple', 'google', 'outlook']"));
   t('pin: service worker cache bumped to v148',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v161'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v162'));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

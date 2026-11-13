@@ -88,7 +88,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   // ---------- 7 (source level) + 8: copy audit & SW ----------
   t('7a no "Account tab" string left in app.js / live-sync.js / index.html',
     !appSrc.includes('Account tab') && !liveSrc.includes('Account tab') && !indexSrc.includes('Account tab'));
-  t('8 SW cache is v156', swSrc.includes('crna-hub-shell-v161'));
+  t('8 SW cache is v156', swSrc.includes('crna-hub-shell-v162'));
   t('2a header markup: profile button in a header-right cluster',
     indexSrc.includes('id="profileBtn"') && indexSrc.includes('class="header-right"') &&
     indexSrc.includes('class="profile-btn"'));

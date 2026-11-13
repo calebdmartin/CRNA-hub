@@ -218,7 +218,7 @@ const HOLZER_ADDR = '100 Jackson Pike, Gallipolis, OH 45631';
 
   // ---------- Cache ----------
   t('service worker cache bumped to v71',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v161'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v162'));
 
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nALL PASS');
 })();

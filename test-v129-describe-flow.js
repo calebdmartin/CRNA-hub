@@ -81,9 +81,15 @@ const RESET = `db = { facilities: [], shifts: [], credentials: [], mileageTrips:
   t('item 3: every saved definition appears as its own sentence',
     ['Day shifts pay $250/hr.', '8 is an 8-hour shift.', '10 is a 10-hour shift.', '5* is a 10-hour shift.', '5** is a 10-hour shift.', '12 is a 12-hour shift.'].every(s => prefill.includes(s)), prefill);
   run(`actions('describe-facility','camc')`);
-  t('item 1a: reopening shows the full prefill in the box and clears the flash',
+  // v162: reopening shows the user's OWN words, stored verbatim
+  // at the save — this pin originally expected the regenerated
+  // prefill sentences ('5** is a 10-hour shift.'), which was
+  // the round-trip defect itself. The full rules still show in
+  // the box, now in the user's phrasing; describePrefillText
+  // itself stays pinned by the item-3 checks below.
+  t('item 1a: reopening shows the saved words in the box and clears the flash',
     run(`describeOpenFac`) === 'camc' && run(`describeSavedFlashFac`) === null &&
-    run(`facilitiesPage()`).includes('5** is a 10-hour shift.') && run(`facilitiesPage()`).includes('8 is an 8-hour shift.'));
+    run(`facilitiesPage()`).includes('5* or 5**=10hr shifts') && run(`facilitiesPage()`).includes('8s or 8=8hr shifts'));
   const rt = run(`(function(){
     const A = db.facilities[0];
     const B = JSON.parse(JSON.stringify(A)); B.id = 'camc2'; B.codeMap = {}; db.facilities = [B];
@@ -198,7 +204,7 @@ const RESET = `db = { facilities: [], shifts: [], credentials: [], mileageTrips:
   t('item 2: a card-started stub read force-opens its panel',
     run(`paystubCardFacId = 'f1'; paystubStatus = 'Reading stub.pdf'; facilitiesPage()`).includes('paystub-card-f1" open'));
   // ---------- shell ----------
-  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v161'));
+  t('sw: cache bumped to v129', fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v162'));
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILS:', fails.join(' | '));
   process.exit(fail ? 1 : 0);

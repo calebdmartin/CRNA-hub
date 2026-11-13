@@ -3695,7 +3695,7 @@ function captureMileageLogDraft(){
 }
 function render(){ captureMileageLogDraft(); captureCloudAuthDraft(); captureFeaturesPanelState(); capturePaystubCardPanelState(); if(window.__crnaBootWatch){clearTimeout(window.__crnaBootWatch);window.__crnaBootWatch=null} const ss=$('storageStatus');if(ss)ss.textContent=cloudHeaderLabel();profileBtnSync();$('nav').innerHTML=tabs.map(t=>`<button class="${tab===t?'active':''}" data-tab="${escapeHTML(t)}">${escapeHTML(tabLabel(t))}</button>`).join('');$('app').innerHTML=({Dashboard:dashboard,Facilities:facilitiesPage,Credentials:credentialsPage,Mileage:mileagePage,Assistant:assistantPage,Account:accountPage}[tab]||dashboard)()+assistantOverlayHTML();document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>actions(b.dataset.action,b.dataset.id,b.dataset.date,b.dataset.from)));document.querySelectorAll('[data-portal-connect]').forEach(a=>a.addEventListener('click',e=>portalConnectClick(a.dataset.portalConnect,e,a.dataset.portalState||'')));document.querySelectorAll('[data-shift-status]').forEach(el=>el.addEventListener('change',()=>{setShiftStatus(el.dataset.shiftStatus,el.value)}));document.querySelectorAll('[data-shift-origin]').forEach(el=>el.addEventListener('change',()=>{setShiftTripOrigin(el.dataset.shiftOrigin,el.value)}));document.querySelectorAll('form[data-kind]').forEach(f=>f.addEventListener('submit',submitEntry));const mt=$('manualTypeSelect');if(mt)mt.addEventListener('change',()=>{manualType=mt.value;editId=null;render();});const docFormEl=$('docForm');if(docFormEl&&typeof docFormEl.querySelector==='function'){const dtsel=docFormEl.querySelector('select[name="type"]');const dow=document.getElementById('docOtherWrap');if(dtsel&&dow&&typeof dtsel.addEventListener==='function')dtsel.addEventListener('change',()=>{dow.hidden=dtsel.value!=='Other'});}const ssy=$('savedShiftsYear');if(ssy)ssy.addEventListener('change',()=>{savedShiftsYear=+ssy.value;render();});const dac=$('f_deleteAlsoFromCalendar');if(dac)dac.addEventListener('change',()=>{if(shiftDeleteConfirm)shiftDeleteConfirm.also=!!dac.checked});const mrw=$('mileageReviewWeekSelect');if(mrw)mrw.addEventListener('change',()=>{mileageReviewWeek=mrw.value;render();});const mrv=$('mileageReviewVehicleSelect');if(mrv)mrv.addEventListener('change',()=>{const wk=selectedMileageReviewWeek();mileageReviewVehicleWeek=wk;mileageReviewVehicleId=mrv.value;});const mlm=$('mileageLogMonthSelect');if(mlm)mlm.addEventListener('change',()=>{mileageLogMonth=mlm.value;render();});const mey=$('mileageExportYearSelect');if(mey)mey.addEventListener('change',()=>{mileageExportYear=mey.value;mileageExportSel=new Set();render();});document.querySelectorAll('.mileageExportMonth').forEach(el=>el.addEventListener('change',()=>{if(el.checked)mileageExportSel.add(el.value);else mileageExportSel.delete(el.value);const tot=$('mileageExportTotals');if(tot)tot.textContent=mileageExportTotalsLine();const dl=document.querySelector('[data-action="mileage-export-download"]');if(dl)dl.disabled=!mileageExportSelected().length;}));const schedForm=$('scheduleForm');if(schedForm)schedForm.addEventListener('submit',importSchedule);const qf=$('qgendaForm');if(qf)qf.addEventListener('submit',saveQgendaFeed);const icf=$('icsFeedForm');if(icf)icf.addEventListener('submit',saveIcsFeed);const alf=$('appleLinkForm');if(alf)alf.addEventListener('submit',saveAppleLinkFeed);if(tab==='Account'||tab==='Facilities'){qgendaStatusRefresh();icsStatusRefresh()}const restore=$('restoreFile');if(restore)restore.addEventListener('change',restoreBackup);const facilityContractForm=$('facilityContractForm');if(facilityContractForm)facilityContractForm.addEventListener('submit',importFacilityContract);const paystubForm=$('paystubForm');if(paystubForm)paystubForm.addEventListener('submit',importPaystub);document.querySelectorAll('form.paystubCardForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubCard(e,fm.dataset.fac)));document.querySelectorAll('form.paystubImportForm').forEach(fm=>fm.addEventListener('submit',e=>importPaystubImport(e,fm.dataset.kind)));document.querySelectorAll('.paystubEdit').forEach(el=>el.addEventListener('change',()=>{if(!paystubPreview)return;paystubPreview[el.dataset.field]=el.value;const nd=$('paystubNextDates');if(nd)nd.textContent=paystubNextDatesText(paystubPreview)}));document.querySelectorAll('.cropRegionSelect').forEach(el=>{const k=el.dataset.kind+':'+el.dataset.i;if(cropRegionByPage[k])el.value=cropRegionByPage[k];el.addEventListener('change',()=>{cropRegionByPage[k]=el.value})});document.querySelectorAll('.facContractEdit').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(!f)return;if(FACILITY_RATE_KEYS.includes(el.dataset.field)){f.rates=f.rates||{};f.rates[el.dataset.field]=el.value}else f[el.dataset.field]=el.value}));document.querySelectorAll('.facContractInclude').forEach(el=>el.addEventListener('change',()=>{if(!facilityContractPreview)return;const f=facilityContractPreview.facilities[+el.dataset.i];if(f)f.include=el.checked}));const calendarForm=$('calendarForm');if(calendarForm)calendarForm.addEventListener('submit',importCalendar);document.querySelectorAll('.calEdit').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.calFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(calPreview){calPreview.facilityAll=el.value;render()}}));document.querySelectorAll('.calInclude').forEach(el=>el.addEventListener('change',()=>{if(!calPreview)return;const r=calPreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.schedEdit').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r){r[el.dataset.field]=el.value;if(el.dataset.field==='type'&&r.code!==undefined)r.code=el.value;if(el.dataset.field==='facility')r._userTypedFacility=!!String(el.value||'').trim()}}));document.querySelectorAll('.schedFacilityAll').forEach(el=>el.addEventListener('change',()=>{if(schedulePreview){schedulePreview.facilityAll=el.value;render()}}));document.querySelectorAll('.schedInclude').forEach(el=>el.addEventListener('change',()=>{if(!schedulePreview)return;const r=schedulePreview.rows[+el.dataset.row];if(r)r.include=el.checked}));document.querySelectorAll('.importConflictOverride').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:schedulePreview;if(!p)return;p.conflictOverrides=p.conflictOverrides||{};p.conflictOverrides[el.dataset.key]=!!el.checked}));
 document.querySelectorAll('.previewPayUnit').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.payUnit=el.value==='hourly'?'hourly':'daily';render()}}));
-document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.clarifyCodeWeekday').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekdayPay=el.value}}));document.querySelectorAll('.clarifyCodeWeekend').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekendPay=el.value}}));document.querySelectorAll('.clarifyCodePaidHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.paidHours=el.value}}));document.querySelectorAll('.describeText').forEach(el=>el.addEventListener('change',()=>{const st=describeState(el.dataset.key);if(st){st.text=el.value;st.parsed=null;st.confirmed=false;st.error=''}}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
+document.querySelectorAll('.impPaySched').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:el.dataset.kind==='contract'?contractPreview:el.dataset.kind==='faccontract'?facilityContractPreview:schedulePreview;if(p){p.paySchedDraft=p.paySchedDraft||{};p.paySchedDraft[el.dataset.field]=el.value}}));document.querySelectorAll('.facPaySched').forEach(el=>el.addEventListener('change',()=>{const f=(db.facilities||[]).find(x=>x.id===el.dataset.fac);if(f){facPaySchedDrafts[f.id]=facPaySchedDrafts[f.id]||{};facPaySchedDrafts[f.id][el.dataset.field]=el.value}}));document.querySelectorAll('.clarifyHourly').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.hourlyRate=el.value}}));document.querySelectorAll('.clarifyCodeLabel').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.label=el.value}}));document.querySelectorAll('.clarifyCodeHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.hours=el.value}}));document.querySelectorAll('.clarifyCodeWeekday').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekdayPay=el.value}}));document.querySelectorAll('.clarifyCodeWeekend').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.weekendPay=el.value}}));document.querySelectorAll('.clarifyCodePaidHours').forEach(el=>el.addEventListener('change',()=>{const p=el.dataset.kind==='cal'?calPreview:schedulePreview;if(p){p.clarifyDraft=p.clarifyDraft||{hourlyRate:'',codes:{}};p.clarifyDraft.codes=p.clarifyDraft.codes||{};const c=p.clarifyDraft.codes[el.dataset.code]=p.clarifyDraft.codes[el.dataset.code]||{};c.paidHours=el.value}}));document.querySelectorAll('.describeText').forEach(el=>el.addEventListener('change',()=>{const st=describeState(el.dataset.key);if(st){st.text=el.value;st.parsed=null;st.confirmed=false;st.error='';st.changes=null;st.ackChanges=false;st.unchanged=false}}));const af=$('assistantForm');if(af)af.addEventListener('submit',submitAssistant);if(assistantSheetOpen){const ai=$('assistantInput');if(ai&&ai.focus)ai.focus();const sc=document.querySelector('.assistant-sheet .chat');if(sc)sc.scrollTop=sc.scrollHeight;}const cf=$('cloudAuthForm');if(cf)cf.addEventListener('submit',submitCloudAuth);const mi=$('f_miles');if(mi)mi.addEventListener('change',()=>{const s=$('f_milesSource');if(s&&s.value==='auto'){s.value='manual-override';const st=$('mileageCalcStatus');if(st)st.textContent='Miles edited — this trip is now your manual override of the auto-calculated distance.'}});const tt=$('f_tripType');if(tt)tt.addEventListener('change',()=>{const owEl=$('f_oneWayMiles'),milesEl=$('f_miles'),srcEl=$('f_milesSource'),t=tt.value==='one-way'?'one-way':'round-trip';let m=null;const ow=owEl&&Number(owEl.value)>0?Number(owEl.value):null;if(ow!=null&&srcEl&&srcEl.value==='auto')m=tripMilesFor(ow,t);else if(milesEl&&Number(milesEl.value)>0)m=t==='one-way'?Math.round(Number(milesEl.value)/2*10)/10:roundTripMiles(milesEl.value);if(m!=null&&milesEl){milesEl.value=String(m);const st=$('mileageCalcStatus');if(st){st.textContent='Mileage type changed — miles updated to '+m.toFixed(1)+' mi '+tripTypeLabel(t)+'.';mileageCalcStatus=st.textContent}}});const mtt=$('mileageTripTypeSelect');if(mtt)mtt.addEventListener('change',()=>{db.settings.mileageTripType=mtt.value==='one-way'?'one-way':'round-trip';persist();render();});const di=$('f_distance');if(di)di.addEventListener('change',()=>{const s=$('f_distanceSource');if(s&&s.value==='auto'){s.value='manual';const st=$('facilityDistanceStatus');if(st)st.textContent='Distance edited — now saved as a manual distance.'}})}
 function field(name,label,type='text',value='',extra=''){return `<div class="field"><label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" ${extra}></div>`}
 function area(name,label,value='',placeholder=''){return `<div class="field wide"><label for="f_${name}">${label}</label><textarea id="f_${name}" name="${name}" placeholder="${escapeHTML(placeholder)}">${escapeHTML(value)}</textarea></div>`}
 function select(name,label,options,value){return `<div class="field"><label for="f_${name}">${label}</label><select name="${name}" id="f_${name}">${options.map(o=>`<option value="${escapeHTML(o)}" ${o===value?'selected':''}>${escapeHTML(o)}</option>`).join('')}</select></div>`}
@@ -4802,15 +4802,15 @@ function clarifyEntryFor(preview,code,suggestedHours){
 let describeStates={},describeOpenFac=null,describeSavedFlashFac=null;
 function describeState(key){
   const p=key==='imp:schedule'?schedulePreview:key==='imp:cal'?calPreview:null;
-  if(p)return (p.describe=p.describe||{text:null,parsed:null,error:'',busy:false,confirmed:false});
+  if(p)return (p.describe=p.describe||{text:null,parsed:null,error:'',busy:false,confirmed:false,baseline:null,baselineSource:null,unchanged:false,changes:null,ackChanges:false});
   // The facility contract preview (Nov 11, 2026, v123): each
   // preview facility carries its own words-box state under
   // 'imp:facprev:<i>' — the box is that surface's only
   // clarification path, so its state lives and dies with the
   // preview entry it describes.
   const fm=/^imp:facprev:(\d+)$/.exec(key);
-  if(fm&&typeof facilityContractPreview!=='undefined'&&facilityContractPreview){const f=facilityContractPreview.facilities[+fm[1]];if(f)return (f.describe=f.describe||{text:null,parsed:null,error:'',busy:false,confirmed:false})}
-  return (describeStates[key]=describeStates[key]||{text:null,parsed:null,error:'',busy:false,confirmed:false});
+  if(fm&&typeof facilityContractPreview!=='undefined'&&facilityContractPreview){const f=facilityContractPreview.facilities[+fm[1]];if(f)return (f.describe=f.describe||{text:null,parsed:null,error:'',busy:false,confirmed:false,baseline:null,baselineSource:null,unchanged:false,changes:null,ackChanges:false})}
+  return (describeStates[key]=describeStates[key]||{text:null,parsed:null,error:'',busy:false,confirmed:false,baseline:null,baselineSource:null,unchanged:false,changes:null,ackChanges:false});
 }
 function moneyShort(n){return '$'+Number(n||0).toLocaleString('en-US',{maximumFractionDigits:2})}
 const WEEKDAY_ALIASES={sunday:0,sundays:0,sun:0,saturday:6,saturdays:6,sat:6,monday:1,mon:1,tuesday:2,tue:2,tues:2,wednesday:3,wed:3,thursday:4,thu:4,thur:4,thurs:4,friday:5,fri:5};
@@ -6110,8 +6110,13 @@ function describePrefillText(fac,codes){
 // the user read them back in the summary and approved them), the
 // weekend definition lands as facility data, and every derived pay
 // the new rules cover reprices. Nothing unstated is touched.
-function applyDescribedRules(fac,parsed){
-  if(!fac||!parsed)return 0;
+// The card mutation alone, with no repricing (Nov 13, 2026,
+// v162): the words round-trip guard prices a candidate card by
+// applying a parse to a CLONE through this same code, so the
+// diff it reports is the save's real effect, never a parallel
+// re-implementation of the merge.
+function applyDescribedRulesToCard(fac,parsed){
+  if(!fac||!parsed)return;
   for(const k of Object.keys(parsed.rates||{})){const n=rateOrNull(parsed.rates[k]);if(n!=null)fac[k]=String(n)}
   // Weekend provenance (Nov 11, 2026, v122): stated words save
   // the definition AS STATED; weekend-priced rules with no
@@ -6179,8 +6184,154 @@ function applyDescribedRules(fac,parsed){
     fac.codeMap[key]=merged;
     if(/8-hour/i.test(merged.canonicalType||merged.label||'')){const ph=rateOrNull(merged.paidHours);if(ph!=null)fac.paidHours8=String(ph)}
   }
+  // The words that produced this card are the card's memory
+  // (v162): the exact text the parse ran on is stored verbatim
+  // with its provenance, and the words box reopens on THOSE
+  // words — never on prose regenerated from the card. Only a
+  // real words parse carries wordsText; every other caller
+  // (heals, repairs) leaves the stored words untouched.
+  if(typeof parsed.wordsText==='string'&&parsed.wordsText.trim()){fac.rulesWords=parsed.wordsText;fac.rulesWordsSource=(parsed.wordsSource==='contract'||parsed.wordsSource==='generated')?parsed.wordsSource:'user'}
   fac.ratesPromptSkipped=false;fac.updatedAt=new Date().toISOString();
+}
+function applyDescribedRules(fac,parsed){
+  if(!fac||!parsed)return 0;
+  applyDescribedRulesToCard(fac,parsed);
   return repriceUnpricedShiftsForFacility(fac);
+}
+// --- The words round-trip guard (Nov 13, 2026, v162) ---
+// The defect: reopening a facility's pay-rules panel
+// regenerated the words box FROM the saved rate card as lossy
+// machine prose (a call code whose money lives on the card's
+// rate fields came back as "C1 is a 24-hour shift." — no money
+// at all), and confirming a re-read of that prose silently
+// DEGRADED a correct card (sim-account demo: a $30,000
+// paycheck fell to $15,750). Generated summary text must never
+// become parser input, and a correct card must never be
+// silently degraded by an unchanged re-save. Three rules:
+// (1) the box opens on the user's stored words when they exist
+// (rulesWords, verbatim; rulesWordsSource 'user' | 'contract'
+// | 'generated' says where they came from); (2) a re-parse
+// runs only when the text differs from that baseline — an
+// unedited "Make my rules" shows the SAVED card and confirming
+// it changes nothing, byte for byte; (3) an edited re-parse
+// that would move a price the card already states (or
+// un-price a code) must name each change in the read-back and
+// take a second, explicit confirm tap.
+function describeInitialText(o){
+  const fac=o&&o.fac;
+  if(fac&&typeof fac.rulesWords==='string'&&fac.rulesWords.trim())return {text:fac.rulesWords,source:(fac.rulesWordsSource==='contract'||fac.rulesWordsSource==='generated')?fac.rulesWordsSource:'user'};
+  if(o&&o.prefill!=null)return {text:o.prefill,source:'contract'};
+  return {text:describePrefillText(fac||null,(o&&o.codes)||[]),source:'generated'};
+}
+function describeTargetFac(key,st){
+  if(key.indexOf('imp:facprev:')===0){
+    if(typeof facilityContractPreview!=='undefined'&&facilityContractPreview){const f=facilityContractPreview.facilities[+key.split(':')[2]];if(f)return facPreviewOverlay(f)}
+    return null;
+  }
+  const ctx=(st&&st.ctx)||{};
+  if(ctx.fac&&ctx.fac.id&&(db.facilities||[]).some(x=>x.id===ctx.fac.id))return ctx.fac;
+  if(key==='imp:schedule'||key==='imp:cal'){
+    const p=key==='imp:cal'?calPreview:schedulePreview;
+    if(p){const t=importRatesTarget(p);if(t&&t.fac)return t.fac}
+    return null;
+  }
+  return (db.facilities||[]).find(x=>key==='dash:'+x.id||key==='fac:'+x.id)||null;
+}
+function describeCardHasPrices(fac){
+  if(!fac)return false;
+  for(const k of FACILITY_RATE_KEYS)if(rateOrNull(fac[k])!=null)return true;
+  return Object.keys(facilityCodeDefs(fac)).length>0;
+}
+// The read-back state for an UNEDITED box: the saved card
+// itself, shaped like a parse so the one summary renderer
+// shows it. Display only — confirming it applies nothing.
+function describeParsedFromCard(fac){
+  const defs={};for(const [code,d] of Object.entries(facilityCodeDefs(fac)))defs[code]={...d};
+  return {rates:{},defs,weekendDays:facilityWeekendStated(fac)?facilityWeekendDays(fac):null,unanswered:[],question:'',fromCard:true};
+}
+// The per-shift price the card STATES for one code, weekday
+// and weekend — the same figures the read-back summary prints
+// (describeSummaryText's arithmetic), or null when the card
+// states no price for the code. Only a stated price can be
+// "changed" by new words; a code priced for the first time is
+// the read-back's own news, not a change to guard.
+function describeCodeStatedPrice(fac,def){
+  if(!fac||!def)return null;
+  if(def.unpaid)return {wd:0,we:0};
+  const R=k=>rateOrNull(fac[k]);
+  const wd0=rateOrNull(def.weekdayPay),we0=rateOrNull(def.weekendPay);
+  if(wd0!=null||we0!=null)return {wd:wd0!=null?wd0:we0,we:we0!=null?we0:wd0};
+  const ct=def.canonicalType||canonicalTypeOf(def.label||'');
+  if(ct==='Second call'){
+    const wd=R('rateSecond'),we=R('weekendRateSecond');
+    if(wd!=null||we!=null)return {wd:wd!=null?wd:we,we:we!=null?we:wd};
+    const bonus=R('callBonus'),hr=R('hourlyRate');
+    if(bonus!=null&&hr!=null){const ph=R('paidHours8');const base=hr*(ph!=null?ph:8);return {wd:base+bonus,we:base+bonus}}
+    return null;
+  }
+  if(ct==='24-hour call'){
+    const wd=R('rate24'),we=R('weekendRate24');
+    if(wd!=null||we!=null)return {wd:wd!=null?wd:we,we:we!=null?we:wd};
+    const h1=R('hourlyCall1st'),hr=R('hourlyRate');
+    if(h1!=null&&hr!=null){const a=firstCallPay(h1,hr,false),b=firstCallPay(h1,hr,true);if(a&&b)return {wd:a.pay,we:b.pay}}
+    return null;
+  }
+  if(ct&&/hour/.test(ct)){
+    const flat=/8-hour/.test(ct)?R('rate8'):/10-hour/.test(ct)?R('rate10'):/12-hour/.test(ct)?R('rate12'):null;
+    if(flat!=null)return {wd:flat,we:flat};
+    const hr=R('hourlyRate');if(hr==null)return null;
+    let ph=rateOrNull(def.paidHours);
+    if(ph==null&&/8-hour/.test(ct))ph=R('paidHours8');
+    if(ph==null)ph=rateOrNull(def.hours);
+    if(ph==null)return null;
+    return {wd:hr*ph,we:hr*ph};
+  }
+  return null;
+}
+// What confirming this parse would do to the prices the card
+// already states: the parse is applied to a clone through the
+// real save path and the two cards' stated prices are
+// compared code by code. Returns [] when nothing stated
+// moves — the ordinary confirm proceeds exactly as before.
+function describeCardChanges(fac,parsed){
+  if(!fac||!parsed)return null;
+  let candidate;try{candidate=JSON.parse(JSON.stringify(fac))}catch(e){return null}
+  applyDescribedRulesToCard(candidate,parsed);
+  const changes=[];
+  const oldDefs=facilityCodeDefs(fac),newDefs=facilityCodeDefs(candidate);
+  const keys=[...new Set([...Object.keys(oldDefs),...Object.keys(newDefs)])];
+  for(const code of keys){
+    const oldP=describeCodeStatedPrice(fac,oldDefs[code]);
+    if(oldP==null)continue;
+    const newP=describeCodeStatedPrice(candidate,newDefs[code]);
+    if(newP==null){changes.push({code,oldWd:oldP.wd,oldWe:oldP.we,newWd:null,newWe:null,gone:true});continue}
+    if(newP.wd!==oldP.wd||newP.we!==oldP.we)changes.push({code,oldWd:oldP.wd,oldWe:oldP.we,newWd:newP.wd,newWe:newP.we});
+  }
+  // No code definitions on either side: the card IS its rate
+  // fields, so those are diffed directly — a bare-rate
+  // facility gets the same protection.
+  if(!keys.length){
+    for(const k of FACILITY_RATE_KEYS){
+      const oV=rateOrNull(fac[k]),nV=rateOrNull(candidate[k]);
+      if(oV!=null&&(nV==null||nV!==oV))changes.push({code:null,label:FACILITY_RATE_LABELS[k]||k,oldWd:oV,oldWe:oV,newWd:nV,newWe:nV,gone:nV==null});
+    }
+  }
+  // A stated weekend definition that moves re-prices every
+  // weekend-priced code — it is called out like any change.
+  if(parsed.weekendDays&&parsed.weekendDays.length&&facilityWeekendStated(fac)){
+    const oD=facilityWeekendDays(fac),nD=[...new Set(parsed.weekendDays.map(Number))].sort((a,b)=>a-b);
+    if(JSON.stringify(oD)!==JSON.stringify(nD))changes.push({code:null,weekend:true,oldDays:oD,newDays:nD});
+  }
+  return changes;
+}
+function describeChangeLine(ch){
+  if(ch.weekend)return 'Weekend was '+weekendDayListLabel(ch.oldDays)+' — the new words make it '+weekendDayListLabel(ch.newDays)+'.';
+  const name=ch.code?('“'+ch.code+'”'):(ch.label||'A rate');
+  const split=(ch.oldWd!==ch.oldWe)||(ch.newWd!=null&&ch.newWe!=null&&ch.newWd!==ch.newWe);
+  const fmt=(wd,we)=>split?(moneyShort(wd)+' on weekdays, '+moneyShort(we)+' on weekends'):moneyShort(wd)+' per shift';
+  if(ch.gone)return name+' was '+fmt(ch.oldWd,ch.oldWe)+' — the new words don\'t price it.';
+  if(ch.newWd===0&&ch.newWe===0)return name+' was '+fmt(ch.oldWd,ch.oldWe)+' — the new words make it no pay.';
+  return name+' was '+fmt(ch.oldWd,ch.oldWe)+' — the new words price it at '+fmt(ch.newWd,ch.newWe)+'.';
 }
 // --- AI-primary words read (Nov 11, 2026, v133) ---
 // Caleb's directive: "Make all of the ai readers identical to
@@ -6530,6 +6681,20 @@ async function submitDescribe(key){
   }
   const text=String(st.text||'').trim();
   if(!text){st.error='Type the pay rules first — nothing was sent.';render();return}
+  // The round-trip guard (v162): text identical to the
+  // baseline the box opened on is NOT re-parsed when a card
+  // already stands behind it — generated prose can only lose
+  // information, and the user's own saved words were already
+  // read once. The read-back shows the saved card itself, and
+  // confirming it is a no-op (see confirmDescribe).
+  const targetFac=describeTargetFac(key,st);
+  const wordsDirty=st.baseline==null||String(st.baseline).trim()!==text;
+  if(!wordsDirty&&targetFac&&describeCardHasPrices(targetFac)){
+    st.parsed=describeParsedFromCard(targetFac);
+    st.unchanged=true;st.changes=null;st.ackChanges=false;st.confirmed=false;st.error='';
+    render();return;
+  }
+  st.unchanged=false;
   st.busy=true;st.error='';render();
   try{
     let parsed=describeParseLocal(text,ctx.fac||null,ctx.codes||[]);
@@ -6626,7 +6791,17 @@ async function submitDescribe(key){
     if(!Object.keys(parsed.rates).length&&!Object.keys(parsed.defs).length&&!parsed.weekendDays&&!(parsed.unanswered&&parsed.unanswered.length)){
       st.error='I couldn\'t pull any rates from that — try plainer sentences, e.g. “Day shifts pay $200/hr and I\'m paid for 8 hours. Call 2 is $2,400 on weekdays, $1,800 on weekends.” Nothing was saved.';
       st.parsed=null;
-    }else{st.parsed=parsed;st.confirmed=false;st.collapsed=false}
+    }else{st.parsed=parsed;st.confirmed=false;st.collapsed=false;
+      // The words behind this parse ride it to the save, which
+      // stores them verbatim on the facility (v162). Provenance:
+      // edited text is the user's; unedited text keeps the
+      // baseline's source (a first parse of contract prose is
+      // still the contract's words, not the user's).
+      parsed.wordsText=st.text;
+      parsed.wordsSource=(!wordsDirty&&(st.baselineSource==='contract'||st.baselineSource==='generated'))?st.baselineSource:'user';
+      // The price-change diff the confirm must answer for
+      // (v162): computed once, here, against the standing card.
+      st.changes=targetFac?describeCardChanges(targetFac,parsed):null;st.ackChanges=false}
   }finally{st.busy=false;render()}
 }
 // Stage a facility-preview words parse onto its preview entry
@@ -6639,15 +6814,44 @@ async function submitDescribe(key){
 function stageFacPreviewDescribe(i){
   if(!facilityContractPreview)return false;
   const f=facilityContractPreview.facilities[i];if(!f)return false;
-  const st=f.describe;if(!st||!st.parsed)return false;
+  const st=f.describe;if(!st||!st.parsed||st.unchanged)return false;
   f.rates=f.rates||{};
   for(const k of FACILITY_RATE_KEYS){const n=rateOrNull(st.parsed.rates&&st.parsed.rates[k]);if(n!=null)f.rates[k]=String(n)}
   f.describedParsed=st.parsed;
   st.confirmed=true;
+  // The staged words are the box's new baseline (v162):
+  // reopening with Edit rules and saving them back unedited is
+  // measured against what was just staged, not the prose the
+  // box first opened on.
+  st.baseline=st.text;if(st.parsed&&st.parsed.wordsSource)st.baselineSource=st.parsed.wordsSource;
   return true;
 }
 function confirmDescribe(key){
   const st=describeState(key);if(!st||!st.parsed)return;
+  // The unedited confirm (v162): the parse on screen is the
+  // saved card itself, so "Use these rules" closes the surface
+  // and changes NOTHING — no apply, no reprice, the stored
+  // record stays byte-identical. The import surfaces still
+  // complete their approve (their apply path skips an
+  // unchanged parse — see applyImportDescribed).
+  if(st.unchanged){
+    if(key.indexOf('imp:facprev:')===0){st.confirmed=true;st.collapsed=true;render();return}
+    if(key.indexOf('imp:')===0){
+      st.confirmed=true;
+      if(key==='imp:schedule'&&schedulePreview){render();approveScheduleImport();return}
+      if(key==='imp:cal'&&calPreview){render();approveCalendarImport();return}
+      render();return;
+    }
+    describeStates[key]={text:null,parsed:null,error:'',busy:false,confirmed:false,baseline:null,baselineSource:null,unchanged:false,changes:null,ackChanges:false};
+    if(key.indexOf('fac:')===0)describeOpenFac=null;
+    render();return;
+  }
+  // Price changes need their own explicit tap (v162): the
+  // first confirm on a parse whose read-back lists price
+  // changes only ARMS the save — the changes stay on screen,
+  // the button becomes the explicit yes, and nothing has been
+  // applied yet.
+  if(st.changes&&st.changes.length&&!st.ackChanges){st.ackChanges=true;render();return}
   if(key.indexOf('imp:facprev:')===0){
     // The facility contract preview (v123): confirming stages
     // the rules into the preview entry; the preview's own
@@ -6673,7 +6877,7 @@ function confirmDescribe(key){
   if(!fac){st.error='That facility is no longer there — nothing was saved.';render();return}
   applyDescribedRules(fac,st.parsed);
   try{if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',fac.id)}catch(_){}
-  describeStates[key]={text:null,parsed:null,error:'',busy:false,confirmed:false};
+  describeStates[key]={text:null,parsed:null,error:'',busy:false,confirmed:false,baseline:null,baselineSource:null,unchanged:false,changes:null,ackChanges:false};
   // A successful save on a facility CARD closes the pay-rules
   // section back to the card's resting state by itself (Nov 11,
   // 2026, v129 — Caleb: "Once it has read the rule and its save
@@ -6724,7 +6928,11 @@ function describeRulesHTML(key,opts){
   const o=opts||{};
   const st=describeState(key);
   st.ctx={fac:o.fac||null,facName:o.facName||(o.fac?o.fac.name:''),codes:o.codes||[]};
-  if(st.text==null)st.text=o.prefill!=null?o.prefill:describePrefillText(o.fac||null,o.codes||[]);
+  // The box opens on the user's stored words when they exist
+  // (v162) — the baseline every later edit is measured against
+  // is captured with them, so an unedited re-save can be told
+  // apart from a real edit.
+  if(st.text==null){const init=describeInitialText(o);st.text=init.text;if(st.baseline==null){st.baseline=init.text;st.baselineSource=init.source}}
   const fieldId='describe_'+key.replace(/[^A-Za-z0-9]/g,'_');
   const p=st.parsed;
   // The facility contract preview's box (v123) confirms INTO the
@@ -6748,8 +6956,12 @@ function describeRulesHTML(key,opts){
   const derivedDefs=o.fac?Object.entries(facilityCodeDefs(o.fac)).filter(([,d])=>d&&d.derived):[];
   const derivedNote=derivedDefs.length?`<p class="hint">Learned from the code itself: ${derivedDefs.map(([c,d])=>'“'+escapeHTML(c)+'” = '+escapeHTML(d.label||((d.hours||'')+'-hour shift'))).join(' · ')}. Edit the words above any time — your own definition replaces it.</p>`:'';
   const confirmLabel=isFacPrev?'Use these rules':(key.indexOf('imp:')===0?'Use these rules & approve import':'Use these rules — save & reprice');
+  // With price changes listed, the button IS the explicit
+  // confirmation the changes demand (v162): it names them
+  // until the user has armed the save with a first tap.
+  const confirmLabelShown=(st.changes&&st.changes.length)?(st.ackChanges?'Yes — save with these changes':'Save — check the changes first'):confirmLabel;
   const confirmNote=isFacPrev?'These rules join the preview — “Save facilities” below saves them with the facility.':(key.indexOf('imp:')===0?'Approving saves these rules and imports the shifts above in one go.':'Saving updates the rate card and reprices the shifts these rules cover.');
-  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${describeGuideHTML()}${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.aiBasic?`<p class="hint">The AI reader didn't answer that time, so this is the basic read — tap “Make my rules” again to retry it, or use these rules as-is.</p>`:''}${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabel}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
+  return `<div class="item" style="display:block"><p><strong>${escapeHTML(o.heading||'Describe the pay rules in your own words')}</strong></p><p class="muted">One box — no forms. Write how ${escapeHTML(st.ctx.facName||'this facility')} pays in plain sentences, and we\'ll turn it into the rate card. We only use what you write.${(o.codes&&o.codes.length)?' On this schedule: '+o.codes.map(c=>'“'+escapeHTML(c.code)+'”').join(' · ')+'.':''}</p>${describeGuideHTML()}${derivedNote}<div class="form-grid"><div class="field"><label for="${fieldId}">Pay rules at ${escapeHTML(st.ctx.facName||'this facility')}</label><textarea id="${fieldId}" class="describeText" data-key="${escapeHTML(key)}" rows="4">${escapeHTML(st.text||'')}</textarea></div></div>${st.error?`<p class="hint">${escapeHTML(st.error)}</p>`:''}${st.busy?'<p class="hint">Reading your rules…</p>':''}<div class="toolbar"><button type="button" data-action="describe-parse" data-id="${escapeHTML(key)}">Make my rules</button></div>${p?`<div style="margin-top:10px"><p><strong>Here\'s what I\'ll use:</strong> ${escapeHTML(describeSummaryText(st.ctx.facName,p,o.fac||null))}</p>${p.aiBasic?`<p class="hint">The AI reader didn't answer that time, so this is the basic read — tap “Make my rules” again to retry it, or use these rules as-is.</p>`:''}${p.question?`<p class="hint">${escapeHTML(p.question)}</p>`:''}${st.unchanged?`<p class="hint">You haven't changed the words, so nothing changes — these are the rules already saved.</p>`:''}${(st.changes&&st.changes.length)?`<p class="hint"><strong>Heads up — these prices change:</strong></p>${st.changes.map(ch=>`<p class="hint">${escapeHTML(describeChangeLine(ch))}</p>`).join('')}<p class="hint">${st.ackChanges?'Tap the button again to save with these changes — nothing has been saved yet.':'Nothing is saved yet — if these changes are right, tap the button once more to confirm them.'}</p>`:''}<div class="toolbar"><button type="button" data-action="describe-confirm" data-id="${escapeHTML(key)}">${confirmLabelShown}</button></div><p class="muted">${confirmNote}</p></div>`:''}</div>`;
 }
 // A facility whose priced shifts rest on rules the user never
 // confirmed in the read-back sense: a day code defined by the old
@@ -6841,7 +7053,10 @@ function applyImportDescribed(preview,target){
   // parse), and an explicit "Skip for now" on this prompt.
   if(!target)return{fac:null,saved:false};
   const st=preview&&preview.describe;
-  if(!st||!st.parsed||preview.ratesSkipped)return{fac:target.fac||null,saved:false};
+  // An UNCHANGED parse (v162) is the saved card read back, not
+  // new rules — approving the import must not re-apply it over
+  // the card it came from.
+  if(!st||!st.parsed||preview.ratesSkipped||st.unchanged)return{fac:target.fac||null,saved:false};
   let fac=target.fac;
   if(!fac){fac={id:id(),name:target.name,aliases:'',address:'',distance:'',notes:'',rate8:'',rate10:'',rate12:'',rate24:'',rateSecond:'',hourlyRate:'',paidHours8:'',callBonus:'',hourlyCall1st:'',weekendRate24:'',weekendRateSecond:'',codeMap:{},ratesPromptSkipped:false};db.facilities=db.facilities||[];db.facilities.push(fac)}
   applyDescribedRules(fac,st.parsed);
@@ -7329,6 +7544,11 @@ function facPreviewOverlay(f){
     o.id=saved.id;o.codeMap=facilityCodeDefs(saved);
     if(saved.weekendDays)o.weekendDays=saved.weekendDays.slice();
     if(saved.weekendDaysSource)o.weekendDaysSource=saved.weekendDaysSource;
+    // The saved facility's stored words ride the overlay (v162),
+    // so the preview's box opens on them — not on fresh contract
+    // prose — whenever this entry is really that facility.
+    if(typeof saved.rulesWords==='string'&&saved.rulesWords)o.rulesWords=saved.rulesWords;
+    if(saved.rulesWordsSource)o.rulesWordsSource=saved.rulesWordsSource;
     const al=[...facilityAliases(saved)];for(const a of String((f&&f.aliases)||'').split(',').map(s=>s.trim()).filter(Boolean))if(!al.includes(a))al.push(a);
     o.aliases=al.join(', ');
     for(const k of FACILITY_RATE_KEYS){const sv=rateOrNull(saved[k]);if(sv!=null)o[k]=String(sv)}
@@ -11861,6 +12081,13 @@ async function approveFacilityContract(){
    // staged into f.rates above; this applies the definitions
    // and the weekend provenance.
    if(savedFac&&f.describedParsed){repriced+=applyDescribedRules(savedFac,f.describedParsed);try{if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',savedFac.id)}catch(_){}}
+   // A facility saved from a contract read with no words-box
+   // parse (v162): the contract's own sentences become its
+   // stored words, flagged contract-derived, so the pay-rules
+   // box reopens on them as the baseline and an unedited
+   // re-save can never re-derive a different card from them.
+   // A user's own words are never overwritten by a contract.
+   if(savedFac&&!f.describedParsed&&savedFac.rulesWordsSource!=='user'){savedFac.rulesWords=contractRatesProse(f);savedFac.rulesWordsSource='contract';try{if(typeof cloudSaveKind==='function')cloudSaveKind('facilities',savedFac.id)}catch(_){}}
  }
  const c=(db.contracts||[]).find(x=>x.id===contractId);
  if(c&&facilityContractPreview.isPhoto&&facilityContractPendingImages.length){try{await awaitSaveContractImage(c,facilityContractPendingImages,facilityContractPreview)}catch(err){c.imageFileName=facilityContractPreview.fileName||'';c.imageFileNames=facilityContractPendingImages.map(x=>x.name);c.imageStored='failed';c.imageStorageNote='picture could not be stored on this device: '+err.message}}
