@@ -145,6 +145,14 @@ if __name__ == "__main__":
         status, text = deploy_function("push-watchdog", files)
         print("STATUS:", status)
         print(text[:3000])
+    elif cmd == "deploy-assistant-chat":
+        files = [
+            ("index.ts", open(ROOT + "assistant-chat/index.ts", "rb").read()),
+            ("../_shared/calendar.ts", open(ROOT + "_shared/calendar.ts", "rb").read()),
+        ]
+        status, text = deploy_function("assistant-chat", files)
+        print("STATUS:", status)
+        print(text[:3000])
     elif cmd == "set-app-url":
         status, text = set_secret("APP_URL", sys.argv[2])
         print("STATUS:", status)

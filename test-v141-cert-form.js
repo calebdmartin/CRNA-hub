@@ -176,7 +176,7 @@ const txtFile = (name, text) => ({ name, type: 'text/plain', text: async () => t
     !appSrc.includes('migration 002') && !appSrc.includes('Supabase Storage folder') &&
     !appSrc.includes('see the README') && !appSrc.includes('fix it if we misread'));
   t('service worker cache bumped to v141',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v156'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v157'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();

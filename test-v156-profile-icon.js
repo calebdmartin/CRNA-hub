@@ -14,9 +14,12 @@
 //  4 signed out: no Account tab anywhere, and the Account view still
 //    shows the v126 split sign-in form (email + password only, New
 //    here? switch) — the icon is the way in, never a dead end.
-//  5 post-sign-in landing UNCHANGED: cloudAfterSignIn still lands on
-//    the Account view via setTab('Account') (source pin) — 'Account'
-//    stays a valid internal view even though it has no tab button.
+//  5 post-sign-in landing (REWRITTEN in v157, Caleb directed Nov 12,
+//    2026: "after an interactive sign-in, the app must land on the
+//    Dashboard, not the Account view"): cloudAfterSignIn now lands on
+//    the Dashboard via setTab('Dashboard') — pinned behaviorally in
+//    test-v157-assistant-live.js. 'Account' stays a valid internal
+//    view even though it has no tab button.
 //  6 every existing route still resolves: onboarding step targets
 //    (onboard-goto with 'Account', the first-day card's step 1), the
 //    goto-account / connect-calendar actions, and the ?go=account
@@ -85,7 +88,7 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   // ---------- 7 (source level) + 8: copy audit & SW ----------
   t('7a no "Account tab" string left in app.js / live-sync.js / index.html',
     !appSrc.includes('Account tab') && !liveSrc.includes('Account tab') && !indexSrc.includes('Account tab'));
-  t('8 SW cache is v156', swSrc.includes('crna-hub-shell-v156'));
+  t('8 SW cache is v156', swSrc.includes('crna-hub-shell-v157'));
   t('2a header markup: profile button in a header-right cluster',
     indexSrc.includes('id="profileBtn"') && indexSrc.includes('class="header-right"') &&
     indexSrc.includes('class="profile-btn"'));
@@ -143,9 +146,9 @@ const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
   t('4d signed out, the icon still shows the on-device profile initials',
     elements.profileBtn.textContent === 'CM', JSON.stringify(elements.profileBtn.textContent));
 
-  // ---------- 5: post-sign-in landing unchanged ----------
-  t('5 cloudAfterSignIn still lands via setTab(\'Account\') (unchanged)',
-    /async function cloudAfterSignIn\(\) \{ cloudAuthResetForm\(\); await cloudAutoMerge\(\); render\(\); setTab\('Account'\);/.test(appSrc));
+  // ---------- 5: post-sign-in landing (v157: Dashboard, per Caleb Nov 12) ----------
+  t('5 cloudAfterSignIn lands via setTab(\'Dashboard\') (v157 — Caleb directed Nov 12: sign-in lands on Dashboard)',
+    /async function cloudAfterSignIn\(\) \{ cloudAuthResetForm\(\); await cloudAutoMerge\(\); render\(\); setTab\('Dashboard'\);/.test(appSrc));
 
   // ---------- 6: existing routes resolve ----------
   t('6a onboarding steps still target the Account view for steps 1-2',

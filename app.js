@@ -2178,7 +2178,7 @@ function answerQuestion(raw){
   if(/ce |continuing education|credits/.test(l)){const a=ceTotal(db.nbcrnaCE,'Class A'),b=ceTotal(db.nbcrnaCE,'Class B'),n=db.nbcrna||{},aa=db.aana||{};return `CE recorded here — NBCRNA: ${a} Class A and ${b} Class B credits from ${db.nbcrnaCE.length} record(s); MAC Ed ${n.macEd||0} of ${n.macEdRequired||60}, MAC Dev ${n.macDev||0} of ${n.macDevRequired||40}. AANA: ${ceTotal(db.aanaCE)} credits from ${db.aanaCE.length} record(s). These are user-entered totals, not a live AANA/NBCRNA transcript.`}
   if(/sync|cloud|supabase|account|sign ?in|backup/.test(l))return cloudAssistantAnswer();
   if(/c\/p|confirmed|proposed|forecast/.test(l)){const y=currentYear(),split=yearIncomeSplit(y);return `Income split for ${y} — C (confirmed only) ${currency(split.c.ytd)} year to date, ${currency(split.c.predicted)} predicted annual; P (proposed-inclusive — C plus proposed shifts you might pick up) ${currency(split.p.ytd)} year to date, ${currency(split.p.predicted)} predicted annual. Tap a shift's day on the Dashboard calendar to change its status, and these totals re-price immediately. None of these is paid income.${split.unpriced?` ${split.unpriced} shift(s) in ${y} are unpriced and are not included in any total.`:''}`}
-  return 'I can answer from what is actually recorded on this device: upcoming shifts, this month\'s projected income, upcoming paychecks (estimates from pay stubs), credentials expiring soon, facilities and their rates, mileage, and CE totals — plus how CRNA Hub itself works. Try one of the suggested questions, or ask about one of those topics. I won\'t guess at records that aren\'t here, and I don\'t answer clinical questions.';
+  return 'CRNA Hub keeps your schedule from every hospital in one calendar and forecasts your income and paychecks from your shifts at each facility\'s rates — a pay stub you\'ve uploaded is the actual for its check. It logs mileage and tracks licenses, certifications, and CE, with reminders before anything expires.';
 }
 // --- Ask Assistant: live AI model FIRST, deterministic answers as fallback ---
 // FINAL native-app form. The Assistant is a live AI model reached through
@@ -2215,7 +2215,12 @@ const ASSISTANT_MIN_INTERVAL_MS=10000;
 let assistantChatBusy=false,assistantChatLastLiveAt=0;
 let assistantSheetOpen=false;
 // Minimal structured summary for the live model. Numbers and counts only,
-// built from the same helpers the deterministic answers use. Deliberately
+// built from the same helpers the deterministic answers use. The top-level
+// keys are a CONTRACT with the assistant-chat function: they must stay
+// within its ALLOWED_TOP_KEYS and no key anywhere may be in its
+// DENIED_KEYS (v157 — a stray top-level "profile" key made the function
+// reject every question with bad_summary and the Assistant silently fell
+// back to on-device answers; pinned in test-v157-assistant-live.js). Deliberately
 // EXCLUDED, by construction (no such field is ever read here): facility
 // notes, shift notes, document text or filenames, facility codes,
 // passwords, patient information, addresses, emails, phone numbers.
@@ -2230,8 +2235,7 @@ function buildAssistantSummary(){
   month.filter(isBillableShift).forEach(x=>{const f=x.facility||'Unknown';byFacility[f]=(byFacility[f]||0)+num(x.pay)});
   return {
     today: now,
-    profile:{name: profileName(), employmentType: employmentType()||null, monthlyIncomeGoal: monthlyIncomeGoal()},
-    month:{label: now.slice(0,7), shiftCount: month.length, gross: monthHead.gross, basis: monthHead.scheduled?'paycheck':'worked', confirmed: monthIncome.c, proposedInclusive: monthIncome.p, monthlyIncomeGoal: monthlyIncomeGoal(), byFacility: Object.entries(byFacility).map(([facility,gross])=>({facility,gross}))},
+    month:{label: now.slice(0,7), shiftCount: month.length, gross: monthHead.gross, basis: monthHead.scheduled?'paycheck':'worked', confirmed: monthIncome.c, proposedInclusive: monthIncome.p, monthlyIncomeGoal: monthlyIncomeGoal(), employmentType: employmentType()||null, byFacility: Object.entries(byFacility).map(([facility,gross])=>({facility,gross}))},
     year:{year: y, ytd: split.ytd, predicted: split.predicted, futureCount: split.futureCount, futureGross: split.futureGross, unpriced: split.unpriced||0, w2Salary: split.w2Salary||0, c:{ytd: split.c.ytd, predicted: split.c.predicted}, p:{ytd: split.p.ytd, predicted: split.p.predicted}},
     upcoming: assistantUpcoming().slice(0,5).map(x=>({date:x.date, facility:x.facility||'', type:x.type||'', pay: (x.pay===''||x.pay==null)?null:num(x.pay)})),
     credentials: credentialDeadlines().slice(0,8).map(x=>({label:x.label, date:x.date, days:x.days})),
@@ -11913,7 +11917,7 @@ try { ceAssignAttach(); } catch (e) {}
   try { pushWatchRefreshCE(); } catch (e) {}
   cloudActive = true; cloudOffline = false; cloudError = ''; cloudLastSync = cloudNow(); cloudPersistSession(); persist(); }
 async function cloudAutoMerge() { if (!cloudSession) return false; try { const data = await cloudFetchAll(); cloudApplyData(data); healShiftsAfterChange((absorbedId) => { cloudRecordTombstone('shifts', absorbedId); }, (shellId, twin) => { cloudRecordTombstone('facilities', shellId); if (twin && twin.id) { try { cloudSaveKind('facilities', twin.id); } catch (e) {} } }); try { healUnpricedShiftPays(); } catch (e) {} render(); await cloudUploadLocal({ silent: true }); return true; } catch (e) { cloudOffline = true; cloudError = e.message; render(); return false; } }
-async function cloudAfterSignIn() { cloudAuthResetForm(); await cloudAutoMerge(); render(); setTab('Account'); monitorBackgroundSweep(); qgendaBootCheck(); icsBootCheck(); pushWatchSyncHealth(); }
+async function cloudAfterSignIn() { cloudAuthResetForm(); await cloudAutoMerge(); render(); setTab('Dashboard'); monitorBackgroundSweep(); qgendaBootCheck(); icsBootCheck(); pushWatchSyncHealth(); }
 async function submitCloudAuth(e) { e.preventDefault(); const fd = new FormData(e.currentTarget); const email = String(fd.get('email') || '').trim(), password = String(fd.get('password') || ''); const sn = String(fd.get('scheduleName') || '').trim(); const et = String(fd.get('employmentType') || '').trim(); const goalRaw = String(fd.get('incomeGoalStep1') || '').trim(); if (cloudAuthMode === 'create') { // The create form's submit IS the old Create account button: same
     // validation, same message, same cloudSignUp path with the profile.
     if (!email || !password) return alert('Enter an email and password first.'); cloudSignUp(email, password, sn, et, goalRaw === '' ? undefined : num(goalRaw)); return; } // Sign-in carries no profile fields since v126 (they live on the

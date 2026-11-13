@@ -204,7 +204,7 @@ const SETTLED = `
     appSrc.includes("collapsePanelHTML('cert-documents'") &&
     appSrc.includes("'credentials-'+portalKey+'-panel'"));
   t('service worker cache bumped to v65',
-    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v156'));
+    fs.readFileSync(R + 'sw.js', 'utf8').includes('crna-hub-shell-v157'));
 
   console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');
 })();
