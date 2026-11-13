@@ -1,6 +1,6 @@
 'use strict';
 const KEY='crna-hub-v2',OLD='crna-hub-starter-v1',tabs=['Dashboard','Facilities','Credentials','Mileage','Assistant'];const TAB_LABELS={Mileage:'Deductions'};function tabLabel(t){return TAB_LABELS[t]||t}
-const empty=()=>({shifts:[],facilities:[],pto:[],credentials:[],mileage:[],vehicles:[],contracts:[],payStubs:[],expenses:[],nbcrna:{status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',classA:'',classB:'',macEd:'',macDev:'',macEdRequired:60,macDevRequired:40,docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},aana:{status:'',number:'',expiration:'',docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},nbcrnaCE:[],aanaCE:[],licenses:[],documents:[],assistantChat:[],portalChecks:[],portalMonitoring:[],hotelStays:[],facilitySuggestions:[],settings:{monthlyIncomeGoal:0,employmentType:'',scheduleName:'',scheduleImported:false,scheduleImportFile:'',scheduleImportedAt:'',qgendaConnected:false,qgendaMasked:'',qgendaLastCheckedAt:'',icsConnected:false,icsMasked:'',icsLastCheckedAt:'',ptoAnnual:0,ptoStarting:0,ptoHoursPerPeriod:0,namePicks:{},homeAddress:'',hotelAddress:'',homeLat:'',homeLng:'',homeGeocodedAddress:'',lastHotelAddress:'',mileageTripType:'round-trip',deleteAlsoFromCalendar:false,featureMileage:true,featurePaychecks:true,featureCredentials:true,featureQgenda:true,featurePush:true,featureExpenses:true,expenseCategories:null,expenseAccounts:null,expenseLastAccountId:''}});
+const empty=()=>({shifts:[],facilities:[],pto:[],credentials:[],mileage:[],vehicles:[],contracts:[],payStubs:[],expenses:[],nbcrna:{status:'',number:'',periodStart:'',periodEnd:'',renewalDeadline:'',classA:'',classB:'',macEd:'',macDev:'',macEdRequired:60,macDevRequired:40,docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},aana:{status:'',number:'',expiration:'',docNote:'',ceNote:'',reminders:'90,60,30,7',source:'user_entered'},nbcrnaCE:[],aanaCE:[],licenses:[],documents:[],assistantChat:[],portalChecks:[],portalMonitoring:[],hotelStays:[],facilitySuggestions:[],settings:{monthlyIncomeGoal:0,employmentType:'',scheduleName:'',scheduleImported:false,scheduleImportFile:'',scheduleImportedAt:'',qgendaConnected:false,qgendaMasked:'',qgendaLastCheckedAt:'',icsConnected:false,icsMasked:'',icsLastCheckedAt:'',ptoAnnual:0,ptoStarting:0,ptoHoursPerPeriod:0,namePicks:{},homeAddress:'',hotelAddress:'',homeLat:'',homeLng:'',homeGeocodedAddress:'',lastHotelAddress:'',mileageTripType:'round-trip',deleteAlsoFromCalendar:false,featureMileage:true,featurePaychecks:true,featureCredentials:true,featureQgenda:true,featurePush:true,featureExpenses:true,expenseCategories:null,expenseAccounts:null,expenseLastAccountId:'',assistantChatDay:''}});
 // --- Facility rates: blank means "doesn't apply / not taken here", never $0.
 // rateOrNull returns the rate as a positive number, or null when the field
 // is blank, 0, or negative. A stored 0 (e.g. a "24-hour call rate ($)" of 0
@@ -2222,7 +2222,14 @@ const ASSISTANT_MIN_INTERVAL_MS=10000;
 let assistantChatBusy=false,assistantChatLastLiveAt=0;
 let assistantSheetOpen=false;
 // Minimal structured summary for the live model. Numbers and counts only,
-// built from the same helpers the deterministic answers use. The top-level
+// built from the same helpers the deterministic answers use. The
+// "credentials" entry is an object { onFile, dueSoon } (v160): onFile
+// is EVERY recorded credential deadline (deduped, date-sorted) and
+// dueSoon is only the reminder-window subset — credentialDeadlines()
+// alone made a fully-loaded account look empty whenever nothing was
+// due within 90 days, and the live model answered "no credentials on
+// file". credentialDeadlines() itself is unchanged (its window
+// semantics are what reminders and the watchdog rely on). The top-level
 // keys are a CONTRACT with the assistant-chat function: they must stay
 // within its ALLOWED_TOP_KEYS and no key anywhere may be in its
 // DENIED_KEYS (v157 — a stray top-level "profile" key made the function
@@ -2245,7 +2252,10 @@ function buildAssistantSummary(){
     month:{label: now.slice(0,7), shiftCount: month.length, gross: monthHead.gross, basis: monthHead.scheduled?'paycheck':'worked', confirmed: monthIncome.c, proposedInclusive: monthIncome.p, monthlyIncomeGoal: monthlyIncomeGoal(), employmentType: employmentType()||null, byFacility: Object.entries(byFacility).map(([facility,gross])=>({facility,gross}))},
     year:{year: y, ytd: split.ytd, predicted: split.predicted, futureCount: split.futureCount, futureGross: split.futureGross, unpriced: split.unpriced||0, w2Salary: split.w2Salary||0, c:{ytd: split.c.ytd, predicted: split.c.predicted}, p:{ytd: split.p.ytd, predicted: split.p.predicted}},
     upcoming: assistantUpcoming().slice(0,5).map(x=>({date:x.date, facility:x.facility||'', type:x.type||'', pay: (x.pay===''||x.pay==null)?null:num(x.pay)})),
-    credentials: credentialDeadlines().slice(0,8).map(x=>({label:x.label, date:x.date, days:x.days})),
+    credentials: {
+      onFile: dedupeDeadlines(collectDeadlineItems()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,12).map(x=>({label:x.label, date:x.date, days:x.days})),
+      dueSoon: credentialDeadlines().slice(0,8).map(x=>({label:x.label, date:x.date, days:x.days}))
+    },
     facilities: (db.facilities||[]).map(f=>({name:f.name||'', rate8: num(f.rate8)||null, rate24: num(f.rate24)||null, rateSecond: num(f.rateSecond)||null})),
     mileage:{verifiedMiles: verifiedMileageTotal(), verifiedTrips: verifiedMileageTrips().length, drafts: (db.mileage||[]).filter(x=>x.status==='draft').length},
     ce:{nbcrnaClassA: ceTotal(db.nbcrnaCE,'Class A'), nbcrnaClassB: ceTotal(db.nbcrnaCE,'Class B'), macEd: num((db.nbcrna||{}).macEd), macDev: num((db.nbcrna||{}).macDev), aanaCredits: ceTotal(db.aanaCE)}
@@ -2269,9 +2279,24 @@ async function callAssistantChat(question){
 // (source 'pending'), then the placeholder is replaced in place by the real
 // answer — labelled 'live' or 'local'. Nothing here ever claims a local
 // answer came from the model.
+// v160 (Caleb, Nov 13, 2026): the Assistant chat clears ITSELF daily —
+// on the first Assistant open (or first question) of a new local
+// calendar day the thread starts fresh. The last-open day rides in
+// settings (assistantChatDay) next to the chat's own persisted state.
+// Idempotent within a day. The manual "Clear chat history" button is
+// gone — clearing is automatic now.
+function assistantDailyReset(){
+  const today=localDate(new Date());
+  if(!db.settings)db.settings={};
+  if(db.settings.assistantChatDay===today)return;
+  db.settings.assistantChatDay=today;
+  if((db.assistantChat||[]).length)db.assistantChat=[];
+  persist();
+}
 async function askAssistantLive(raw){
   const q=String(raw||'').trim();if(!q)return;
   if(assistantChatBusy)return;
+  assistantDailyReset();
   assistantChatBusy=true;
   db.assistantChat=[...(db.assistantChat||[]),{role:'user',text:q}].slice(-50);
   const pending={role:'assistant',text:'Thinking…',source:'pending'};
@@ -3621,7 +3646,8 @@ function assistantChatInner(){
 // submitAssistant() (its one #assistantForm exists once per render:
 // the sheet replaces the tab when both would be on screen).
 function assistantPanelHTML(chips){
-  return `<p class="muted">Your admin assistant — answers from your records in this app. No clinical questions, and no patient information.</p>${assistantChatInner()}<div class="toolbar" style="margin-top:12px">${chips.map(q=>`<button type="button" class="secondary tiny" data-action="ask" data-id="${escapeHTML(q)}">${escapeHTML(q)}</button>`).join('')}</div><form id="assistantForm" class="chat-form"><label for="assistantInput" class="muted">Your question</label><input id="assistantInput" name="question" type="text" placeholder="Ask about your shifts, income, or credentials…" autocomplete="off"><button type="submit">Ask</button></form><div class="toolbar"><button type="button" class="secondary tiny" data-action="clear-chat">Clear chat history</button></div>`;
+  assistantDailyReset();
+  return `<p class="muted">Your admin assistant — answers from your records in this app. No clinical questions, and no patient information.</p>${assistantChatInner()}<div class="toolbar" style="margin-top:12px">${chips.map(q=>`<button type="button" class="secondary tiny" data-action="ask" data-id="${escapeHTML(q)}">${escapeHTML(q)}</button>`).join('')}</div><form id="assistantForm" class="chat-form"><label for="assistantInput" class="muted">Your question</label><input id="assistantInput" name="question" type="text" placeholder="Ask about your shifts, income, or credentials…" autocomplete="off"><button type="submit">Ask</button></form>`;
 }
 function assistantPage(){
   return `<section class="panel"><h2>Ask Assistant</h2>${assistantPanelHTML(ASSISTANT_STARTERS)}</section>${portalCheckHTML()}${portalMonitoringHTML()}`;
@@ -10367,7 +10393,7 @@ if(action==='portal-return-read'){portalRequestRead(entry,{state:date||''});retu
 if(action==='portal-state-add'){const sel=$('licStatePicker');portalStateAdd(sel?sel.value:'');return;}
 if(action==='portal-state-remove'){portalStateRemove(entry);return;}
 if(action==='portal-return-dismiss'){const pd=portalDepartureGet();if(pd){pd.dismissed=true;portalDeparturePersist();}return render();}
-if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses','CE Broker':'cebroker'})[entry]||entry;return startPortalCheck(src);}if(action==='ce-section-goto'){tab='Credentials';render();facilityScrollTo('credentials-ce-panel');return;}if(action==='credential-chip'){credentialChipGo(entry);return;}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry,date||'');}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='clear-chat'){db.assistantChat=[];persist();return render()}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
+if(action==='assistant-portal-check'){const src=({NBCRNA:'nbcrna',AANA:'aana','State Licenses':'licenses','CE Broker':'cebroker'})[entry]||entry;return startPortalCheck(src);}if(action==='ce-section-goto'){tab='Credentials';render();facilityScrollTo('credentials-ce-panel');return;}if(action==='credential-chip'){credentialChipGo(entry);return;}if(action==='portal-return'){const f=portalConnectFlow(entry);if(f)return f.returnToApp();return;}if(action==='portal-leave-go'){return portalLeaveGo(entry,date||'');}if(action==='portal-leave-cancel'){portalLeaveSheet='';return render();}if(action==='portal-check-cancel'){portalCheck=null;portalCheckError='';portalCheckOcrStatus='';portalStatePersist();return render();}if(action==='portal-guide-skip'){return portalGuideSkip();}if(action==='portal-guide-finish'){if(portalCheck){portalCheck.step='preview';portalCheckError='';portalStatePersist();}return render();}if(action==='ask'){return askAssistantLive(entry)}if(action==='cancel'){if(tab==='Mileage'&&(db.mileage||[]).some(m=>m.id===editId)){mileageFormDraft=null;mileageDraftHold=true}editId=null;showShiftForm=false;facilitySuggestionPrefill=null;pendingManualShift=null;return render()}
 if(action==='manual-shift-anyway'){const p=pendingManualShift;if(p){pendingManualShift=null;const rec={...p.record,id:id(),source:'user-entered'};const res=addShiftDeduped(rec);dismissDayConflict(conflictPairSignature(rec.date,rec,p.against));showShiftForm=false;persist();cloudSaveKind('shifts',res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncMarkShiftNotSynced==='function')window.liveSyncMarkShiftNotSynced(res.shift.id);if(typeof window!=='undefined'&&typeof window.liveSyncSchedulePush==='function')window.liveSyncSchedulePush();tab='Dashboard';returnToCalendarDay(res.shift.date);render();scrollToFlashedDay();return}return render()}
 if(action==='manual-shift-cancel'){pendingManualShift=null;return render()}if(action==='shift-origin-quick')return setShiftTripOrigin(entry,date);
 if(action==='shift-origin-dismiss'){callOriginPromptDismissed.add(entry);return render()}

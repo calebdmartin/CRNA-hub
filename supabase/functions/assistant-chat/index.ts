@@ -128,7 +128,12 @@ const SYSTEM_PROMPT =
   "patient, a diagnosis, a treatment, a drug or dose, or any clinical " +
   "decision, refuse briefly and point to facility protocols, a current " +
   "clinical reference, or a qualified colleague. You hold no patient " +
-  "information and must never ask for any.";
+  "information and must never ask for any. " +
+  "In the credentials section, onFile lists everything recorded and " +
+  "dueSoon lists only what is expired or due within its reminder " +
+  "window; an empty dueSoon never means no credentials are on file — " +
+  "when dueSoon is empty, say nothing is expiring soon and name the " +
+  "soonest item in onFile.";
 
 function isPlainValue(v: unknown): boolean {
   if (v === null) return true;

@@ -196,7 +196,7 @@ const panelTag = (page) => {
     !afterCancel.includes('Unsaved edit'));
 
   // ---- 9. Cache pin ----
-  t('service worker cache bumped to v84', swSrc.includes('crna-hub-shell-v159'));
+  t('service worker cache bumped to v84', swSrc.includes('crna-hub-shell-v160'));
   t('app source carries the panel + draft wiring',
     appSrc.includes("collapsePanelHTML('mileage-log-panel'") && appSrc.includes('captureMileageLogDraft'));
 
