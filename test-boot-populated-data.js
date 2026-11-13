@@ -94,7 +94,7 @@ t('populated boot: app.js evaluates with no error (no TDZ)', !bootError);
 if (bootError) console.log('  boot error was: ' + bootError.constructor.name + ': ' + bootError.message);
 const navHTML = elements.nav ? elements.nav.innerHTML : '';
 const appHTML = elements.app ? elements.app.innerHTML : '';
-t('populated boot: nav renders all 6 tabs (PTO tab removed Nov 6)', ['Account', 'Dashboard', 'Facilities', 'Credentials', 'Mileage', 'Assistant'].every(x => navHTML.includes('data-tab="' + x + '"')));
+t('populated boot: nav renders the 5 tabs (v156: Account left the tab bar for the header profile icon; PTO removed Nov 6)', ['Dashboard', 'Facilities', 'Credentials', 'Mileage', 'Assistant'].every(x => navHTML.includes('data-tab="' + x + '"')) && !navHTML.includes('data-tab="Account"'));
 t('populated boot: Dashboard renders (not blank)', appHTML.length > 500 && appHTML.includes('Overview'));
 t('populated boot: stored shifts survive load (141 priced shifts)', appHTML.includes('141') || shifts.length === 141);
 

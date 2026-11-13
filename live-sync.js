@@ -840,8 +840,8 @@ function liveSyncRecordTombstone(shiftId) {
 }
 
 async function liveSyncConnect(provider) {
-  if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) { alert('Sign in on the Account tab first — live calendar sync needs your signed-in account.'); return; }
-  if (typeof cloudSession === 'undefined' || !cloudSession) { alert('Sign in on the Account tab first — live calendar sync is per-user, so it needs your signed-in account.'); if (typeof setTab === 'function') setTab('Account'); return; }
+  if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) { alert('Sign in first (tap your profile icon at the top right) — live calendar sync needs your signed-in account.'); return; }
+  if (typeof cloudSession === 'undefined' || !cloudSession) { alert('Sign in first (tap your profile icon at the top right) — live calendar sync is per-user, so it needs your signed-in account.'); if (typeof setTab === 'function') setTab('Account'); return; }
   if (provider !== 'apple' && liveSyncConfig.state === 'ready' && !liveSyncConfig[provider]) {
     alert(liveSyncLabel(provider) + ' isn’t available yet — use the .ics import/export below for now.');
     return;
@@ -1279,14 +1279,14 @@ function liveSyncCardsHTML() {
 function liveSyncPanelHTML() {
   // Body of the "Live calendar sync" panel only (Nov 6, 2026): Live
   // calendar sync, QGenda, and Upload a schedule are now three separate
-  // sibling panels on the Account page, so the panel's own summary
+  // sibling panels in the Account view, so the panel's own summary
   // header carries this title — no <h2> in the body.
   let html = '';
   if (typeof SUPABASE_CONFIGURED !== 'undefined' && !SUPABASE_CONFIGURED) {
     html += '<p><strong>Live sync needs a signed-in account.</strong> The .ics import/export below works without one.</p>';
   } else if (typeof cloudSession === 'undefined' || !cloudSession) {
-    html += '<p><strong>Sign in on the Account tab first.</strong> Live calendar sync is per-user — your provider connection and tokens belong to your signed-in account, so there is nothing to connect until then.</p>';
-    html += '<div class="toolbar"><button type="button" class="secondary" data-action="goto-account">Go to Account tab</button></div>';
+    html += '<p><strong>Sign in first — tap your profile icon at the top right.</strong> Live calendar sync is per-user — your provider connection and tokens belong to your signed-in account, so there is nothing to connect until then.</p>';
+    html += '<div class="toolbar"><button type="button" class="secondary" data-action="goto-account">Go to my account</button></div>';
     html += '<p class="muted">The .ics import/export below works without sign-in.</p>';
   } else {
     html += '<p class="muted">Connect once, pick the calendar your shifts live in, and we’ll pull them in.</p>';

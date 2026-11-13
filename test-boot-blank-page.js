@@ -57,7 +57,7 @@ const t = (name, cond) => {
 
 // ---------- 1+2: static shell checks ----------
 const swSrc = fs.readFileSync(R + 'sw.js', 'utf8');
-t('sw: cache bumped to v65', swSrc.includes("crna-hub-shell-v155"));
+t('sw: cache bumped to v65', swSrc.includes("crna-hub-shell-v156"));
 t('sw: index.html fallback is navigation-only', swSrc.includes("e.request.mode==='navigate'"));
 t('sw: no unconditional index.html fallback for subresources', !swSrc.includes("r||caches.match('./index.html')"));
 t('sw: uncached subresource gets a real error response', swSrc.includes('status:504'));
@@ -77,7 +77,7 @@ vm.runInContext(fs.readFileSync(R + 'supabase-config.js', 'utf8'), sandbox);
 vm.runInContext(appSrc, sandbox);
 const navHTML = elements.nav ? elements.nav.innerHTML : '';
 const appHTML = elements.app ? elements.app.innerHTML : '';
-t('signed-out: nav renders all 6 tabs (PTO tab removed Nov 6)', ['Account','Dashboard','Facilities','Credentials','Mileage','Assistant'].every(x => navHTML.includes('data-tab="' + x + '"')));
+t('signed-out: nav renders the 5 tabs (v156: Account left the tab bar for the header profile icon; PTO removed Nov 6)', ['Dashboard','Facilities','Credentials','Mileage','Assistant'].every(x => navHTML.includes('data-tab="' + x + '"')) && !navHTML.includes('data-tab="Account"'));
 t('signed-out: Dashboard content renders (not blank)', appHTML.length > 500 && appHTML.includes('Overview'));
 t('signed-out: header status set by render', !!(elements.storageStatus && elements.storageStatus.textContent));
 
@@ -86,7 +86,7 @@ const run = (code) => vm.runInContext(code, sandbox);
 elements.nav.innerHTML = ''; elements.app.innerHTML = '';
 run(`dashboard = () => { throw new Error('boom-first-paint'); };`);
 run(`bootRender();`);
-t('boot failure: tab bar still rendered', ['Account','Dashboard','Facilities'].every(x => elements.nav.innerHTML.includes('data-tab="' + x + '"')));
+t('boot failure: tab bar still rendered (v156 tab set)', ['Dashboard','Facilities','Credentials'].every(x => elements.nav.innerHTML.includes('data-tab="' + x + '"')));
 t('boot failure: visible error panel, not a blank page', elements.app.innerHTML.includes('Something went wrong starting CRNA Hub') && elements.app.innerHTML.includes('boom-first-paint'));
 
 console.log(failures ? ('\n' + failures + ' FAILURE(S)') : '\nALL PASS');

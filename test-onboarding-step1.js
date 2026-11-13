@@ -231,7 +231,7 @@ run(`
 `);
 t('Skip clears the goal input and confirms it can be set later',
   sandbox.__skipValue === '' &&
-  sandbox.__skipStatus.includes('set it later on the Account tab'));
+  sandbox.__skipStatus.includes('set it later under your profile icon')); // v156: no Account tab — the Skip confirmation points at the profile icon
 
 // ---------- Name feeds schedule matching and credential matching ----------
 t('profileName is the same stored value the schedule import matches on',

@@ -52,8 +52,8 @@ const t = (name, cond) => {
 const appSrc = fs.readFileSync(R + 'app.js', 'utf8');
 
 // --- PTO tab removal ---
-t('tab list has exactly 6 tabs and no PTO',
-  run(`tabs.length`) === 6 && !run(`tabs.includes('PTO')`));
+t('tab list has exactly 5 tabs and no PTO (v156: Account moved behind the header profile icon)',
+  run(`tabs.length`) === 5 && !run(`tabs.includes('PTO')`) && !run(`tabs.includes('Account')`));
 t('no ptoPage function remains', !appSrc.includes('function ptoPage'));
 t('nav render has no PTO button', !run(`tabs.map(x=>'<button data-tab="'+x+'">').join('')`).includes('PTO'));
 run(`

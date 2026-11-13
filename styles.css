@@ -144,3 +144,10 @@ details.collapse-sub[open ]>.collapse-head .collapse-chevron{transform:rotate(18
 .account-group:first-child .account-group-title{margin-top:2px}
 /* v155: the Dashboard "last synced" whisper — one quiet muted line. */
 .sync-whisper{margin:0 0 12px}
+
+/* v156: profile icon — the Account view's front door, top-right of the
+   navy header, visible on every tab. A circle with the user's initials
+   (person glyph when no name); active state mirrors a selected tab. */
+.header-right{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.profile-btn{width:42px;height:42px;border-radius:50%;background:#2dc8be;color:#0b1538;font-weight:800;font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;border:2px solid rgba(255,255,255,.35);flex:0 0 auto}
+.profile-btn.active{background:#fff;color:#121e53;border-color:#2dc8be;box-shadow:0 0 0 2px #2dc8be}
